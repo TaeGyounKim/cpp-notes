@@ -1,0 +1,186 @@
+---
+title: 컴파일러가 템플릿을 다루는 방식과 코드 나누기
+description: 두 단계 이름 찾기, 쓰는 멤버만 만드는 선택적 인스턴스화, 모든 멤버를 컴파일해 보는 명시적 인스턴스화, 템플릿이 타입에 거는 요구 사항, 템플릿 코드를 모듈 파티션으로 나누는 법을 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import instantiationCode from '../../../../examples/ch12/instantiation.cpp?raw';
+import instantiationCpp11Code from '../../../../examples/ch12/instantiation-cpp11.cpp?raw';
+
+- 다루는 것: 템플릿 코드를 컴파일러가 언제, 어떻게 실제 코드로 만드는가. 그리고 그 때문에 템플릿 코드를 어디에 둬야 하는가
+- 이 글에서 배우는 요소: 두 단계 이름 찾기, 선택적(암시적) 인스턴스화, 명시적 인스턴스화, 타입에 대한 요구 사항, 모듈 파티션으로 나누기
+
+## 두 단계
+
+- 컴파일러가 클래스 템플릿의 멤버 함수 정의를 만나면 **문법 검사만** 하고 실제로 컴파일하지는 않음
+  - 어떤 타입으로 쓰일지 모르기 때문. `x = y`도 `x`와 `y`의 타입을 모르면 코드를 만들 수 없음
+  - 이것이 **두 단계 이름 찾기** (two-phase name lookup)의 첫 단계 <CppRef path="cpp/language/two-phase_lookup" />
+- 둘째 단계: 컴파일러가 `Table<int>` 같은 **인스턴스화**를 만나면
+  - 클래스 템플릿 정의의 `T`를 모두 `int`로 바꿔 `int` 판 `Table`의 코드를 씀
+  - `Table<Reading>`을 만나면 `Reading` 판을 또 씀
+- 템플릿이 없었다면 타입마다 직접 썼을 코드를 컴파일러가 대신 쓰는 것. 마법은 없고, 귀찮은 일을 자동으로 해 줄 뿐
+- 프로그램에서 어떤 타입으로도 인스턴스화하지 않은 클래스 템플릿의 멤버 함수 정의는 **한 번도 컴파일되지 않음**
+- 정의 곳곳에서 `Table<T>`라고 써야 하는 이유도 이것. `int`로 인스턴스화하면 `T`가 `int`로 바뀌어 `Table<int>`가 타입이 됨
+
+## 선택적 인스턴스화
+
+- `Table<int> scores;`처럼 **암시적으로** 인스턴스화할 때
+  - **가상** 멤버 함수는 언제나 모두 코드를 만듦
+  - 가상이 아닌 멤버 함수는 **실제로 부르는 것만** 코드를 만듦
+- 예: `main()`에 다음 코드만 있다면
+
+```cpp
+Table<int> scores;
+scores.at(0, 0) = 10;
+```
+
+- `int` 판 `Table`의 생성자, 소멸자, `const`가 아닌 `at()`만 만들어짐. 복사 생성자, 대입 연산자, `rows()` 등은 만들어지지 않음
+- 이를 **선택적 인스턴스화** (selective instantiation)라 함
+
+## 명시적 인스턴스화
+
+- 위험: 쓰지 않는 멤버 함수는 컴파일되지 않으므로, 그 안의 오류가 드러나지 않을 수 있음. 모든 코드의 오류를 검사하기 어려움
+- **명시적 인스턴스화** (explicit instantiation): 가상이든 아니든 모든 멤버 함수의 코드를 강제로 만들게 함 <CppRef path="cpp/language/class_template" />
+
+```cpp
+template class Table<std::string>;
+```
+
+:::tip
+명시적 인스턴스화는 쓰지 않는 멤버까지 모두 컴파일하게 하므로 오류를 찾는 데 도움이 된다. `int` 같은 기본 타입만으로 해 보지 말고, 템플릿이 받아들여야 하는 `std::string` 같은 복잡한 타입으로도 해 본다.
+:::
+
+## 템플릿이 타입에 거는 요구 사항
+
+- 타입에 매이지 않는 코드를 쓸 때도, 그 타입에 대해 무언가를 가정하게 됨
+  - 예: `Table`은 `T`가 소멸 가능하고, 복사·이동 생성 가능하고, 복사·이동 대입 가능하다고 가정함
+- 부르는 멤버 함수가 쓰는 연산을 그 타입이 지원하지 않으면 컴파일되지 않음. 오류 메시지는 흔히 알아보기 어려움
+- 하지만 선택적 인스턴스화 덕분에, 타입이 모든 멤버의 요구를 만족하지 않아도 **만족하는 멤버만** 골라 쓸 수 있음
+
+<RunCode client:load code={instantiationCode} />
+
+- 볼 것
+  - `Tag`에는 `+`가 없지만, `total()`을 부르지 않으므로 `Bag<Tag>`를 쓸 수 있음
+  - `tags.total();`을 살리면 GCC가 `total()` 안에서 ``no match for 'operator+'``(`Tag`끼리 더하는 `+`가 없음)를 냄. 오류는 템플릿 안쪽 줄을 가리키고, 어디서 부른 것인지는 `required from here`로 따로 알려 줌
+  - 맨 아래 `template class Bag<Tag>;`를 살려도 같은 오류. `total()`을 부르지 않아도 명시적 인스턴스화가 모든 멤버를 컴파일하기 때문
+
+- **콘셉트** (concept, 7~8편)를 쓰면 템플릿 매개변수에 대한 요구 사항을 컴파일러가 해석하고 검사할 수 있게 적을 수 있음. 요구를 만족하지 않는 인수에 대해 더 읽기 쉬운 오류가 나옴
+
+## 템플릿 코드를 파일에 나누기
+
+- 클래스 템플릿 정의와 멤버 함수 정의 **둘 다**, 그 템플릿을 쓰는 모든 소스 파일에서 컴파일러가 볼 수 있어야 함
+  - 컴파일러가 쓰는 곳에서 인스턴스화해야 하기 때문
+
+### 같은 파일에 두기
+
+- 멤버 함수 정의를 클래스 템플릿을 정의한 모듈 인터페이스 파일에 바로 둠
+- 다른 소스 파일에서 그 모듈을 가져오면 필요한 코드를 모두 볼 수 있음. 1편의 `Table`이 이 방식
+
+### 파티션으로 나누기
+
+- 멤버 함수 정의를 별도의 **모듈 인터페이스 파티션**(11장)에 둘 수도 있음. 그러면 클래스 템플릿 정의도 자기 파티션에 둬야 함
+- 기본 모듈 인터페이스 파일은 두 파티션을 가져와 내보냄
+
+```cpp
+// table.cppm
+export module table;
+export import :definition;
+export import :implementation;
+```
+
+- `definition` 파티션: 클래스 템플릿 정의
+
+```cpp
+// table-definition.cppm
+export module table:definition;
+import std;
+
+export template <typename T>
+class Table { /* 1편과 같은 선언 */ };
+```
+
+- `implementation` 파티션: 멤버 함수 정의. 클래스 템플릿 정의가 필요하므로 `definition` 파티션을 가져옴
+
+```cpp
+// table-implementation.cppm
+export module table:implementation;
+import :definition;
+import std;
+
+export template <typename T>
+Table<T>::Table(std::size_t rows, std::size_t cols)
+    : m_rows{ rows }, m_cols{ cols }
+{
+    m_cells.resize(m_rows * m_cols);
+}
+// 나머지 멤버도 같은 방식
+```
+
+- 이 구성은 로컬 GCC(`-std=c++23 -fmodules`)로 빌드해 `Table<int>`를 쓰는 `main()`까지 실행해 확인함
+
+:::note
+모듈 이전의 헤더 방식에서도 원리는 같다. 템플릿의 멤버 정의를 `.cpp` 파일에 두면, 그 템플릿을 쓰는 다른 소스 파일에서 정의가 보이지 않아 링크 오류가 난다. 그래서 헤더에 정의까지 두거나, 정의를 다른 파일에 두고 헤더 끝에서 `#include`했다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 모듈 파티션 | C++20 | 헤더에 정의까지 두거나, 정의 파일을 헤더 끝에서 `#include` |
+| 콘셉트 | C++20 | `static_assert`와 타입 특성(type trait), SFINAE |
+
+- 두 단계 이름 찾기, 선택적 인스턴스화, 명시적 인스턴스화는 C++98부터 같은 규칙
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={instantiationCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 템플릿 정의를 쓰면 바로 컴파일된다?
+  - 문법 검사만. 실제 코드는 인스턴스화할 때 만들어짐
+- 타입이 템플릿의 모든 멤버가 쓰는 연산을 지원해야 한다?
+  - 암시적 인스턴스화에서는 부르는 멤버의 요구만 만족하면 됨. 가상 멤버는 예외(언제나 만들어짐)
+- 쓰지 않는 멤버에 오류가 있어도 괜찮다?
+  - 지금은 컴파일되지만 누군가 부르는 순간 오류. 명시적 인스턴스화로 미리 검사함
+- 템플릿 멤버 정의를 `.cpp`에 두고 링크하면 된다?
+  - 쓰는 곳에서 정의가 보여야 함. 모듈 인터페이스(또는 파티션), 헤더에 둠
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 두 단계 | 정의를 만나면 문법 검사, 인스턴스화를 만나면 코드 생성 |
+| 선택적 인스턴스화 | 가상 멤버는 모두, 나머지는 부르는 것만 |
+| 명시적 인스턴스화 | `template class Table<std::string>;`. 모든 멤버 컴파일 |
+| 타입 요구 사항 | 부르는 멤버가 쓰는 연산. 콘셉트로 명시 가능 |
+| 코드 위치 | 쓰는 곳에서 정의가 보여야 함. 같은 모듈 인터페이스 파일 또는 인터페이스 파티션 |
+
+## 복습 질문
+
+<details>
+<summary>`Table<int> t; t.at(0, 0) = 1;`만 있는 프로그램에서 `Table<int>::rows()`의 코드가 만들어지는가?</summary>
+
+- 만들어지지 않음. 가상이 아닌 멤버는 부르는 것만 인스턴스화됨(선택적 인스턴스화)
+
+</details>
+
+<details>
+<summary>새로 만든 클래스 템플릿의 모든 멤버가 `std::string`으로 컴파일되는지 한 번에 확인하려면?</summary>
+
+- 명시적 인스턴스화: `template class 템플릿이름<std::string>;`
+
+</details>
+
+<details>
+<summary>클래스 템플릿의 멤버 정의를 별도 파일로 나누려면 모듈에서 어떻게 하는가?</summary>
+
+- 클래스 정의와 멤버 정의를 각각 모듈 인터페이스 파티션에 두고, 멤버 정의 파티션은 정의 파티션을 가져옴
+- 기본 모듈 인터페이스 파일에서 두 파티션을 `export import`
+
+</details>
