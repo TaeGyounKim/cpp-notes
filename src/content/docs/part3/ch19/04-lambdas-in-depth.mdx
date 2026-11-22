@@ -1,0 +1,262 @@
+---
+title: 람다 활용과 std::invoke
+description: 람다를 인수로 넘기기, auto 매개변수를 쓰는 제네릭 람다, 이동과 초기화를 하는 캡처 표현식, C++20 템플릿 람다, 람다를 돌려주는 함수, 평가되지 않는 문맥과 기본 생성, C++23 재귀 람다, 무엇이든 부르는 std::invoke와 invoke_r를 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import laCode from '../../../../examples/ch19/lambdas-advanced.cpp?raw';
+import laCpp11Code from '../../../../examples/ch19/lambdas-advanced-cpp11.cpp?raw';
+
+- 다루는 것: 람다를 더 넓게 쓰는 방법들
+- 이 글에서 배우는 요소: 람다 인수, 제네릭 람다, 캡처 표현식, 템플릿 람다, 람다 반환, 평가되지 않는 문맥, 재귀 람다, `std::invoke`
+
+## 람다를 인수로
+
+- 람다를 함수에 넘기는 두 방법
+  - 람다의 시그니처에 맞는 `std::function` 매개변수
+  - 템플릿 타입 매개변수(권장)
+- 1편의 비교 함수에 조건자를 그 자리에서 람다로 줄 수 있음
+
+```cpp
+compareReadings(inside, outside,
+                [](int a, int b) { return a == b; },
+                report);
+```
+
+## 제네릭 람다
+
+- <Badge text="C++14" /> 매개변수 타입을 구체적으로 적는 대신 `auto`, `auto&`, `auto*`로 씀. 추론 규칙은 템플릿 인수 추론과 같음
+
+```cpp
+auto areEqual{ [](const auto& a, const auto& b) { return a == b; } };
+```
+
+- 컴파일러가 만드는 클로저의 `operator()`가 **함수 템플릿**이 됨
+
+```cpp
+class CompilerGeneratedName
+{
+public:
+    template <typename T1, typename T2>
+    auto operator()(const T1& a, const T2& b) const { return a == b; }
+};
+```
+
+- 비교 함수가 `int` 말고 다른 타입도 받게 바뀌어도 이 람다는 그대로 쓸 수 있음
+
+## 캡처 표현식
+
+- <Badge text="C++14" /> **람다 캡처 표현식** (lambda capture expression): 캡처 변수를 **아무 식으로나** 초기화함 <CppRef path="cpp/language/lambda" />
+  - 둘러싼 범위에서 캡처하지 않는 새 변수를 람다 안에 만들 수 있음
+
+```cpp
+double pi{ 3.1415 };
+auto f{ [prefix = "Pi: ", pi] { std::println("{}{}", prefix, pi); } };
+```
+
+- 캡처 초기화로 만든 (참조가 아닌) 변수는 복사 생성되므로 `const`가 떨어짐
+- `std::move()`로 초기화할 수 있다는 점이 중요함
+  - 값 캡처는 복사를 쓰므로 `unique_ptr`처럼 이동만 되는 객체는 값으로 캡처할 수 없음
+  - 캡처 표현식으로 **옮겨 넣으면** 됨
+
+```cpp
+auto ptr{ std::make_unique<double>(3.1415) };
+auto g{ [p = std::move(ptr)] { std::println("{}", *p); } };
+```
+
+- 캡처 변수 이름을 둘러싼 범위의 이름과 같게 해도 되지만(`[ptr = std::move(ptr)]`) 권하지 않음
+- 3편에서 말한 "데이터 멤버는 따로 캡처할 수 없음"도 이것으로 해결: `[v = m_value]`
+- 상태를 람다 안에서 만들 수도 있음: `[n = 0]() mutable { return ++n; }`
+
+## 템플릿 람다
+
+- <Badge text="C++20" /> **템플릿 람다** (templated lambda expression): 제네릭 람다의 매개변수 타입 정보에 쉽게 접근함
+- 예: `vector`를 받되 원소 타입은 무엇이든 되는 람다에서 원소 타입이 필요할 때
+  - 제네릭 람다로는 `decltype()`과 `std::decay_t`(26장, `const`와 참조를 떼어 냄)로 복잡하게 꺼내야 함
+
+```cpp
+auto lambda{ [](const auto& values) {
+    using V = std::decay_t<decltype(values)>;   // 실제 vector 타입
+    using T = typename V::value_type;            // 원소 타입
+    T someValue{};
+} };
+```
+
+- 템플릿 람다는 매개변수가 `vector`임을 강제하면서 원소 타입을 이름으로 얻음
+
+```cpp
+auto lambda{ []<typename T>(const std::vector<T>& values) {
+    T someValue{};
+} };
+```
+
+- 또 다른 쓰임: 제약 걸기
+  - `[](const auto& a, const auto& b)`는 두 매개변수의 타입을 따로 추론하므로 달라도 됨
+  - `[]<typename T>(const T& a, const T& b)`는 둘이 같은 타입이어야 함
+  - `requires` 절이나 콘셉트도 붙일 수 있음(12장): `[]<std::integral T>(T a, T b) { ... }`
+
+## 람다를 돌려주기
+
+- `std::function`으로 함수에서 람다를 돌려줄 수 있음
+
+```cpp
+std::function<double(double)> makeScaler(double factor)
+{
+    return [factor](double x) { return x * factor; };
+}
+auto toF{ makeScaler(1.8) };
+double r{ toF(25.0) };   // 45
+```
+
+- 함수 반환 타입 추론(1장)으로 더 간단하게: 반환 타입을 `auto`로 씀
+- 값으로 캡처해야 함
+  - 람다는 함수가 끝난 **뒤에** 실행되므로, `[&factor]`로 참조 캡처하면 그때는 `factor`가 사라져 참조가 무효(버그)
+
+## 평가되지 않는 문맥과 기본 생성
+
+- <Badge text="C++20" /> 람다를 **평가되지 않는 문맥**에 쓸 수 있음. 예: `decltype()`의 인수는 컴파일 시간에만 쓰이고 평가되지 않음
+
+```cpp
+using Adder = decltype([](int a, int b) { return a + b; });
+```
+
+- <Badge text="C++20" /> **상태 없는** 람다는 기본 생성, 복사, 대입이 됨
+
+```cpp
+auto lambda{ [](int a, int b) { return a + b; } };
+decltype(lambda) lambda2;   // 기본 생성
+auto copy{ lambda };        // 복사 생성
+copy = lambda2;             // 복사 대입
+```
+
+- 두 기능을 합치면: `Adder getAdder() { return Adder{}; }`
+  - 쓰임새 예: 정렬된 연관 컨테이너의 비교자 타입으로 람다 타입을 줌(복습 질문)
+
+## 재귀 람다
+
+- 보통 람다는 이름을 붙여도 본문에서 자기를 부르기 어려움
+  - 본문에서 `fib(n - 1)`을 부르는 `auto fib = [](int n) { ... };`는 컴파일되지 않음. 초기화가 끝나기 전에는 `fib`의 타입을 모름
+- <Badge text="C++23" /> **명시적 객체 매개변수**(8장)로 재귀 람다를 쓸 수 있음
+
+```cpp
+auto fib{ [](this auto& self, int n) -> int {
+    return n < 2 ? n : self(n - 1) + self(n - 2);
+} };
+```
+
+- `self`가 람다 자신을 가리키므로 `self(...)`로 자기를 부름
+- C++23 이전에는 `std::function` 변수가 자신을 참조로 캡처하는 방식을 씀(약간의 비용)
+
+## 호출기
+
+- `std::invoke()` <Badge text="C++17" />: 호출할 수 있는 **무엇이든** 인수들과 함께 부름. `<functional>` <CppRef path="cpp/utility/functional/invoke" />
+  - 보통 함수, 람다, 멤버 함수(첫 인수가 객체), 데이터 멤버 포인터까지 같은 문법으로
+
+```cpp
+std::invoke(printMessage, "안녕");
+std::invoke([](const auto& m) { std::println("{}", m); }, "안녕");
+std::string word{ "invoke" };
+auto n{ std::invoke(&std::string::size, word) };   // word.size()
+```
+
+- `std::invoke_r<R>()` <Badge text="C++23" />: 반환 타입을 지정함
+
+```cpp
+auto r1{ std::invoke(sum, 11, 22) };                // int
+auto r2{ std::invoke_r<double>(sum, 11, 22) };      // double
+```
+
+:::note
+`invoke()`와 `invoke_r()`은 그것만으로는 그리 쓸모가 없다. 함수나 람다를 직접 불러도 되기 때문이다. 하지만 아무 호출할 수 있는 것이나 불러야 하는 **제네릭 템플릿 코드**에서는 아주 유용하다. 멤버 함수 포인터를 `.*` 문법 없이 부를 수 있다.
+:::
+
+<RunCode client:load code={laCode} />
+
+- 볼 것
+  - 제네릭 람다가 `int`와 문자열을 모두 비교함
+  - 캡처 표현식으로 `unique_ptr`를 옮겨 넣자 원래 `label`은 비어 있음
+  - 템플릿 람다가 빈 `vector<string>`이면 `T{}`(빈 문자열)를 돌려줌. `sameTypeMax(3, 9L)`은 타입이 달라 컴파일되지 않음(주석을 풀어 볼 것)
+  - 함수에서 돌려받은 람다, 캡처 표현식으로 상태를 가진 카운터
+  - `decltype`으로 얻은 람다 타입을 기본 생성
+  - `this auto& self`로 피보나치 수열
+  - `invoke`로 멤버 함수와 람다를, `invoke_r<double>`로 정수 나눗셈 결과 3을 `double`로
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 재귀 람다(`this auto& self`), `invoke_r` | C++23 | 자신을 참조로 캡처한 `std::function`, `static_cast` |
+| 템플릿 람다, 평가되지 않는 문맥의 람다, 상태 없는 람다의 기본 생성 | C++20 | `decltype`과 `std::decay_t`, 함수 객체 클래스 |
+| `std::invoke` | C++17 | 호출 종류마다 다른 문법(`.*` 등) |
+| 제네릭 람다, 캡처 표현식, 함수 반환 타입 추론 | C++14 | 함수 객체 클래스의 템플릿 `operator()`, `shared_ptr`로 감싸 복사, `std::function` 반환 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={laCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `unique_ptr`도 `[p]`로 캡처할 수 있다?
+  - 값 캡처는 복사라서 안 됨. `[p = std::move(p)]`
+- 람다를 돌려줄 때 `[&x]`로 캡처해도 된다?
+  - 함수가 끝나면 `x`가 사라져 매달린 참조. 값으로 캡처
+- 제네릭 람다의 `auto` 매개변수 둘은 같은 타입이어야 한다?
+  - 따로 추론됨. 같아야 하면 템플릿 람다 `[]<typename T>(T a, T b)`
+- 이름을 붙인 람다는 본문에서 자기 이름으로 재귀할 수 있다?
+  - 안 됨. C++23 `this auto& self`
+- `std::invoke(f, args...)`는 `f(args...)`보다 빠르다?
+  - 같은 호출. 장점은 멤버 함수 포인터까지 한 문법으로 부른다는 것
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 람다 인수 | 템플릿 매개변수(권장) 또는 `std::function` |
+| 제네릭 람다 | `[](const auto& x)`. `operator()`가 템플릿(C++14) |
+| 캡처 표현식 | `[p = std::move(ptr)]`, `[n = 0]`(C++14) |
+| 템플릿 람다 | `[]<typename T>(const std::vector<T>&)`, 제약(C++20) |
+| 람다 반환 | `auto` 또는 `std::function`. 값으로 캡처 |
+| 평가되지 않는 문맥 | `decltype([]{...})`, 상태 없는 람다의 기본 생성(C++20) |
+| 재귀 람다 | `[](this auto& self, ...)`(C++23) |
+| 호출기 | `std::invoke`(C++17), `std::invoke_r<R>`(C++23) |
+
+## 복습 질문
+
+<details>
+<summary>파일 핸들을 담은 `std::unique_ptr<File> file`을 나중에 실행할 람다로 넘기려면 어떻게 캡처하는가?</summary>
+
+- `[f = std::move(file)] { ... }`. 이 람다는 복사할 수 없으므로 저장하려면 `std::move_only_function`(C++23)이나 `auto`
+
+</details>
+
+<details>
+<summary>`std::set`이 내림차순으로 정렬되게 비교자를 람다로 주려면(C++20)?</summary>
+
+```cpp
+std::set<int, decltype([](int a, int b) { return a > b; })> s;
+```
+
+- 상태 없는 람다는 기본 생성되므로 `set`이 비교자 객체를 스스로 만듦
+
+</details>
+
+<details>
+<summary>제네릭 코드에서 콜백 `f`가 함수일 수도 멤버 함수 포인터일 수도 있다. `obj`에 대해 부르려면?</summary>
+
+- `std::invoke(f, obj)`. 멤버 함수 포인터면 `(obj.*f)()`처럼, 보통 함수면 `f(obj)`처럼 불러 줌
+
+</details>
+
+## 19장을 마치며
+
+- **콜백**: 다른 함수에 넘겨 그 동작을 맞추는 함수. 함수 포인터, 함수 객체, 람다 표현식이 될 수 있음
+- 람다 표현식은 함수 객체와 어댑터 함수 객체를 조합하는 것보다 읽기 쉬운 코드를 만듦
+  - 읽기 쉬운 코드를 쓰는 것은 동작하는 코드를 쓰는 것만큼, 어쩌면 그보다 중요함. 람다가 조금 길더라도 더 읽기 쉽다면 고치기도 쉬움
+- 다음 장(20장): 표준 라이브러리 알고리즘 깊이 보기. 콜백이 실력을 발휘하는 곳
