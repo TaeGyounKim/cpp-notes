@@ -10,7 +10,7 @@
 	 *     stack: Cell[], heap?: Cell[]
 	 *   }]
 	 * }
-	 * Cell = { id, name?, type, addr, value?, pointsTo?, aliases?, freed? }
+	 * Cell = { id, name?, type, addr?, value?, pointsTo?, aliases?, freed? }  addr가 없으면 주소 줄을 그리지 않는다.
 	 * data.regions?: { stack?, heap? }  두 영역의 제목. 기본은 '스택', '힙'
 	 */
 	import { fade, fly } from 'svelte/transition';
@@ -108,7 +108,7 @@
 							{c.freed ? '해제됨' : c.shown}
 						</text>
 					{/key}
-					<text class="addr" x={c.x + c.w - 12} y={c.y + 38}>주소 {c.addr}</text>
+					{#if c.addr}<text class="addr" x={c.x + c.w - 12} y={c.y + 38}>주소 {c.addr}</text>{/if}
 					{#each c.aliases ?? [] as alias, k (alias)}
 						<g in:fly={{ x: 16, duration: 350 }} out:fade={{ duration: 150 }}>
 							<rect class="alias" x={c.x + 64 + k * 78} y={c.y - 10} width="70" height="20" rx="10" />
