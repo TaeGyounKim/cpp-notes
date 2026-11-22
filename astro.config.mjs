@@ -32,6 +32,7 @@ const parts = [
 		link: '/part2/ch04/01-what-is-design/',
 		items: [
 			chapter('4장. 전문가다운 C++ 프로그램 설계', 'part2/ch04'),
+			chapter('5장. 클래스로 설계하기', 'part2/ch05'),
 		],
 	},
 ];
