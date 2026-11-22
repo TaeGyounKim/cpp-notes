@@ -1,0 +1,219 @@
+---
+title: clock과 time_point
+description: 표준 시계(system_clock, steady_clock, utc_clock 등)와 기점, high_resolution_clock을 피하는 이유, 현재 시각 출력과 time_t 변환, steady_clock으로 실행 시간 재기와 게이팅 오차, 시각을 나타내는 time_point의 연산과 time_point_cast를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import ctCode from '../../../../examples/ch22/clock-timepoint.cpp?raw';
+import ctCpp11Code from '../../../../examples/ch22/clock-timepoint-cpp11.cpp?raw';
+
+- 다루는 것: "지금 몇 시인가", "이 코드가 얼마나 걸렸나"를 묻는 도구
+- 이 글에서 배우는 요소: 표준 시계들, `now()`, `to_time_t`/`from_time_t`, 실행 시간 재기, `time_point`, `time_point_cast`
+
+## clock
+
+- **시계** (clock): `time_point` 타입과 `duration` 타입을 함께 정한 클래스
+  - `time_point`는 다음 절에서 자세히 보지만, `time_point`가 시계에 기대므로 시계부터 봄
+- **기점** (epoch): 시계가 세기 시작한 시각. `time_point`는 "기점으로부터 얼마나 지났나"로 저장됨
+
+| 시계 | 나타내는 것 | 기점 | 표준 |
+| --- | --- | --- | --- |
+| `system_clock` | 시스템 전체 실시간 시계의 벽시계 시각(UTC) | 1970-01-01 00:00:00 | C++11 |
+| `steady_clock` | 절대 거꾸로 가지 않는 시계 | 정해지지 않음 | C++11 |
+| `high_resolution_clock` | 틱 주기가 가장 짧은 시계 | 정해지지 않음 | C++11 |
+| `utc_clock` | 협정 세계시(UTC) | 1970-01-01 00:00:00 | C++20 |
+| `tai_clock` | 국제 원자시(TAI). 여러 원자시계의 가중 평균 | 1958-01-01 00:00:00 | C++20 |
+| `gps_clock` | GPS 위성의 원자시계가 유지하는 시각 | 1980-01-06 00:00:00 | C++20 |
+| `file_clock` | 파일 시각. `std::filesystem::file_time_type`의 시계 | 정해지지 않음(아래) | C++20 |
+
+- `file_clock`의 기점은 보통 유닉스에서 1970-01-01, 윈도우에서 1601-01-01
+- `system_clock`은 사용자나 시간 동기화가 언제든 바꿀 수 있어 **거꾸로 갈 수 있음** <CppRef path="cpp/chrono/system_clock" />
+- `steady_clock`은 벽시계 시각과 관련이 없어도 됨. 예: 운영체제가 시작된 뒤 지난 시간 <CppRef path="cpp/chrono/steady_clock" />
+- **윤초** (leap second): UTC와 실제 태양시의 차이를 맞추려고 가끔 넣거나 빼는 1초
+  - 윤초를 따지는 시계는 `utc_clock`뿐 <CppRef path="cpp/chrono/utc_clock" />
+  - 다른 시계는 따지지 않고, `file_clock`은 정해지지 않음 <CppRef path="cpp/chrono/file_clock" />
+
+:::caution
+`high_resolution_clock`은 쓰지 않는다. 구현마다 `steady_clock`의 별칭이기도 하고 `system_clock`의 별칭이기도 해서, 어떤 컴파일러에서는 거꾸로 갈 수 있다. 벽시계 시각은 `system_clock`, 경과 시간 측정은 `steady_clock`을 쓴다. <CppRef path="cpp/chrono/high_resolution_clock" />
+:::
+
+### 시계의 멤버
+
+- `now()` (정적): 현재 시각을 `time_point`로 돌려줌
+- `is_steady` (정적 상수): 거꾸로 가지 않는 시계면 `true`
+- `system_clock`만의 정적 함수: C 스타일 시각 `time_t`(`<ctime>`)와 오가기
+  - `to_time_t(tp)`: `time_point`를 `time_t`로
+  - `from_time_t(t)`: `time_t`를 `time_point`로
+
+### 현재 시각 출력 <Badge text="C++20" />
+
+- `system_clock::now()`를 바로 `println`으로 출력할 수 있음. 초 밑으로 틱 주기만큼의 소수가 붙음
+  - `floor<seconds>(now)`로 초 단위로 내리면 소수 없이 출력됨
+- 서식 지정자 `%`로 원하는 꼴로 출력. 예: `%Y` 연, `%m` 월, `%d` 일, `%H` 시, `%M` 분, `%S` 초, `%c` 로캘의 날짜·시각 표현
+- `L`을 붙이면 전역 로캘(21장)을 따름
+
+```cpp
+std::locale::global(std::locale{ "" });          // 사용자 로캘
+std::println("{:L%c}", std::chrono::system_clock::now());
+std::println("{:%Y-%m-%d %H:%M}", std::chrono::system_clock::now());
+```
+
+- `system_clock::now()`는 UTC 시각. 지역 시각은 3편의 시간대에서 다룸
+
+## 실행 시간 재기
+
+- 거꾸로 가지 않는다고 보장된 `steady_clock`을 씀
+- 끝 시각에서 시작 시각을 빼면 `duration`
+
+```cpp
+auto start{ std::chrono::steady_clock::now() };
+// ... 잴 코드 ...
+auto elapsed{ std::chrono::steady_clock::now() - start };   // duration
+std::chrono::duration<double, std::milli> ms{ elapsed };    // 실수 밀리초
+```
+
+- 잰 코드가 만든 값을 쓰지 않으면, 컴파일러가 최적화로 반복문 전체를 없앨 수 있음. 결과를 출력하는 등으로 씀
+- 소수점 밀리초가 필요 없으면 `duration_cast<milliseconds>(elapsed)`
+
+### 게이팅 오차
+
+- 짧은 시간은 정확하지 않음
+  - 타이머가 밀리초 해상도를 가져도, 많은 운영체제에서 실제 갱신은 드문드문(예: 10ms나 15ms마다)
+- **게이팅 오차** (gating error): 타이머 틱 하나보다 짧은 일은 0으로, 틱 하나와 둘 사이에 걸친 일은 1틱으로 보임
+  - 예: 15ms마다 갱신되는 시스템에서 44ms 걸린 반복문이 30ms로 보일 수 있음
+- 대책: 잴 계산이 타이머 틱 여러 개에 걸치도록 반복 횟수를 늘림. 그런 뒤 횟수로 나눠 한 번의 시간을 구함
+
+## time_point
+
+- **시각** (time point): 시계의 기점으로부터의 `duration`으로 저장됨. 클래스 템플릿 `time_point<Clock, Duration>` <CppRef path="cpp/chrono/time_point" />
+  - 항상 어떤 시계에 묶임. 기점은 그 시계의 기점
+  - 예: 전통적인 유닉스 시각의 기점은 1970-01-01이고 초 단위. 윈도우는 1601-01-01이고 100나노초 단위
+- `time_since_epoch()`: 기점부터 이 시각까지의 `duration`
+- 만드는 법
+
+```cpp
+using namespace std::chrono;
+time_point<steady_clock> a;          // 시계를 템플릿 인수로
+steady_clock::time_point b;          // 시계가 아는 time_point 타입
+```
+
+| 생성자 | 만들어지는 시각 |
+| --- | --- |
+| `time_point()` | 기점(`duration::zero()`) |
+| `time_point(const duration& d)` | 기점 + `d`. `explicit` |
+| `time_point(const time_point<Clock, D2>& t)` | `t`와 같은 시각(단위 변환) |
+
+### 연산
+
+- 뜻이 있는 연산만 됨(`tp`는 `time_point`, `d`는 `duration`)
+
+| 연산 | 결과 |
+| --- | --- |
+| `tp + d`, `d + tp`, `tp - d` | `time_point` |
+| `tp - tp` | `duration` |
+| `tp += d`, `tp -= d` | `time_point` |
+
+- `tp + tp`는 안 됨. "3시 + 5시"는 뜻이 없음
+- 비교 `==`, `<=>`. 정적 `min()`, `max()`
+- `floor()`, `ceil()`, `round()`도 쓸 수 있음 <Badge text="C++17" />
+
+### 변환
+
+- duration과 같은 규칙
+  - 더 세밀한 단위로: 암시적 변환. 초 단위 `time_point`를 밀리초 단위로
+  - 정보가 사라질 수 있으면: **`time_point_cast`** <CppRef path="cpp/chrono/time_point/time_point_cast" />
+
+```cpp
+using namespace std::chrono;
+time_point<steady_clock, seconds> s{ 42s };
+time_point<steady_clock, milliseconds> ms{ s };                     // 42000ms
+time_point<steady_clock, milliseconds> odd{ 42'424ms };
+auto down{ time_point_cast<seconds>(odd) };                         // 42s
+```
+
+- `steady_clock::now()`의 `time_point`는 보통 나노초 단위. 이를 밀리초 단위 `time_point`에 바로 담으면 컴파일 오류
+
+<RunCode client:load code={ctCode} />
+
+- 볼 것
+  - `is_steady`: `system_clock`은 `false`, `steady_clock`은 `true`
+  - 현재 시각은 UTC. 서식 지정자로 원하는 꼴로 출력
+  - `elapsed / n`은 정수 나눗셈이라, 실수 duration으로 바꾼 뒤 나눔
+  - `time_point_cast`는 버림(95초 → 1분), `round`는 2분
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 시각·duration 출력, `%` 서식 | C++20 | `to_time_t` + `std::gmtime`/`std::strftime` |
+| `utc_clock`, `tai_clock`, `gps_clock`, `file_clock` | C++20 | 없음 |
+| `time_point`의 `floor`, `ceil`, `round` | C++17 | `time_point_cast` 후 보정 |
+| `system_clock`, `steady_clock`, `time_point`, `time_point_cast` | C++11 | `time()`, `clock()`, 운영체제 API |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={ctCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 실행 시간은 `system_clock`이나 `high_resolution_clock`으로 잰다?
+  - 둘 다 거꾸로 갈 수 있음. `steady_clock`
+- `system_clock::now()`를 출력하면 내 지역 시각이 나온다?
+  - UTC. 지역 시각은 시간대로 변환(3편)
+- 두 시각을 더할 수 있다?
+  - `tp - tp`(duration)와 `tp + d`만 뜻이 있음
+- `steady_clock::now()`의 `time_since_epoch()`는 1970년부터의 시간이다?
+  - `steady_clock`의 기점은 정해지지 않음. 차이만 의미가 있음
+- 1ms 걸리는 코드를 한 번 재면 정확하다?
+  - 게이팅 오차. 여러 번 반복해 길게 잰 뒤 나눔
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `system_clock` | UTC 벽시계 시각. `to_time_t`, `from_time_t` |
+| `steady_clock` | 거꾸로 가지 않음. 경과 시간 측정 |
+| `high_resolution_clock` | 구현마다 달라 쓰지 않음 |
+| `now()` | 현재 `time_point` |
+| `time_point` | 기점 + duration. `time_since_epoch()` |
+| 연산 | `tp ± d`, `tp - tp`. `time_point_cast`, `floor`, `round` |
+
+## 복습 질문
+
+<details>
+<summary>함수 `work()`가 걸린 시간을 마이크로초 정수로 구하려면?</summary>
+
+```cpp
+auto start{ std::chrono::steady_clock::now() };
+work();
+auto us{ std::chrono::duration_cast<std::chrono::microseconds>(
+    std::chrono::steady_clock::now() - start) };
+```
+
+</details>
+
+<details>
+<summary>지금부터 30분 뒤의 시각을 구해 "HH:MM" 꼴(UTC)로 출력하려면?</summary>
+
+```cpp
+using namespace std::chrono;
+auto later{ system_clock::now() + 30min };
+std::println("{:%H:%M}", later);
+```
+
+</details>
+
+<details>
+<summary>`time_point<system_clock, seconds>`에 `system_clock::now()`를 바로 담을 수 없는 이유와 해결법은?</summary>
+
+- `now()`는 초보다 세밀한 단위라, 초로 바꾸면 정보가 사라짐. 암시적 변환이 막힘
+- `time_point_cast<seconds>(system_clock::now())`나 `floor<seconds>(...)`. C++20에서는 이 타입의 별칭 `sys_seconds`도 있음(3편)
+
+</details>
