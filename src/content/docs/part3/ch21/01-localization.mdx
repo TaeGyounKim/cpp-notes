@@ -1,0 +1,302 @@
+---
+title: 지역화, 문자 타입, 로캘
+description: 지역화가 필요한 이유, wchar_t와 와이드 문자열·스트림, 유니코드 코드 포인트와 UTF-8·16·32 인코딩, char8_t·char16_t·char32_t와 문자열 접두사, C++23의 유니코드 이스케이프, 지역화할 수 있는 문자열 쓰기, 로캘과 전역 로캘, {:L} 서식, 문자 분류·변환, 패싯과 codecvt를 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import locCode from '../../../../examples/ch21/localization.cpp?raw';
+import locCpp11Code from '../../../../examples/ch21/localization-cpp11.cpp?raw';
+
+- 다루는 것: 이 장(21장)의 앞부분은 세계 여러 지역에 맞춰 바꿀 수 있는 소프트웨어를 쓰는 **지역화** (localization), 뒷부분(2~4편)은 문자열에서 패턴을 찾는 **정규식**
+  - 제대로 지역화된 애플리케이션은 숫자, 날짜, 통화 등을 나라나 지역의 규칙에 맞는 형식으로 보여 줌
+- 이 글에서 배우는 요소: 와이드 문자, 문자 집합과 인코딩, 문자 타입과 접두사, 지역화할 수 있는 문자열, 로캘, 패싯
+
+## 지역화
+
+- C나 C++을 처음 배울 때는 문자 하나를 바이트 하나로, 모든 문자를 **ASCII** 문자 집합의 원소로 생각하면 편함
+  - ASCII는 7비트 집합이고 보통 8비트 `char`에 저장함
+- 실제로 성공한 프로그램은 전 세계에서 쓰임. 처음부터 국제 사용자를 염두에 두지 않았더라도, 나중에 지역화하거나 **로캘을 인식하게** (locale aware) 만들 길을 막지 않아야 함
+- 이 글은 지역화, 여러 문자 인코딩, 문자열 코드의 이식성을 소개함. 자세히 다루려면 책 한 권 분량이라 여기서는 개요만
+
+## 와이드 문자
+
+- 문자를 바이트로 보는 것의 문제: 모든 언어나 문자 집합을 8비트(1바이트)로 다 나타낼 수는 없음
+- C++의 기본 타입 `wchar_t`: **와이드 문자** (wide character)를 담음 <CppRef path="cpp/language/types" />
+  - 일본어, 아랍어처럼 ASCII가 아닌 문자를 쓰는 언어를 나타낼 수 있음
+  - 하지만 표준은 `wchar_t`의 크기를 정하지 않음. 16비트인 컴파일러도, 32비트인 컴파일러도 있음(보통 그 운영체제의 기본 유니코드 문자 타입 크기). 이식성 있는 코드에서는 특정 크기를 가정하면 안 됨
+- 비서구 문자 집합에서 쓰일 가능성이 조금이라도 있다면 처음부터 와이드 문자를 쓰라는 조언이 있었음
+- 와이드 문자 리터럴과 문자열 리터럴은 접두사 `L`을 붙임: `wchar_t c{ L'm' };`
+- 대부분의 타입과 클래스에 와이드 판이 있음. "접두사 w" 규칙
+  - 문자열: `std::wstring`
+  - 스트림: `wofstream`, `wifstream`(13장), 표준 스트림 `wcout`, `wcin`, `wcerr`, `wclog`
+
+```cpp
+std::wcout << L"와이드 문자열 리터럴" << L'\n';
+std::wcout << std::format(L"{} readings", 3) << L'\n';
+```
+
+- `print()`, `println()`은 `wchar_t` 문자열을 지원하지 않지만(UTF-8 문자열은 지원), `format()`은 와이드 문자열을 지원함
+
+:::caution
+`wcout`으로 ASCII가 아닌 문자를 출력하려면 스트림(과 C 라이브러리)의 로캘이 그 문자를 다룰 수 있게 설정되어 있어야 한다. 기본 "C" 로캘에서는 한글 같은 문자가 출력되지 않거나 깨질 수 있다. 예제의 와이드 출력은 그래서 영어만 쓴다.
+:::
+
+## 비서구 문자 집합
+
+- 와이드 문자는 문자 하나에 쓸 공간을 늘림. 다음 문제는 그 공간을 어떻게 쓰느냐
+- 와이드 문자 집합에서도 ASCII처럼 문자를 수로 나타내고, 이 수를 **코드 포인트** (code point)라 함. 다만 8비트에 들어가지 않음
+- **UCS**(Universal Character Set, 국제 표준 ISO 10646)와 **유니코드** (Unicode): 표준화된 문자 집합
+  - 둘 다 문자를 모호하지 않은 이름과 코드 포인트로 식별하고, 같은 문자는 같은 번호를 가짐
+  - 둘 다 코드 포인트를 나타내는 **인코딩**을 정해 둠
+- 중요한 구분: **코드 포인트는 그냥 수**이고, **인코딩**은 그 수를 하나 이상의 바이트로 어떻게 나타낼지 정함
+  - **UTF-8**: 유니코드 문자를 8비트 바이트 1~4개로
+  - **UTF-16**: 16비트 값 1~2개로
+  - **UTF-32**: 정확히 32비트 하나로
+  - 예: '가'의 코드 포인트는 U+AC00. UTF-8로는 3바이트, UTF-16으로는 16비트 하나
+
+### 문자 타입
+
+| 타입 | 설명 |
+| --- | --- |
+| `char` | 8비트. ASCII 문자, 또는 UTF-8로 인코딩된 유니코드 문자의 구성 단위(문자 하나에 `char` 최대 넷) |
+| `char8_t` <Badge text="C++20" /> | 최소 8비트. UTF-8의 구성 단위(문자 하나에 최대 넷) |
+| `char16_t` <Badge text="C++11" /> | 최소 16비트. UTF-16의 구성 단위(문자 하나에 최대 둘) |
+| `char32_t` <Badge text="C++11" /> | 최소 32비트. UTF-32의 구성 단위(문자 하나에 하나) |
+| `wchar_t` | 컴파일러마다 크기와 인코딩이 다른 와이드 문자 |
+
+- `charN_t`를 `wchar_t` 대신 쓰는 장점: 표준이 컴파일러와 상관없이 최소 크기를 보장함. `wchar_t`에는 최소 크기 보장이 없음
+
+### 문자열 접두사
+
+| 접두사 | 타입 | 인코딩 |
+| --- | --- | --- |
+| `u8` | `char8_t` 문자열(C++20 전에는 `char`) | UTF-8 |
+| `u` | `char16_t` 문자열 | UTF-16 |
+| `U` | `char32_t` 문자열 | UTF-32 |
+| `L` | `wchar_t` 문자열 | 컴파일러 마음대로 |
+
+- 모두 날 문자열 접두사 `R`(2장)과 함께 쓸 수 있음: `u8R"(...)"`, `LR"(...)"`, `uR"(...)"`, `UR"(...)"`
+- 문자 리터럴에도 같은 접두사를 붙임: `u8'a'`, `u'a'`, `U'a'`, `L'a'`
+
+### 유니코드 이스케이프
+
+- 날 문자열이 아닌 리터럴에 특정 코드 포인트를 넣는 이스케이프 시퀀스. 예: π(U+03C0)
+
+| 이스케이프 | 뜻 | π의 예 |
+| --- | --- | --- |
+| `\unnnn` | 16진 숫자 4개의 코드 포인트 | `\u03C0` |
+| `\Unnnnnnnn` | 16진 숫자 8개의 코드 포인트 | `\U000003C0` |
+| `\u{n...}` <Badge text="C++23" /> | 16진 숫자 아무 개수의 코드 포인트 | `\u{3C0}` |
+| `\N{이름}` <Badge text="C++23" /> | 유니코드 공식 문자 이름 | `\N{GREEK SMALL LETTER PI}` |
+| `\nnn`, `\o{n...}` <Badge text="C++23" /> | 8진 숫자로 쓴 **코드 단위** 하나 | |
+| `\xn...`, `\x{n...}` <Badge text="C++23" /> | 16진 숫자로 쓴 **코드 단위** 하나 | |
+
+- `\o{}`, `\x{}`, `\u{}`는 다음 글자가 마침 8진·16진 숫자일 때 생기는 문제를 피하게 해 줌
+- 8진·16진 이스케이프는 코드 포인트가 아니라 **코드 단위**(문자 타입 하나의 값)를 넣음. 예: `char` 문자열에서 `\x{3C0}`은 `char`의 범위를 넘어 경고가 나고 π가 되지 않음
+- `\N{이름}`의 이름은 공식 유니코드 이름이어야 함(유니코드 문자 참고 자료에서 찾음)
+
+### 문자열 클래스와 변환
+
+- `std::string` 말고도 `wstring`, `u8string` <Badge text="C++20" />, `u16string`, `u32string`이 있음. 모두 `basic_string`의 별칭
+
+```cpp
+using string    = basic_string<char>;
+using wstring   = basic_string<wchar_t>;
+using u8string  = basic_string<char8_t>;
+using u16string = basic_string<char16_t>;
+using u32string = basic_string<char32_t>;
+```
+
+- 마찬가지로 `string_view`, `wstring_view`, `u8string_view`, `u16string_view`, `u32string_view`(`basic_string_view` 기반)
+- **멀티바이트 문자열**: 로캘에 따른 인코딩으로, 문자 하나가 하나 이상의 바이트로 된 문자열. 유니코드 인코딩일 수도, Shift-JIS나 EUC-JP 같은 다른 인코딩일 수도 있음
+  - 변환 함수: `mbrtoc8()`/`c8rtomb()`, `mbrtoc16()`/`c16rtomb()`, `mbrtoc32()`/`c32rtomb()`
+- 아쉽게도 `char8_t`, `char16_t`, `char32_t` 지원은 거기서 그침
+  - 이런 타입을 지원하는 `cout`, `cin`, `println()`, `format()` 같은 것이 없어 콘솔에 출력하거나 입력받기 어려움
+  - 더 하려면 서드파티 라이브러리를 씀. 유명한 것은 ICU(International Components for Unicode)
+- <Badge text="C++23" /> 조금 나아짐: `u8` UTF-8 문자열 리터럴로 `const char`나 `const unsigned char` 배열을 초기화할 수 있고, `format()`, `print()`는 `const char[]`를 지원함
+
+```cpp
+const char hello[]{ u8"안녕하세요" };
+std::println("{}", hello);       // 됨
+const char8_t hello8[]{ u8"안녕하세요" };
+// std::println("{}", hello8);   // 오류: println은 char8_t를 모름
+```
+
+### 문자열 리터럴 지역화하기
+
+- 지역화에서 결정적인 점: 소스 코드에 **모국어 문자열 리터럴을 넣지 않음**(개발자용 디버그 문자열 정도만 예외)
+  - Windows 애플리케이션은 모든 문자열을 `STRINGTABLE` 리소스에 둠. 다른 플랫폼에도 비슷한 기능이 있음
+  - 다른 언어로 옮길 때 소스를 고치지 않고 리소스만 번역하면 됨. 번역을 돕는 도구도 있음
+- 각 리터럴을 지역화할 수 있더라도, 리터럴을 이어 붙여 **문장을 조립하지 않음**
+
+```cpp
+std::wcout << n << L" bytes read from " << filename << L'\n';
+```
+
+- 이 문장은 단어 순서가 다른 언어(예: 한국어 "{1}에서 {0}바이트를 읽음")로 옮길 수 없음
+- 위치 인수를 쓰는 서식 문자열(2장) 하나를 리소스에 두면 해결됨
+  - 영어 리소스: `"{0} bytes read from {1}"`, 한국어 리소스: `"{1}에서 {0}바이트를 읽음"`
+  - `std::vprint_unicode(loadResource(IDS_TRANSFERRED), std::make_format_args(n, filename));`처럼 실행 시간 서식 문자열로 출력함(`loadResource`는 플랫폼별 리소스 함수)
+
+## 로캘과 패싯
+
+- 나라마다 다른 것은 문자 집합만이 아님. 비슷한 문자 집합을 쓰는 영국과 미국도 날짜나 금액을 다르게 나타냄
+- **로캘** (locale): 특정 문화 매개변수에 대한 데이터를 묶는 표준 C++ 장치. 예: 미국 영어 <CppRef path="cpp/locale/locale" />
+- **패싯** (facet): 로캘의 개별 구성 요소. 날짜 형식, 시간 형식, 숫자 형식 등. 예: 날짜를 표시하는 형식
+  - 기본 패싯 몇 가지가 모든 로캘에 있음. 패싯을 맞추거나 더할 수도 있음
+- 로캘을 쉽게 다루게 해 주는 서드파티 라이브러리도 있음. 예: ICU를 백엔드로 쓸 수 있는 Boost.Locale(정렬 규칙, 변환, 글자 단위가 아닌 문자열 단위 대문자 변환 등)
+
+### 로캘
+
+- 입출력 스트림은 특정 로캘에 따라 데이터를 서식화함. 로캘은 스트림에 붙일 수 있는 객체. `<locale>`
+- 로캘 이름은 **구현마다 다름**
+  - POSIX: 언어와 지역을 두 글자씩 나누고 선택적으로 인코딩. 미국 영어 `en_US`, 영국 영어 `en_GB`, 한국어 `ko_KR.UTF-8`
+  - Windows: POSIX와 비슷하지만 밑줄 대신 대시를 쓰는 형식(`en-US`)이 권장되고, 예전 형식(`English_United States`)도 있음
+- 없는 로캘 이름으로 `std::locale`을 만들면 `std::runtime_error` 예외
+- 빈 문자열 `std::locale{ "" }`: 사용자 환경의 로캘. 만든 뒤 질의해 그에 따라 동작을 정할 수 있음
+- `name()`: 로캘을 설명하는 문자열
+
+### 전역 로캘
+
+- `std::locale::global(loc)`: 애플리케이션의 전역 C++ 로캘을 바꿈
+- `std::locale`의 기본 생성자는 이 전역 로캘의 복사본을 돌려줌
+- 로캘을 쓰는 표준 라이브러리 객체(예: `cout` 같은 스트림)는 **만들 때** 전역 로캘의 복사본을 저장함. 그 뒤 전역 로캘을 바꿔도 이미 만든 객체에는 영향이 없음. 필요하면 스트림의 `imbue()`로 바꿈
+
+### 로캘 쓰기
+
+- 스트림의 `imbue(loc)`: 그 스트림에 보내는 모든 것을 그 로캘의 규칙으로 서식화함
+  - 사용자 로캘(`""`)이 미국 영어면 32767은 `32,767`, 독일어면 `32.767`
+- 기본 로캘은 사용자 로캘이 아니라 **고전·중립 로캘**: 이름이 `"C"`. ANSI C 규칙을 따르고, 미국 영어와 비슷하지만 숫자에 구분 기호를 붙이지 않음
+- `print()`, `println()`은 기본적으로 "C" 로캘을 씀
+  - 서식 지정자 `L`을 쓰면 전역 로캘을 씀: `std::println("{:L}", 32767);`
+- `std::format()`도 `L` 지정자를 지원하고, 첫 인수로 로캘을 받을 수 있음
+  - `L`과 로캘 인수를 함께 주면 그 로캘을, `L`만 쓰면 전역 로캘을 씀
+
+```cpp
+std::format(std::locale{ "en_US.UTF-8" }, "{:L}", 1234567);   // 1,234,567
+std::format(std::locale{ "de_DE.UTF-8" }, "{:L}", 1234567.5); // 1.234.567,5
+```
+
+:::note
+프로그램이 다시 읽을 데이터를 파일에 쓸 때는 중립 "C" 로캘로 쓴다. 그렇지 않으면 파싱이 어려워진다. 사용자 인터페이스에 보여 줄 데이터는 사용자 로캘(`""`)로 서식화한다.
+:::
+
+### 문자 분류와 변환
+
+- `<locale>`의 문자 분류 함수: `std::isspace()`, `isblank()`, `iscntrl()`, `isupper()`, `islower()`, `isalpha()`, `isdigit()`, `ispunct()`, `isxdigit()`, `isalnum()`, `isprint()`, `isgraph()` <CppRef path="cpp/locale/isupper" />
+  - 분류할 문자와 분류에 쓸 로캘, 매개변수 둘을 받음(`<cctype>`의 인수 하나짜리와 다름)
+  - 각 문자 분류의 정확한 뜻은 2편의 정규식 문자 클래스에서
+  - 예: 프랑스어 로캘에서 `std::isupper(L'É', frLocale)`는 참
+- 문자 변환: `std::toupper()`, `std::tolower()`. 변환할 문자와 로캘을 받음
+
+### 패싯 쓰기
+
+- `std::use_facet<패싯>(로캘)`: 특정 로캘의 특정 패싯을 얻음 <CppRef path="cpp/locale/use_facet" />
+  - 예: `std::use_facet<std::moneypunct<wchar_t>>(std::locale{ "en_GB" })`는 영국 영어의 통화 구분 기호 패싯. 가장 안쪽 템플릿 타입이 문자 타입을 정함
+
+| 패싯 | 하는 일 |
+| --- | --- |
+| `ctype` | 문자 분류 |
+| `codecvt` | 인코딩 변환(아래) |
+| `collate` | 문자열을 사전식으로 비교 |
+| `time_get`, `time_put` | 날짜·시간 파싱, 서식화 |
+| `num_get`, `num_put` | 수 파싱, 서식화 |
+| `numpunct` | 수 서식 규칙(소수점, 천 단위 구분 기호) |
+| `money_get`, `money_put` | 금액 파싱, 서식화 |
+| `moneypunct` | 금액 서식 규칙(통화 기호 등) |
+
+- 예: `use_facet<moneypunct<wchar_t>>(loc).curr_symbol()`로 그 로캘의 통화 기호(미국 `$`, 영국 `£`)를 얻음. 환경에 따라 기호가 물음표나 상자로 보일 수 있음
+
+### 인코딩 변환
+
+- `codecvt` 클래스 템플릿: 문자 인코딩 사이의 변환을 도움. `<locale>`의 넷 <CppRef path="cpp/locale/codecvt" />
+
+| 클래스 | 하는 일 |
+| --- | --- |
+| `codecvt<char, char, mbstate_t>` | 항등 변환(변환 없음) |
+| `codecvt<char16_t, char8_t, mbstate_t>` | UTF-16과 UTF-8 사이 |
+| `codecvt<char32_t, char8_t, mbstate_t>` | UTF-32와 UTF-8 사이 |
+| `codecvt<wchar_t, char, mbstate_t>` | 와이드(구현별)와 좁은 문자 인코딩 사이 |
+
+- 아쉽게도 이 패싯들은 쓰기가 꽤 복잡함. `facet.in(상태, 원본 시작, 원본 끝, 원본 다음, 대상 시작, 대상 끝, 대상 다음)`처럼 포인터 여섯 개를 다룸
+- C++17 이전에는 `<codecvt>`의 `codecvt_utf8`, `codecvt_utf16`, `codecvt_utf8_utf16`과 편의 인터페이스 `wstring_convert`, `wbuffer_convert`가 있었음
+  - C++17에서 모두 **권장하지 않게** 됨. 잘못된 유니코드 문자열 같은 오류를 잘 처리하지 못하고(그런 문자열은 실제로 보안 공격 통로로 쓰였음), API가 너무 모호하고 이해하기 어려웠기 때문
+  - 표준 위원회가 안전하고 쓰기 쉬운 대체물을 내놓을 때까지 유니코드 문자열은 ICU 같은 서드파티 라이브러리로 다루기를 권함
+
+<RunCode client:load code={locCode} />
+
+- 볼 것
+  - 이 실행 환경(Linux)에서 `wchar_t`는 4바이트. Windows에서는 2바이트
+  - UTF-8 문자열 `u8"가나"`는 6바이트
+  - π를 세 가지 이스케이프로
+  - 실행 환경에 있는 로캘 이름(`en_US.UTF-8` 등). 이름은 플랫폼마다 다르므로 여러 이름을 시도하고, 없으면 "C" 로캘로
+  - `imbue`한 스트림과 `format(로캘, "{:L}")`은 천 단위 구분 기호를 붙이고, 그냥 `println`은 붙이지 않음
+  - 독일어 로캘의 소수점은 쉼표, 천 단위 구분 기호는 마침표
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `\u{}`, `\N{}`, `\o{}`, `\x{}` 이스케이프, `u8` 리터럴로 `char` 배열 초기화 | C++23 | `\uNNNN`, `\UNNNNNNNN` |
+| `char8_t`, `u8string`, `std::format`의 `{:L}` | C++20 | `u8` 리터럴이 `const char*`, 스트림 `imbue` |
+| `<codecvt>`·`wstring_convert` 권장하지 않음 | C++17 | (C++11~14에서 쓰던 변환 도구) |
+| `char16_t`, `char32_t`, `u`·`U` 접두사, `u16string`, `u32string` | C++11 | `wchar_t`만 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={locCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `wchar_t`는 늘 16비트(또는 32비트)다?
+  - 표준이 정하지 않음. Windows 16비트, Linux 32비트
+- `std::string`의 `size()`는 글자 수다?
+  - 바이트(`char`) 수. UTF-8 한글은 글자당 3
+- `\x{3C0}`으로 `char` 문자열에 π를 넣을 수 있다?
+  - 16진 이스케이프는 코드 단위 하나라 `char` 범위를 넘음. `\u{3C0}`이나 `\u03C0`
+- `std::println("{}", 1234567)`도 로캘에 따라 쉼표가 붙는다?
+  - 기본은 "C" 로캘. `{:L}`을 써야 전역 로캘
+- `std::locale::global()`로 바꾸면 `std::cout`의 출력도 바뀐다?
+  - `cout`은 만들 때의 로캘 복사본을 가짐. `std::cout.imbue()`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 와이드 문자 | `wchar_t`(크기 구현별), `L` 접두사, `wstring`, `wcout` |
+| 유니코드 | 코드 포인트(수) ≠ 인코딩(UTF-8/16/32) |
+| 문자 타입 | `char8_t`(C++20), `char16_t`, `char32_t`. 최소 크기 보장 |
+| 접두사·이스케이프 | `u8`, `u`, `U`, `L`, `R`. `\u{}`, `\N{}`(C++23) |
+| 지역화 | 문자열을 리소스에. 문장을 조립하지 말고 위치 인수 서식 문자열 |
+| 로캘 | 이름은 구현별. `""` 사용자, `"C"` 중립. `imbue`, `global`, `{:L}` |
+| 패싯 | `use_facet<F>(loc)`. `numpunct`, `moneypunct`, `codecvt` 등 |
+
+## 복습 질문
+
+<details>
+<summary>설정 파일에 실수 값을 저장했다가 다시 읽는 프로그램에서 사용자 로캘로 쓰면 어떤 문제가 생길 수 있는가?</summary>
+
+- 독일어 로캘이면 `3.5`가 `3,5`로 쓰여, 다른 로캘에서 읽거나 파싱할 때 틀림. 파일에는 "C" 로캘(또는 `std::to_chars` 같은 로캘 독립 함수)을 씀
+
+</details>
+
+<details>
+<summary>"파일 3개를 복사함"과 "Copied 3 files"를 모두 지원하려면 문자열을 어떻게 준비하는가?</summary>
+
+- 리소스에 언어마다 `"파일 {0}개를 복사함"`, `"Copied {0} files"` 같은 서식 문자열을 두고, 실행 중에 골라 `std::vformat`으로 채움. 조각을 이어 붙이지 않음
+
+</details>
+
+<details>
+<summary>`u8"한"`, `u"한"`, `U"한"`은 각각 문자 타입 몇 개(널 문자 제외)로 이뤄지는가?</summary>
+
+- `u8`: `char8_t` 3개, `u`: `char16_t` 1개, `U`: `char32_t` 1개
+
+</details>
