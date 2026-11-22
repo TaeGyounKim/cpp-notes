@@ -1,0 +1,192 @@
+---
+title: span과 mdspan
+description: 연속된 데이터를 소유하지 않고 보는 순차 뷰. vector·array·C 배열을 함수 하나로 받는 span, subspan·first·last로 일부만 보기, const 원소의 span, 1차원 데이터를 다차원으로 보는 C++23 mdspan과 배치 정책·고정 크기를 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import spCode from '../../../../examples/ch18/spans.cpp?raw';
+import spCpp11Code from '../../../../examples/ch18/spans-cpp11.cpp?raw';
+
+- 다루는 것: 컨테이너가 아니라 연속된 데이터를 **보기만** 하는 순차 뷰 둘
+- 이 글에서 배우는 요소: `span`의 생성과 부분 뷰, `const` 원소, `mdspan`의 차원·배치 정책
+
+## 순차 뷰
+
+- **`span`** <Badge text="C++20" />: 연속된 데이터 나열 위의 1차원 뷰. 데이터를 소유하지 않음
+- **`mdspan`** <Badge text="C++23" />: 같은 개념을 일반화해, 연속된 데이터를 **다차원**으로 보는 뷰. 역시 소유하지 않음
+
+## span
+
+### 함수 하나로 여러 컨테이너 받기
+
+- 문제: `vector`의 내용을 출력하는 함수를 만들었는데, C 스타일 배열과 `std::array`도 받고 싶음
+  - C 배열은 첫 원소의 포인터와 원소 수를 받는 오버로드를 하나 더 만들 수 있음
+  - `std::array`는? 원소 타입과 원소 수가 템플릿 매개변수라 오버로드의 매개변수 타입을 정하기 복잡함
+- `<span>`의 `std::span`: `vector`, C 스타일 배열, 어떤 크기의 `std::array`든 받는 함수 **하나**를 쓸 수 있음 <CppRef path="cpp/container/span" />
+
+```cpp
+int total(std::span<const int> values)
+{
+    int sum{ 0 };
+    for (int v : values) { sum += v; }
+    return sum;
+}
+total(v);      // std::vector<int>
+total(arr);    // std::array<int, 5>
+total(carr);   // int[3]
+```
+
+- `string_view`(2장)처럼 복사가 싸게 됨. 기본적으로 첫 원소의 포인터와 원소 수만 가짐. 데이터를 **절대 복사하지 않음**. 그래서 보통 **값으로** 넘김
+
+### 만들기와 부분 뷰
+
+- 생성자: `vector`, `std::array`, C 스타일 배열의 모든 원소, 또는 첫 원소의 주소와 원소 수로 일부만
+  - `total({ v.data() + 2, 3 })`: 위치 2부터 셋
+- 기존 `span`에서 부분 뷰 만들기
+  - `subspan(offset, count)`: offset부터 count개
+  - `first(n)`, `last(n)`: 처음 n개, 마지막 n개
+- `vector`, `array`와 비슷한 멤버: `begin()`, `end()`, `rbegin()`, `rend()`, `front()`, `back()`, `operator[]`, `data()`, `size()`, `empty()`
+
+### 읽기 전용과 읽기·쓰기
+
+- 읽기 전용인 `string_view`와 달리 `span`은 바탕 원소를 **읽고 쓸 수** 있음
+  - `span`의 원소를 고치면 바탕 나열의 원소가 바뀜
+- 고칠 필요가 없으면 `const` 원소의 `span`을 만듦: `std::span<const int>`
+
+:::tip
+`const std::vector<T>&`를 받는 함수를 쓴다면 `std::span<const T>`를 받는 것을 고려한다. `vector`, `array`, C 스타일 배열 등에서 온 데이터와 그 부분을 받을 수 있다. `std::vector<T>&`를 받는 함수도 원소를 더하거나 지울 필요가 없다면 `std::span<T>`를 고려한다.
+:::
+
+## mdspan
+
+- `<mdspan>`의 `std::mdspan` <Badge text="C++23" />: `span`처럼 소유하지 않아 복사가 싸지만, 연속된 데이터를 **다차원**으로 봄 <CppRef path="cpp/container/mdspan" />
+- 템플릿 타입 매개변수 넷
+
+| 매개변수 | 뜻 |
+| --- | --- |
+| `ElementType` | 바탕 원소의 타입 |
+| `Extents` | 차원의 수와 각 크기. `std::extents`의 특수화 |
+| `LayoutPolicy` | 다차원 첨자를 바탕 나열의 1차원 위치로 바꾸는 정책. 기본 `layout_right` |
+| `AccessorPolicy` | 1차원 위치를 실제 원소의 참조로 바꾸는 정책. 기본 `std::default_accessor` |
+
+- 표준 배치 정책
+  - `layout_right`: **행 우선**. 가장 오른쪽 차원의 보폭이 1. 기본값
+  - `layout_left`: **열 우선**. 가장 왼쪽 차원의 보폭이 1
+  - `layout_stride`: 사용자가 정한 보폭
+  - 타일 배치, 힐베르트 곡선 등 필요한 정책을 직접 만들 수도 있음
+- **보폭** (stride): 한 차원의 첨자가 1 늘 때 바탕 나열에서 건너뛰는 원소 수
+
+```text
+바탕 데이터:  1 2 3 4 5 6 7 8          2행 4열로 볼 때
+
+layout_right(행 우선)        layout_left(열 우선)
+  [r, c] → r*4 + c            [r, c] → c*2 + r
+  1 2 3 4                     1 3 5 7
+  5 6 7 8                     2 4 6 8
+```
+
+### 만들고 쓰기
+
+- 생성자 중 하나: 연속 데이터의 포인터, 그 뒤에 각 차원의 크기
+  - 생성자 인수로 넘긴 크기는 **동적 크기** (dynamic extent)
+
+```cpp
+std::vector cells{ 1, 2, 3, 4, 5, 6, 7, 8 };
+std::mdspan rows{ cells.data(), 2, 4 };   // 2행 4열, 행 우선
+int x{ rows[1, 2] };                       // C++23 다차원 operator[] → 7
+```
+
+- 멤버
+  - 다차원 `operator[]` <Badge text="C++23" />: `m[i, j]`
+  - `size()`: 원소 수, `empty()`: 비었는지
+  - `stride(n)`: n번 차원의 보폭
+  - `extents()`: `std::extents`를 돌려줌. 그것의 `extent(n)`으로 n번 차원의 크기를 얻음. `m.extent(n)`도 됨
+- 배치 정책은 세 번째 템플릿 매개변수라, 바꾸려면 앞의 둘도 적어야 함. 각 차원의 크기를 생성자 인수 대신 `std::extents`로 템플릿 인수에 주면 **정적 크기** (static extent)
+
+```cpp
+std::mdspan<int, std::extents<int, 2, 4>, std::layout_left> cols{
+    cells.data() };
+```
+
+- 정적 크기와 동적 크기를 섞을 수 있음. 동적인 차원은 `std::dynamic_extent`로 표시하고 그 크기만 생성자에 넘김
+
+```cpp
+std::mdspan<int, std::extents<int, 2, std::dynamic_extent>> mixed{
+    cells.data(), 4 };
+```
+
+<RunCode client:load code={spCode} />
+
+- 볼 것
+  - `total()` 하나가 `vector`, `array`, C 배열과 `{ 포인터, 개수 }`를 모두 받음
+  - `subspan`, `first`, `last`로 일부만 봄
+  - `scale(all.first(2), 10)`이 원본 `v`의 앞 둘을 바꿈
+  - 같은 8개를 행 우선과 열 우선으로 다르게 봄. 행 우선에서 행을 하나 넘을 때 4칸 건너뜀
+  - `mixed[1, 3] = 80`이 원본 `cells`의 마지막 원소를 바꿈
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `mdspan`, 다차원 `operator[]` | C++23 | 1차원 첨자 `r * cols + c`를 직접 계산, `m(r, c)` 같은 함수 |
+| `span` | C++20 | 포인터와 길이를 따로 넘김(또는 Guidelines Support Library의 `gsl::span`) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 포인터와 길이, 직접 계산한 첨자를 씀
+
+<RunCode client:load code={spCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `span`을 넘기면 데이터가 복사된다?
+  - 포인터와 길이만 복사됨. 데이터는 그대로
+- `span`도 `string_view`처럼 읽기 전용이다?
+  - `span<T>`는 읽고 쓸 수 있음. 읽기 전용은 `span<const T>`
+- `span`은 `const&`로 넘겨야 한다?
+  - 복사가 싸므로 보통 값으로 넘김
+- `span`으로 원소를 더하거나 지울 수 있다?
+  - 뷰라서 크기를 바꿀 수 없음. 그런 함수는 `vector&`를 받음
+- 바탕 `vector`에 원소를 더한 뒤에도 `span`을 써도 된다?
+  - 재할당되면 `span`의 포인터가 무효가 됨. 반복자 무효화와 같은 문제
+- `mdspan`의 `m[1][2]`로 접근한다?
+  - C++23의 다차원 첨자 `m[1, 2]`를 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `span<T>` | 연속 데이터의 1차원 뷰. 포인터와 길이. 값으로 넘김 |
+| 부분 뷰 | `subspan(off, n)`, `first(n)`, `last(n)`, `{ ptr, n }` |
+| 읽기 전용 | `span<const T>`. `const vector<T>&` 대신 고려 |
+| `mdspan` | 다차원 뷰(C++23). `m[i, j]`, `extent(n)`, `stride(n)` |
+| 배치 정책 | `layout_right`(행 우선, 기본), `layout_left`(열 우선), `layout_stride` |
+| 크기 | 동적(생성자 인수), 정적(`std::extents<int, 2, 4>`), 섞기(`dynamic_extent`) |
+
+## 복습 질문
+
+<details>
+<summary>`double average(const std::vector<double>& v)`를 `std::array<double, 7>`과 C 배열에도 쓰게 바꾸려면?</summary>
+
+- 매개변수를 `std::span<const double> v`로 바꿈. 본문은 범위 기반 `for` 문과 `v.size()`를 그대로 쓸 수 있음
+
+</details>
+
+<details>
+<summary>픽셀 밝기 12개가 담긴 `std::vector<int> pixels`(가로 4, 세로 3, 행 우선)에서 (행 2, 열 1)의 값을 읽으려면?</summary>
+
+- `std::mdspan img{ pixels.data(), 3, 4 };` 후 `img[2, 1]`. 1차원 위치는 2 * 4 + 1 = 9
+
+</details>
+
+<details>
+<summary>같은 데이터를 `layout_left`로 보면 `[r, c]`는 바탕 나열의 어느 위치인가(2행 4열)?</summary>
+
+- `c * 2 + r`. 가장 왼쪽 차원(행)의 보폭이 1이고, 열이 하나 늘 때마다 행 수(2)만큼 건너뜀
+
+</details>
