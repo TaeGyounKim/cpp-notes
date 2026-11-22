@@ -33,6 +33,10 @@ async () => {
 		viz.push({ steps, codeScroll });
 	}
 	const editorScroll = [...document.querySelectorAll('.cm-scroller')].map((e, i) => (e.scrollWidth > e.clientWidth + 2 ? i + 1 : 0)).filter(Boolean);
+	// 정적 코드 블록(실행 편집기·시각화 밖)이 가로로 스크롤되는지
+	const preScroll = [...main.querySelectorAll('pre')]
+		.filter((p) => !p.closest('astro-island') && p.scrollWidth > p.clientWidth + 2)
+		.map((p) => p.textContent.split('\n').find((l) => l.length > 60)?.slice(0, 40) ?? '?');
 	const missingGlyph = [...main.querySelectorAll('td, li, p')].filter((e) => /[⁰¹²³⁴⁵⁶⁷⁸⁹⁻₩]/.test(e.textContent)).length;
 	return {
 		title: document.title,
@@ -45,6 +49,7 @@ async () => {
 		scrollTables,
 		viz,
 		editorScroll,
+		preScroll,
 		missingGlyph,
 		height: document.documentElement.scrollHeight,
 	};
