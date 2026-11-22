@@ -27,6 +27,13 @@ const parts = [
 			chapter('3장. 스타일을 살려 코딩하기', 'part1/ch03'),
 		],
 	},
+	{
+		label: 'Part 2 · 소프트웨어 설계',
+		link: '/part2/ch04/01-what-is-design/',
+		items: [
+			chapter('4장. 전문가다운 C++ 프로그램 설계', 'part2/ch04'),
+		],
+	},
 ];
 
 export default defineConfig({
