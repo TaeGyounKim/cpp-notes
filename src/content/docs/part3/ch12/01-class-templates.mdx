@@ -1,0 +1,268 @@
+---
+title: 클래스 템플릿 만들기
+description: 값뿐 아니라 타입도 매개변수로 만드는 템플릿, 다형성으로 만든 범용 컨테이너의 한계, 클래스 템플릿을 정의하고 멤버를 클래스 밖에서 정의하고 인스턴스로 만들어 쓰는 법을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import tableCode from '../../../../examples/ch12/table.cpp?raw';
+import tableCpp11Code from '../../../../examples/ch12/table-cpp11.cpp?raw';
+
+- 다루는 것: 타입을 매개변수로 받는 **클래스 템플릿**을 직접 만들기
+- 이 글에서 배우는 요소: 템플릿의 개념, 다형성으로 만든 범용 컨테이너의 한계, `template <typename T>`, 클래스 밖 멤버 정의, 템플릿 인스턴스화, `T{}`
+
+## 템플릿이란
+
+- 절차형 프로그래밍의 기본 단위는 함수. 함수는 특정 값에 매이지 않는 알고리즘을 쓰게 해 줌
+  - 예: `std::sqrt()`는 4의 제곱근만 구하는 것이 아니라, 호출하는 쪽이 넘긴 값의 제곱근을 구함
+  - 함수는 **값을 매개변수화**함
+- 객체 지향은 데이터와 동작을 묶는 객체를 더했지만, 값을 매개변수화하는 방식은 그대로
+- **템플릿** (template): 값뿐 아니라 **타입도** 매개변수화함 <CppRef path="cpp/language/templates" />
+  - `int`, `double` 같은 기본 타입이든 직접 만든 클래스든
+  - 예: `int`용, `Sensor`용, `std::string`용 스택 클래스를 따로 쓰지 않고, 어떤 타입에도 쓸 수 있는 스택 템플릿 하나를 씀
+- 문법이 헷갈려 직접 쓰기를 피하는 사람이 많지만, 표준 라이브러리 같은 라이브러리가 템플릿을 널리 쓰므로 쓰는 법은 반드시 알아야 하고, 전문가라면 만드는 법도 알아야 함
+
+## 클래스 템플릿
+
+- **클래스 템플릿** (class template): 클래스 정의들의 "설계도" <CppRef path="cpp/language/class_template" />
+  - 변수의 타입, 멤버 함수의 반환 타입이나 매개변수 타입 일부를 **템플릿 타입 매개변수**로 남겨 둠
+  - 컴파일러가 템플릿 타입 매개변수를 실제 타입으로 바꿔 구체적인 클래스 정의를 만듦. 이를 **인스턴스화** (instantiation)라 함
+- 주로 객체를 담는 컨테이너(자료 구조)에 쓰임. 이미 써 본 `std::vector`, `std::unique_ptr`, `std::string` 모두 클래스 템플릿
+- 이 장에서는 2차원 표 `Table`을 계속 고쳐 가며 예로 씀. 글마다 그 글의 요점에 필요한 기능만 붙임
+
+## 템플릿 없이 만들면
+
+- 행과 열로 된 범용 표를 만든다고 하자. 숫자, 문자열, 센서 객체 등 무엇이든 담을 수 있어야 함
+- 템플릿이 없다면 최선은 **다형성**(10장)
+  - 공통 기반 클래스 `Value`를 만들고, 담을 것은 모두 `Value`를 상속하게 함
+  - 표는 `std::unique_ptr<Value>`를 담음
+  - 표를 복사하려면 칸의 객체도 복사해야 하므로, `Value`에 순수 가상 `clone()`을 두고 파생 클래스가 자기 복사본을 돌려주게 함
+
+```cpp
+class Value
+{
+public:
+    virtual ~Value() = default;
+    virtual std::unique_ptr<Value> clone() const = 0;
+};
+
+class Reading : public Value
+{
+public:
+    std::unique_ptr<Value> clone() const override
+    {
+        return std::make_unique<Reading>(*this);   // 복사 생성자로 복사
+    }
+};
+```
+
+- 칸은 `std::vector<std::vector<...>>`로 두기보다 `std::vector` **하나**에 펼쳐 저장하는 편이 좋음. 데이터가 메모리에 흩어지지 않음
+  - 2차원 좌표 (행, 열)는 `행 * 열개수 + 열`로 1차원 위치가 됨
+- 이 방식의 문제
+  - **값을 담을 수 없음**: 언제나 포인터를 담음
+  - **타입 안전하지 않음**: `Reading`만 넣었어도 꺼내면 `unique_ptr<Value>`. `Reading`의 기능을 쓰려면 다운캐스트해야 함
+  - 서로 다른 파생 클래스를 한 표에 섞어 넣어도 막을 수 없음. 어느 칸에 무엇이 있는지 기억해 두었다가 맞게 다운캐스트해야 함
+  - `int`, `double` 같은 기본 타입은 `Value`를 상속할 수 없으므로 담을 수 없음
+
+## 클래스 템플릿으로 만들기
+
+- 원하는 것: `Reading`이든 `int`든 `std::string`이든 담을 수 있는 범용 `Table`
+- 클래스 템플릿은 아직 모든 타입이 정해지지 않은 클래스 정의. 쓰는 쪽이 원하는 타입을 지정해 인스턴스로 만듦
+- 이것이 **제네릭 프로그래밍** (generic programming). 가장 큰 장점은 **타입 안전성**
+  - 인스턴스화된 클래스와 멤버 함수는 추상 기반 클래스가 아니라 실제 타입을 씀
+- 기본 타입도 담아야 하므로 다형성 없이 **값**으로 저장함
+  - 값으로 저장하면 진짜 "빈 칸"이 없다는 단점(포인터라면 `nullptr`)
+  - `std::optional`(1장)로 해결. 값으로 저장하면서도 빈 칸을 나타낼 수 있음
+
+```cpp
+template <typename T>
+class Table
+{
+public:
+    explicit Table(std::size_t rows = DefaultRows,
+                   std::size_t cols = DefaultCols);
+
+    std::optional<T>& at(std::size_t row, std::size_t col);
+    const std::optional<T>& at(std::size_t row, std::size_t col) const;
+
+    std::size_t rows() const { return m_rows; }
+    std::size_t cols() const { return m_cols; }
+
+    static constexpr std::size_t DefaultRows{ 4 };
+    static constexpr std::size_t DefaultCols{ 4 };
+
+private:
+    void check(std::size_t row, std::size_t col) const;
+
+    std::vector<std::optional<T>> m_cells;
+    std::size_t m_rows{ 0 };
+    std::size_t m_cols{ 0 };
+};
+```
+
+### 템플릿 머리
+
+- 첫 줄 `template <typename T>`: 뒤따르는 클래스 정의가 타입 하나 `T`에 대한 템플릿이라는 뜻
+  - 이 부분을 **템플릿 머리** (template header)라 함. `template`과 `typename`은 키워드
+  - 모듈에서 내보낼 때는 `export template <typename T>`
+- 함수의 매개변수 이름이 호출하는 쪽이 넘길 인수를 나타내듯, **템플릿 타입 매개변수** 이름(`T`)은 쓰는 쪽이 넘길 **템플릿 타입 인수**를 나타냄
+  - 이름이 `T`여야 할 이유는 없음. 배열 인덱스를 `i`라 부르듯 관례일 뿐
+- 템플릿 머리는 그 뒤의 문장 전체(여기서는 클래스 템플릿 정의)에 적용됨
+
+:::note
+역사적인 이유로 `typename` 대신 `class`를 써도 된다: `template <class T>`. 많은 기존 코드가 이렇게 쓴다. 하지만 타입이 꼭 클래스여야 하는 것처럼 보여 헷갈린다. 실제로는 구조체, 공용체, `int`나 `double` 같은 기본 타입 등 무엇이든 된다. 이 사이트는 `typename`을 쓴다.
+:::
+
+### 복사와 이동은 컴파일러에게
+
+- 다형성 판은 포인터를 담아 복사 생성자와 대입 연산자를 직접 써야 했음
+- `Table`은 `optional` 값을 담으므로 컴파일러가 만드는 복사·이동 연산이 그대로 맞음. 아무것도 선언하지 않으면 됨(영의 규칙, 9장)
+  - 가상 소멸자 등 사용자가 선언한 소멸자가 있으면 복사 연산의 암시적 생성은 권장되지 않음(8장). 그럴 때는 `= default`로 명시함
+
+### 클래스 안과 밖에서의 이름
+
+- 클래스 정의 **안**에서는 컴파일러가 `Table`을 필요한 곳에서 `Table<T>`로 해석함. 원하면 `Table<T>`라고 써도 됨
+- 클래스 정의 **밖**에서는 `Table<T>`라고 써야 함
+  - 클래스 템플릿을 쓸 때 클래스 이름처럼 보이는 `Table`은 사실 **템플릿 이름**
+  - 실제 클래스(타입)를 가리킬 때는 `Table<int>`, `Table<T>`처럼 **템플릿 ID**를 씀
+- `at()`은 포인터 대신 `std::optional<T>`의 참조를 돌려줌. 값이 있거나 비어 있음
+
+## 멤버 함수 정의
+
+- 클래스 밖의 멤버 함수 정의마다 템플릿 머리 `template <typename T>`가 앞에 와야 함
+- `::` 앞의 이름은 `Table`이 아니라 **`Table<T>`**
+
+```cpp
+template <typename T>
+Table<T>::Table(std::size_t rows, std::size_t cols)
+    : m_rows{ rows }, m_cols{ cols }
+{
+    m_cells.resize(m_rows * m_cols);
+}
+
+template <typename T>
+const std::optional<T>& Table<T>::at(std::size_t row, std::size_t col) const
+{
+    check(row, col);
+    return m_cells[row * m_cols + col];
+}
+```
+
+- 그 밖에는 보통 클래스의 멤버 정의와 같음
+- `const`가 아닌 `at()`은 `const` 판을 불러 중복을 피함(`std::as_const`와 `const_cast`, 9장)
+
+:::note
+클래스 템플릿의 멤버 함수 정의는 그 템플릿을 쓰는 코드에서 **보여야** 한다. 그래서 정의를 둘 수 있는 곳에 제약이 있다. 보통은 클래스 템플릿 정의와 같은 파일에 둔다. 우회하는 방법은 2편에서 본다.
+:::
+
+- 멤버 함수 안에서 타입 `T`의 기본값이 필요하면 `T{}`를 씀
+  - `T`가 클래스 타입이면 기본 생성자를 부르고, 기본 타입이면 0이 됨. 기본 타입이 0이 되는 것을 **영 초기화** (zero initialization)라 함 <CppRef path="cpp/language/zero_initialization" />
+  - 아직 모르는 타입의 변수에 알맞은 기본값을 주는 좋은 방법
+
+## 템플릿 쓰기
+
+- `Table`만으로는 타입이 될 수 없음. 담을 타입을 지정해야 함
+- 특정 타입으로 클래스 템플릿의 구체적인 인스턴스를 만드는 것이 **템플릿 인스턴스화**
+
+```cpp
+Table<int> scores;               // int를 담는 표, 생성자 기본 인수 사용
+Table<double> ratios{ 6, 6 };    // 6x6 double 표
+scores.at(0, 1) = 87;
+int x{ scores.at(0, 1).value_or(0) };
+Table<int> copy{ scores };       // 복사 생성자
+```
+
+- `scores`와 `copy`의 타입은 `Table<int>`. 여기에 `std::string`을 넣으려 하면 컴파일 오류. GCC는 `std::string`을 `int`로 바꿀 수 없다(`cannot convert`)고 알림
+- `value_or()`: `optional`에 값이 있으면 그 값, 없으면 인수로 준 값을 돌려줌
+- 타입을 빠뜨리면 컴파일되지 않음
+
+| 코드 | GCC 오류 |
+| --- | --- |
+| `Table t;` | `class template argument deduction failed` (인수 추론 실패, 3편) |
+| `Table<> t;` | `wrong number of template arguments (0, should be 1)` |
+
+- 함수가 `Table`을 받으려면 담는 타입까지 지정함: `void process(Table<int>& table)`
+  - 담는 타입을 매개변수로 하는 함수를 쓰려면 함수 템플릿(6편)
+- 담을 수 있는 타입
+  - 직접 만든 클래스: `Table<Reading>`
+  - 포인터: `Table<const char*>`
+  - 다른 템플릿 타입: `Table<std::vector<int>>`
+- 자유 공간에도 만들 수 있음: `auto t{ std::make_unique<Table<int>>(2, 2) };`
+
+<RunCode client:load code={tableCode} />
+
+- 볼 것
+  - 같은 템플릿에서 `Table<int>`, `Table<std::string>`, `Table<std::vector<int>>`, `Table<double>`이 만들어짐
+  - 빈 칸은 `value_or(-1)`로 -1
+  - 범위 밖 좌표는 `std::out_of_range` 예외
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::optional` | C++17 | 값과 "채워짐" 표시를 따로 저장, 또는 포인터 |
+| `std::as_const` | C++17 | `static_cast<const Table&>(*this)` |
+| 클래스 템플릿 인수 추론 | C++17 | 언제나 `Table<int>`처럼 인수를 적음 |
+| `std::format`, `std::println` | C++20, C++23 | 문자열 이어 붙이기, `std::cout` |
+
+- 클래스 템플릿 자체와 `T{}`(C++11의 중괄호 초기화)는 C++11에서도 그대로 씀
+- 아래 코드는 C++11 옵션으로 컴파일됨. `optional` 대신 값 배열과 `std::vector<bool>` 표시를 둠
+
+<RunCode client:load code={tableCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `Table`은 클래스다?
+  - 템플릿 이름. 실제 클래스는 `Table<int>`처럼 인수를 준 템플릿 ID
+- 클래스 밖 멤버 정의에서 `Table::at`이라고 쓴다?
+  - `template <typename T>`를 앞에 두고 `Table<T>::at`
+- `template <class T>`의 `T`는 클래스여야 한다?
+  - 아무 타입이나 됨. `typename`과 뜻이 같음
+- 템플릿의 멤버 정의를 `.cpp` 파일에 따로 두면 된다?
+  - 쓰는 코드에서 정의가 보여야 하므로 보통 같은 파일에 둠(2편)
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 템플릿 | 값뿐 아니라 타입도 매개변수화 |
+| 클래스 템플릿 | 클래스 정의의 설계도. 주로 컨테이너 |
+| 다형성 판의 한계 | 포인터만, 다운캐스트 필요, 타입 섞임, 기본 타입 불가 |
+| 템플릿 머리 | `template <typename T>`. `class`도 같은 뜻 |
+| 템플릿 ID | `Table<int>`. 클래스 밖에서는 `Table<T>` |
+| 멤버 정의 | 정의마다 템플릿 머리, `Table<T>::` |
+| 인스턴스화 | 타입을 지정해 구체적인 클래스를 만듦 |
+| `T{}` | 모르는 타입의 기본값(영 초기화) |
+
+## 복습 질문
+
+<details>
+<summary>다형성으로 만든 범용 표 대신 클래스 템플릿을 쓰면 무엇이 좋아지는가?</summary>
+
+- 값으로 담을 수 있고, `int` 같은 기본 타입도 담을 수 있음
+- 꺼낸 값의 타입이 정확해 다운캐스트가 필요 없고, 다른 타입을 섞어 넣으면 컴파일 오류(타입 안전)
+
+</details>
+
+<details>
+<summary>`Table<T>`의 `rows()`를 클래스 밖에서 정의하는 첫 두 줄은?</summary>
+
+```cpp
+template <typename T>
+std::size_t Table<T>::rows() const
+```
+
+</details>
+
+<details>
+<summary>템플릿 멤버 함수 안에서 `T` 타입 지역 변수를 "알맞은 기본값"으로 만들려면?</summary>
+
+- `T value{};`. 클래스 타입이면 기본 생성자, 기본 타입이면 0
+
+</details>
