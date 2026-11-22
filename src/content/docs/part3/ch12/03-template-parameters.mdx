@@ -1,0 +1,238 @@
+---
+title: 템플릿 매개변수와 인수 추론
+description: 타입이 아닌 템플릿 매개변수, 템플릿 매개변수의 기본값, 생성자 인수로 템플릿 인수를 알아내는 클래스 템플릿 인수 추론(CTAD)과 사용자 정의 추론 가이드를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import paramsCode from '../../../../examples/ch12/template-params.cpp?raw';
+import paramsCpp11Code from '../../../../examples/ch12/template-params-cpp11.cpp?raw';
+
+- 다루는 것: 템플릿 매개변수 목록을 더 다양하게 쓰는 법
+- 이 글에서 배우는 요소: 타입이 아닌 템플릿 매개변수, 템플릿 매개변수의 기본값, 클래스 템플릿 인수 추론(CTAD), 사용자 정의 추론 가이드
+
+## 템플릿 매개변수 목록
+
+- 1편의 `Table`은 매개변수가 하나(담는 타입)
+- 템플릿 매개변수 목록 `template <typename T>`는 함수의 매개변수 목록과 비슷함
+  - 원하는 만큼 둘 수 있음
+  - 타입이 아니어도 됨
+  - 기본값을 줄 수 있음
+
+## 타입이 아닌 템플릿 매개변수
+
+- **타입이 아닌 템플릿 매개변수** (non-type template parameter): 함수에서 익숙한 `int`나 포인터 같은 "보통" 매개변수 <CppRef path="cpp/language/template_parameters" />
+- 될 수 있는 타입
+  - 정수 계열(`char`, `int`, `long` 등), 열거형, 포인터, 참조, `std::nullptr_t`
+  - `auto`, `auto&`, `auto*` <Badge text="C++17" />
+  - 부동소수점 타입, 클래스 타입 <Badge text="C++20" />. 클래스 타입은 제약이 많아 여기서는 다루지 않음
+- 템플릿은 **컴파일할 때** 인스턴스화되므로, 그 인수도 컴파일할 때 계산됨. 리터럴이나 컴파일 시간 상수여야 함
+
+### 크기를 템플릿 매개변수로
+
+- `Table`의 행과 열 개수를 생성자 대신 템플릿 매개변수로 받을 수 있음
+- 장점: 컴파일하기 전에 값을 앎
+  - 컴파일러는 템플릿 매개변수를 바꿔 넣은 뒤 컴파일하므로, 크기를 바꿀 수 있는 `vector` 대신 보통의 2차원 배열을 쓸 수 있음
+
+```cpp
+template <typename T, std::size_t ROWS, std::size_t COLS>
+class FixedTable
+{
+public:
+    std::optional<T>& at(std::size_t row, std::size_t col);
+    std::size_t rows() const { return ROWS; }
+    std::size_t cols() const { return COLS; }
+
+private:
+    std::optional<T> m_cells[ROWS][COLS];
+};
+```
+
+- 클래스 밖 멤버 정의에서도 매개변수 셋을 모두 적음
+
+```cpp
+template <typename T, std::size_t ROWS, std::size_t COLS>
+std::optional<T>& FixedTable<T, ROWS, COLS>::at(std::size_t row,
+                                                std::size_t col)
+{
+    return m_cells[row][col];
+}
+```
+
+- 쓸 때: `FixedTable<int, 10, 10> grid;`
+
+### 제약
+
+- 상수가 아닌 정수로는 지정할 수 없음
+
+```cpp
+std::size_t rows{ 2 };
+FixedTable<int, rows, 3> t;   // 컴파일 오류
+```
+
+- GCC: ``the value of 'rows' is not usable in a constant expression``
+- `const std::size_t rows{ 2 };`처럼 상수로 정의하면 됨. 알맞은 타입을 돌려주는 `constexpr` 함수의 결과도 됨: `FixedTable<double, 2, pickCols()>`
+- 더 큰 제약: 크기가 **타입의 일부**가 됨
+  - `FixedTable<int, 2, 2>`와 `FixedTable<int, 2, 3>`은 서로 다른 타입
+  - 한쪽 객체를 다른 쪽에 대입할 수 없고(``no match for 'operator='``), 한 타입을 받는 함수에 다른 타입을 넘길 수 없음
+
+:::note
+타입이 아닌 템플릿 매개변수는 인스턴스화된 객체의 타입에 포함된다.
+:::
+
+## 템플릿 매개변수의 기본값
+
+- 생성자 매개변수에 기본값을 주듯, 템플릿 매개변수에도 기본값을 줄 수 있음. 타입 매개변수 `T`에도 줄 수 있음
+
+```cpp
+template <typename T = int, std::size_t ROWS = 3, std::size_t COLS = 3>
+class FixedTable
+{
+    // 나머지는 같음
+};
+```
+
+- 클래스 밖 멤버 정의의 템플릿 머리에는 기본값을 다시 적지 않음
+- 이제 인수를 모두, 일부, 또는 하나도 안 줄 수 있음
+
+```cpp
+FixedTable<> a;                // int, 3, 3
+FixedTable<double> b;          // double, 3, 3
+FixedTable<double, 5> c;       // double, 5, 3
+FixedTable<double, 5, 5> d;
+```
+
+- 규칙은 함수의 기본 인수와 같음. 오른쪽부터 차례로 기본값을 줄 수 있음
+- 인수를 하나도 안 줄 때
+  - C++17부터는 `FixedTable e;`처럼 꺾쇠괄호를 빼도 됨. 아래 클래스 템플릿 인수 추론이 기본값으로 채움
+  - C++14까지는 빈 꺾쇠괄호 `<>`가 꼭 필요함. C++11 모드의 GCC는 `missing template arguments` 오류
+
+## 클래스 템플릿 인수 추론
+
+- **클래스 템플릿 인수 추론** (class template argument deduction, CTAD) <Badge text="C++17" />: 생성자에 넘긴 인수로 컴파일러가 템플릿 타입 매개변수를 알아냄 <CppRef path="cpp/language/class_template_argument_deduction" />
+- 예: `<utility>`의 `std::pair`(1장)는 두 값의 타입을 템플릿 타입 인수로 받음
+
+```cpp
+std::pair<int, double> p1{ 1, 2.5 };   // 인수를 직접 적음
+auto p2{ std::make_pair(1, 2.5) };     // 도우미 함수 템플릿
+std::pair p3{ 1, 2.5 };                // CTAD: std::pair<int, double>
+```
+
+- `std::make_pair()`는 함수 템플릿(6편). 함수 템플릿은 원래부터 넘긴 인수로 템플릿 타입 매개변수를 추론할 수 있었음
+- CTAD가 생기면서 이런 도우미 없이 생성자 인수만으로 추론함
+- 조건
+  - 모든 템플릿 타입 매개변수가 기본값을 갖거나, 생성자 매개변수에 쓰여 추론할 수 있어야 함
+  - 초기화 식이 있어야 함. `std::pair p4;`는 오류(``class template argument deduction failed``)
+- 표준 라이브러리의 많은 클래스가 CTAD를 지원함: `std::vector v{ 3, 1, 4 };`는 `std::vector<int>`
+
+:::caution
+`std::unique_ptr`과 `std::shared_ptr`은 CTAD가 막혀 있다. 생성자가 `T*`를 받으므로 `<T>`와 `<T[]>` 중 하나를 골라야 하는데, 잘못 고르면 위험하기 때문이다. 이 둘은 계속 `std::make_unique()`, `std::make_shared()`를 쓴다.
+:::
+
+### 사용자 정의 추론 가이드
+
+- **사용자 정의 추론 가이드** (user-defined deduction guide): 템플릿 타입 매개변수를 어떻게 추론할지 규칙을 직접 적어 컴파일러를 도움 <CppRef path="cpp/language/class_template_argument_deduction" />
+- 예: 문자열을 담는 `Label<T>`
+
+```cpp
+template <typename T>
+class Label
+{
+public:
+    explicit Label(T text) : m_text{ std::move(text) } {}
+    const T& text() const { return m_text; }
+private:
+    T m_text;
+};
+```
+
+- `std::string`을 넘기면 `Label<std::string>`으로 추론됨
+- 하지만 `Label name{ "센서-7" };`처럼 문자열 리터럴을 넘기면 `T`가 `const char*`로 추론됨. 원하는 것이 아님
+- 추론 가이드로 바로잡음
+
+```cpp
+Label(const char*) -> Label<std::string>;
+```
+
+- 클래스 정의 **밖**, 그러나 클래스와 **같은 네임스페이스**에 정의함
+- 일반 문법. `explicit`은 생략 가능하고 생성자의 `explicit`과 같은 뜻. 가이드 자체도 템플릿인 경우가 많음
+
+```cpp
+template <...>
+explicit 템플릿이름(매개변수들) -> 추론할템플릿<...>;
+```
+
+<RunCode client:load code={paramsCode} />
+
+- 볼 것
+  - `pickCols()`가 `constexpr` 함수라 템플릿 인수로 쓸 수 있음
+  - `FixedTable<int, 2, 2>`와 `FixedTable<int, 2, 3>`은 다른 타입(`false`)
+  - `name.text().size()`가 8. UTF-8에서 "센서"가 6바이트, "-7"이 2바이트. `Label<std::string>`으로 추론되었기 때문에 `size()`를 쓸 수 있음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 클래스 템플릿 인수 추론, 추론 가이드 | C++17 | `std::make_pair()` 같은 `make_` 도우미 함수 템플릿, 또는 인수를 직접 적음 |
+| 꺾쇠괄호 없이 기본값만으로 인스턴스화 | C++17 | `FixedTable<>` |
+| `auto` 타입이 아닌 매개변수 | C++17 | 타입을 직접 적음 |
+| 부동소수점·클래스 타입의 타입이 아닌 매개변수 | C++20 | 정수 계열로 바꿔 표현 |
+| `std::is_same_v` | C++17 | `std::is_same<A, B>::value` |
+
+- 타입이 아닌 템플릿 매개변수와 기본값은 C++11에서도 그대로 씀
+- 아래 코드는 C++11 옵션으로 컴파일됨. CTAD 대신 `make_` 함수로 추론함
+
+<RunCode client:load code={paramsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 타입이 아닌 템플릿 인수에 보통 변수를 넘길 수 있다?
+  - 컴파일 시간 상수만. `const` 상수, `constexpr` 함수의 결과, 리터럴
+- `FixedTable<int, 2, 2>`와 `FixedTable<int, 2, 3>`은 같은 템플릿이니 서로 대입된다?
+  - 서로 다른 타입. 대입도, 같은 함수에 넘기기도 안 됨
+- 멤버 정의의 템플릿 머리에도 기본값을 다시 적는다?
+  - 클래스 템플릿 정의에서 한 번만
+- CTAD는 스마트 포인터에도 된다?
+  - `unique_ptr`, `shared_ptr`은 막혀 있음. `make_unique()`, `make_shared()`
+- 문자열 리터럴을 넘기면 `std::string`으로 추론된다?
+  - `const char*`로 추론됨. 원하면 추론 가이드를 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 타입이 아닌 매개변수 | `std::size_t ROWS` 등. 인수는 컴파일 시간 상수 |
+| 타입의 일부 | 인수가 다르면 다른 타입 |
+| 기본값 | `typename T = int`. 오른쪽부터. 멤버 정의에는 다시 적지 않음 |
+| CTAD | `std::pair p{ 1, 2.5 };`. 초기화 식 필요 |
+| 추론 가이드 | `Label(const char*) -> Label<std::string>;`. 클래스 밖, 같은 네임스페이스 |
+
+## 복습 질문
+
+<details>
+<summary>`FixedTable<int, n, 3> t;`가 컴파일되려면 `n`은 어떻게 정의해야 하는가?</summary>
+
+- 컴파일 시간 상수여야 함: `const std::size_t n{ 2 };` 또는 `constexpr std::size_t n{ 2 };`
+
+</details>
+
+<details>
+<summary>`template <typename T = int, std::size_t ROWS = 3, std::size_t COLS = 3>`일 때 `FixedTable<double, 5>`의 세 인수는?</summary>
+
+- `double`, 5, 3. 주지 않은 오른쪽 인수는 기본값
+
+</details>
+
+<details>
+<summary>`std::vector v{ 1.5, 2.5 };`에서 `v`의 타입은? `std::unique_ptr p{ new int{ 1 } };`은?</summary>
+
+- `std::vector<double>`(CTAD)
+- 두 번째는 컴파일 오류. `unique_ptr`은 CTAD가 막혀 있음. `auto p{ std::make_unique<int>(1) };`
+
+</details>
