@@ -1,0 +1,272 @@
+---
+title: 스트림으로 입력하기
+description: 입력 연산자가 공백에서 끊어 읽는 방식, 입력 오류를 확인하고 되살리는 패턴, get·unget·putback·peek·getline 같은 입력 멤버 함수, 입력 조작자를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import inputCode from '../../../../examples/ch13/stream-input.cpp?raw';
+import inputCpp11Code from '../../../../examples/ch13/stream-input-cpp11.cpp?raw';
+
+- 다루는 것: 콘솔 입력 스트림 `cin`을 예로, 구조가 있거나 없는 데이터를 읽는 법
+- 이 글에서 배우는 요소: `>>`, 공백 문자, 입력 오류 처리, `get()`, `unget()`, `putback()`, `peek()`, `getline()`, 입력 조작자
+
+## 기본
+
+- 입력 스트림으로 데이터를 읽는 쉬운 방법 둘: `>>` 연산자, 그리고 아래의 `get()` 등 멤버 함수
+- `>>`: 출력의 `<<`에 대응. 넘긴 변수가 읽은 값을 받는 저장소가 됨 <CppRef path="cpp/io/basic_istream/operator_gtgt" />
+
+```cpp
+std::string word;
+std::cin >> word;
+std::println("입력: {}", word);
+```
+
+- `>>`는 기본으로 **공백**에서 끊어 읽음(토큰화)
+  - 사용자가 `hello there`를 입력하면 첫 공백까지인 `hello`만 `word`에 들어감
+  - C++의 공백 문자: 스페이스 `' '`, 폼 피드 `'\f'`, 줄바꿈 `'\n'`, 캐리지 리턴 `'\r'`, 가로 탭 `'\t'`, 세로 탭 `'\v'`
+- 변수 타입만 바꾸면 다른 타입도 읽음. 여러 값을 섞어 이어 읽을 수도 있음
+
+```cpp
+std::string room;
+int people;
+std::print("방 이름과 인원: ");
+std::cin >> room >> people;
+```
+
+- 위 `print()`는 `endl`이나 `flush()` 없이도 화면에 보임. `cin`을 쓰면 연결된 `cout`의 버퍼가 바로 비워지기 때문
+
+:::tip
+`<<`와 `>>`가 헷갈리면 화살표가 데이터가 가는 쪽을 가리킨다고 생각한다. 출력에서 `<<`는 스트림 쪽(데이터를 스트림에 보냄), 입력에서 `>>`는 변수 쪽(데이터를 변수에 저장함)을 가리킨다.
+:::
+
+## 입력 오류 처리
+
+- 입력 스트림의 오류는 대부분 **읽을 데이터가 없을 때** 생김. 예: 스트림 끝에 닿음
+  - 파일이 아닌 스트림에서도 스트림 끝을 **파일 끝** (end-of-file)이라 부름
+- 가장 흔한 확인법: 조건문 안에서 스트림을 씀. 오류 상태가 아니면 참(이 변환의 원리는 15장)
+
+```cpp
+while (std::cin) { /* ... */ }
+while (std::cin >> ch) { /* ... */ }    // 읽으면서 확인
+```
+
+- `good()`, `bad()`, `fail()`, `eof()`도 출력 스트림처럼 쓸 수 있음. 파일 끝이면 `good()`과 `fail()` 모두 거짓: `good() == (!fail() && !eof())`
+- 데이터를 읽은 뒤 스트림 상태를 확인하는 습관을 들여, 잘못된 입력에서 되살아날 수 있게 함
+
+### 흔한 패턴
+
+```cpp
+int sum{ 0 };
+while (!std::cin.bad()) {
+    int number;
+    std::cin >> number;
+    if (std::cin.good()) {
+        sum += number;
+    } else if (std::cin.eof()) {
+        break;                            // 파일 끝
+    } else if (std::cin.fail()) {
+        std::cin.clear();                 // 실패 상태를 지움
+        std::string bad;
+        std::cin >> bad;                  // 잘못된 토큰을 소비함
+        std::println(std::cerr, "잘못된 입력: {}", bad);
+    }
+}
+```
+
+- 숫자를 기대했는데 `abc`가 오면 `fail()`이 참이 됨
+  - `clear()`로 실패 상태를 지우지 않으면 이후 읽기가 모두 실패함
+  - 문제의 `abc`는 스트림에 그대로 남아 있으므로 문자열로 읽어 버림
+- 명령줄에서 파일 끝을 입력하는 방법은 운영체제마다 다름: Unix·Linux는 줄 맨 앞에서 Ctrl+D, Windows는 Ctrl+Z 뒤 Enter
+
+## 입력 멤버 함수
+
+- 출력처럼 입력에도 `>>`보다 낮은 수준의 멤버 함수가 있음 <CppRef path="cpp/io/basic_istream" />
+
+### get()
+
+- 스트림에서 날 것 그대로 읽음. 가장 단순한 판은 다음 **문자 하나**를 돌려줌
+- 주로 `>>`의 자동 토큰화를 피하려고 씀. 예: 여러 단어로 된 이름을 스트림 끝까지 읽기
+
+```cpp
+std::string readAll(std::istream& in)
+{
+    std::string text;
+    char next;
+    while (in.get(next)) {   // 스트림 참조를 돌려주므로 조건에 바로 씀
+        text += next;
+    }
+    return text;
+}
+```
+
+- 매개변수가 `const`가 아닌 참조. 읽으면 스트림(특히 위치)이 바뀌므로 읽기 멤버 함수는 `const`가 아님
+- 인수 없는 `get()`은 `char`가 아니라 `int`를 돌려줌. 파일 끝 같은 문자가 아닌 특별한 값 `std::char_traits<char>::eof()`를 돌려줄 수 있기 때문
+- `get()`은 줄바꿈 같은 문자도 그대로 읽음
+
+### unget()
+
+- 입력 스트림은 보통 한 방향 통로. `unget()`은 이를 조금 깸
+- 스트림 위치를 **한 칸 뒤로** 되돌려, 방금 읽은 문자를 다시 읽을 수 있게 함
+- 실패할 수 있음(예: 스트림 맨 앞). `fail()`로 확인
+- 예: 이름에 공백을 허용하고, 숫자가 나오면 그 숫자를 되돌린 뒤 `>>`로 인원을 읽음
+
+```cpp
+std::cin >> std::noskipws;          // 공백도 문자로 읽음
+char ch;
+while (std::cin >> ch) {
+    if (std::isdigit(ch)) {
+        std::cin.unget();           // 숫자를 되돌려 놓음
+        break;
+    }
+    name += ch;
+}
+std::cin >> std::skipws >> people;
+```
+
+### putback()
+
+- `unget()`처럼 한 칸 뒤로 가지만, **되돌려 놓을 문자를 인수로** 받음
+
+```cpp
+char c;
+std::cin >> c;          // 'w'
+std::cin.putback('e');  // 다음에 읽힐 문자는 'e'
+```
+
+### peek()
+
+- `get()`을 부르면 돌려줄 다음 값을 **미리 봄**. 읽지는 않음(통로를 올려다보기만 하고 떨어뜨리지 않음)
+- 읽기 전에 내다봐야 할 때 알맞음. 위의 이름·인원 예를 `unget()` 대신 `peek()`로
+
+```cpp
+while (std::cin && !std::isdigit(std::cin.peek())) {
+    name += static_cast<char>(std::cin.get());
+}
+std::cin >> people;
+```
+
+### getline()
+
+- 한 줄 읽기는 아주 흔해서 전용 함수가 있음
+- 멤버 함수 `getline()`: 문자 버퍼에 지정한 크기까지 한 줄을 채움. 크기에는 `\0`이 포함되므로 최대 (크기 - 1)글자
+
+```cpp
+char buffer[BufferSize]{};
+std::cin.getline(buffer, BufferSize);
+```
+
+- 줄 끝 문자까지 읽지만, 줄 끝 문자는 결과에 넣지 않음. 줄 끝 문자는 플랫폼에 따라 `\r\n`, `\n`, `\n\r` 등
+- 같은 일을 하되 줄 끝 문자를 스트림에 **남겨 두는** `get()` 판도 있음
+- `<string>`의 비멤버 함수 `std::getline()`: `std::string`에 읽음. 버퍼 크기를 정할 필요가 없음 <CppRef path="cpp/string/basic_string/getline" />
+
+```cpp
+std::string line;
+std::getline(std::cin, line);
+```
+
+- 둘 다 마지막 인수로 **구분 문자**를 받을 수 있음. 기본은 `'\n'`. 바꾸면 여러 줄을 그 문자까지 읽음
+
+```cpp
+std::string memo;
+std::getline(std::cin, memo, '@');   // '@'가 나올 때까지(줄바꿈 포함)
+```
+
+:::caution
+`>>`로 숫자를 읽은 뒤 바로 `std::getline()`을 부르면 빈 줄을 읽는다. `>>`가 숫자 뒤의 줄바꿈을 스트림에 남겨 두기 때문이다. 먼저 `std::cin.ignore()`나 `std::cin >> std::ws`로 남은 줄바꿈을 버린다.
+:::
+
+## 입력 조작자
+
+- 입력 스트림에도 조작자가 있음. 이미 본 `noskipws` 말고도
+
+| 조작자 | 하는 일 |
+| --- | --- |
+| `boolalpha` / `noboolalpha` | `boolalpha`면 문자열 `false`는 거짓, 그 밖은 참. `noboolalpha`(기본)면 0은 거짓, 그 밖은 참 |
+| `dec`, `hex`, `oct` | 10진수, 16진수, 8진수로 읽음. 예: 10진수 207은 16진수 `cf`, 8진수 `317` |
+| `skipws` / `noskipws` | 토큰을 나눌 때 공백을 건너뜀(기본) / 공백도 문자로 읽음 |
+| `ws` | 지금 위치의 공백들을 건너뜀 |
+| `get_money` | 금액을 읽음 |
+| `get_time` | 서식에 맞춰 시각을 읽음 |
+| `quoted` | 따옴표로 감싸이고 안의 따옴표가 이스케이프된 문자열을 읽음(3편) |
+
+- 입력도 지역 설정을 따름(21장)
+  - `std::cin.imbue(std::locale{ "" });` 뒤에 미국 영어 지역이라면 `1,000`을 1000으로, `1.000`은 1로 읽음
+  - 벨기에 네덜란드어 지역이라면 반대로 `1.000`이 1000, `1,000`은 1
+  - 어느 쪽이든 구분 기호 없는 `1000`은 1000
+
+<RunCode client:load code={inputCode} stdin={`거실 3
+10 20 abc 5
+회의 실 7
+첫 번째 줄 전체
+여러 줄
+메모@끝`} />
+
+- 볼 것
+  - `abc`에서 실패한 뒤 `clear()`와 토큰 버리기로 되살아나 `5`까지 더함(합 35)
+  - `peek()`로 숫자 앞까지 읽어 공백이 든 이름 `회의 실 `을 얻음
+  - `ignore()`가 없으면 `getline()`이 `7` 뒤에 남은 줄바꿈만 읽어 빈 줄이 됨. 지우고 실행해 보기
+  - 입력 칸의 값을 바꿔 다시 실행할 수 있음
+
+## 이전 표준에서는
+
+- 이 글의 입력 연산자, 멤버 함수, 조작자는 대부분 C++98부터 있음
+- `get_money`, `get_time`은 C++11, `quoted`는 C++14
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={inputCpp11Code} flags="-std=c++11 -Wall -Wextra" stdin="거실 3 x 나머지 한 줄" />
+
+## 헷갈리기 쉬운 점
+
+- `std::cin >> name`으로 `홍 길동`을 읽으면 전체가 들어간다?
+  - 공백에서 끊겨 `홍`만. 한 줄 전체는 `std::getline()`
+- 숫자 읽기가 한 번 실패해도 다음 읽기는 된다?
+  - `clear()`로 상태를 지우고, 문제의 입력을 버려야 함
+- `get()`의 반환값을 `char`에 받는다?
+  - 인수 없는 `get()`은 `int`를 돌려줌. 파일 끝 값을 구별하려면 `int`로
+- `>>` 다음 `getline()`이 왜 빈 문자열인가?
+  - 남은 줄바꿈을 읽었기 때문. `ignore()`나 `std::ws`로 먼저 버림
+- `peek()`는 문자를 읽어 간다?
+  - 미리 보기만 함. 위치는 그대로
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `>>` | 공백에서 끊어 읽음. 이어 읽기 가능 |
+| 상태 확인 | 조건문에서 스트림, `good()`, `fail()`, `eof()`, `bad()` |
+| 되살리기 | `clear()` 후 잘못된 입력을 소비 |
+| `get()` | 날 것 그대로 한 문자. 인수 없는 판은 `int` 반환 |
+| `unget()`, `putback(c)` | 한 칸 되돌리기 / 지정 문자를 되돌려 놓기 |
+| `peek()` | 다음 문자를 미리 보기 |
+| `getline()` | 한 줄. 구분 문자 지정 가능. `std::getline()`은 `std::string`용 |
+| 조작자 | `noskipws`, `ws`, `hex`, `boolalpha`, `get_money`, `get_time`, `quoted` |
+
+## 복습 질문
+
+<details>
+<summary>입력이 `42 kg`일 때 `int n; std::string u; std::cin >> n >> u;` 후 `n`과 `u`는?</summary>
+
+- `n`은 42, `u`는 `kg`. `>>`는 공백을 건너뛰고 공백에서 끊음
+
+</details>
+
+<details>
+<summary>입력 `12 x 7`을 정수 셋으로 읽으려는 반복문이 `x`에서 멈춘 뒤 영원히 아무것도 못 읽는다. 왜인가?</summary>
+
+- `x`에서 `fail()` 상태가 되었고, `clear()`를 하지 않아 이후 읽기가 모두 실패함
+- `x`도 스트림에 남아 있으므로 `clear()` 뒤 문자열로 읽어 버려야 함
+
+</details>
+
+<details>
+<summary>쉼표로 구분된 `a,b,c`에서 항목을 하나씩 읽으려면?</summary>
+
+- `std::getline(std::cin, item, ',')`를 반복함. 구분 문자를 `','`로 바꿈
+
+</details>

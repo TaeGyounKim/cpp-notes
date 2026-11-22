@@ -136,7 +136,12 @@
 	{#if stdin !== undefined}
 		<label class="stdin">
 			<span>키보드 입력</span>
-			<input type="text" bind:value={input} spellcheck="false" autocomplete="off" />
+			{#if stdin.includes(String.fromCharCode(10))}
+				<!-- multi-line input keeps its line breaks -->
+				<textarea bind:value={input} rows={stdin.split(String.fromCharCode(10)).length} spellcheck="false" autocomplete="off"></textarea>
+			{:else}
+				<input type="text" bind:value={input} spellcheck="false" autocomplete="off" />
+			{/if}
 		</label>
 	{/if}
 
@@ -211,7 +216,12 @@
 		font-size: 0.8rem;
 		color: var(--sl-color-gray-3);
 	}
-	.stdin input {
+	.stdin textarea {
+		align-self: stretch;
+		resize: vertical;
+	}
+	.stdin input,
+	.stdin textarea {
 		flex: 1;
 		min-width: 0;
 		padding: 0.3rem 0.6rem;
