@@ -33,6 +33,7 @@ const parts = [
 		items: [
 			chapter('4장. 전문가다운 C++ 프로그램 설계', 'part2/ch04'),
 			chapter('5장. 클래스로 설계하기', 'part2/ch05'),
+			chapter('6장. 재사용을 위한 설계', 'part2/ch06'),
 		],
 	},
 ];
