@@ -1,6 +1,9 @@
 #include <print>
 
-enum class Direction { Up, Down, Left, Right };                 // 기반 타입: int
+// 기반 타입을 적지 않으면 int
+enum class Direction { Up, Down, Left, Right };
+
+// 기반 타입을 unsigned char로 지정
 enum class TinyDirection : unsigned char { Up, Down, Left, Right };
 
 int main()

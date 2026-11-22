@@ -145,13 +145,15 @@
 		border-radius: 0.5rem;
 		overflow: hidden;
 		background: var(--sl-color-bg-nav);
+		container-type: inline-size;
 	}
 	.panes {
 		display: grid;
-		grid-template-columns: fit-content(58%) minmax(0, 1fr);
+		grid-template-columns: fit-content(64%) minmax(0, 1fr);
 		align-items: start;
 	}
-	@media (max-width: 60rem) {
+	/* 부품의 폭이 좁으면 코드와 메모리 그림을 위아래로 쌓는다. */
+	@container (max-width: 42rem) {
 		.panes {
 			grid-template-columns: minmax(0, 1fr);
 		}

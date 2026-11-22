@@ -19,5 +19,6 @@ int main()
               << std::right << std::setw(5) << 12
               << std::setw(9) << 23.456 << '\n';
 
-    std::cout << "order no. " << std::setfill('0') << std::setw(5) << 42 << '\n';
+    std::cout << "order no. " << std::setfill('0') << std::setw(5) << 42
+              << '\n';
 }

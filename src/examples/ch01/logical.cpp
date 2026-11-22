@@ -5,12 +5,12 @@ int main()
     int age{ 25 };
     bool member{ false };
 
-    std::println("{}", age >= 19);                 // 크거나 같다
-    std::println("{}", age == 25);                 // 같다 (= 하나는 대입!)
-    std::println("{}", age != 25);                 // 같지 않다
-    std::println("{}", !member);                   // NOT: 뒤집기
-    std::println("{}", age >= 19 && member);       // AND: 둘 다 참이어야 참
-    std::println("{}", age >= 19 || member);       // OR: 하나만 참이어도 참
+    std::println("{}", age >= 19);            // 크거나 같다
+    std::println("{}", age == 25);            // 같다 (= 하나는 대입!)
+    std::println("{}", age != 25);            // 같지 않다
+    std::println("{}", !member);              // NOT: 뒤집기
+    std::println("{}", age >= 19 && member);  // AND: 둘 다 참이어야 참
+    std::println("{}", age >= 19 || member);  // OR: 하나만 참이어도 참
 
     // 단락 평가: 앞에서 결과가 정해지면 뒤는 계산하지 않는다.
     int total{ 100 };

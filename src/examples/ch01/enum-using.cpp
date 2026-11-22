@@ -9,18 +9,22 @@ int main()
 {
     Door door{ Door::Unknown };
     Network network{ Network::Unknown };
-    std::println("{} {}", std::to_underlying(door), std::to_underlying(network));
+    std::println("{} {}", std::to_underlying(door),
+                 std::to_underlying(network));
 
     {
-        using enum Door;            // 이 블록 안에서는 Door:: 를 생략할 수 있다.
+        // 이 블록 안에서는 Door:: 를 생략할 수 있다.
+        using enum Door;
         door = Closed;
     }
 
     {
-        using Network::Connected;   // Connected 하나만 생략할 수 있다.
+        // Connected 하나만 생략할 수 있다.
+        using Network::Connected;
         network = Connected;
-        network = Network::Disconnected;   // 나머지는 여전히 Network:: 필요
+        network = Network::Disconnected;   // 나머지는 Network:: 필요
     }
 
-    std::println("{} {}", std::to_underlying(door), std::to_underlying(network));
+    std::println("{} {}", std::to_underlying(door),
+                 std::to_underlying(network));
 }

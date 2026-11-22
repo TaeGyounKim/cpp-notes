@@ -17,7 +17,8 @@ int main()
         }
     }
 
-    // using enum과 [[fallthrough]] 대신: 전부 Shipping:: 를 붙이고 주석으로 알린다.
+    // using enum과 [[fallthrough]] 대신:
+    // 전부 Shipping:: 를 붙이고, 이어 가는 곳은 주석으로 알린다.
     Shipping shipping{ Shipping::Overnight };
     int fee{ 3000 };
     switch (shipping) {
