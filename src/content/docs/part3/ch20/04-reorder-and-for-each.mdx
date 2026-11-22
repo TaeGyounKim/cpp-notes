@@ -1,0 +1,194 @@
+---
+title: unique, shuffle, sample, reverse, shift, for_each
+description: 이웃한 중복을 없애는 unique, 무작위로 섞고 고르는 shuffle과 sample, 순서를 뒤집는 reverse, C++20 shift_left·shift_right, 원소마다 콜백을 부르는 for_each·for_each_n과 그 반환값을 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import roCode from '../../../../examples/ch20/reorder.cpp?raw';
+import roCpp11Code from '../../../../examples/ch20/reorder-cpp11.cpp?raw';
+
+- 다루는 것: 원소의 순서를 바꾸거나 일부를 골라내는 바꾸는 알고리즘, 그리고 원소마다 콜백을 부르는 연산 알고리즘
+- 이 글에서 배우는 요소: `unique`, `shuffle`, `sample`, `reverse`, `shift_left`/`shift_right`, `for_each`, `for_each_n`
+
+## unique
+
+- `remove()`(3편)의 특수한 경우: **이웃한** 중복 원소를 모두 없앰 <CppRef path="cpp/algorithm/unique" />
+  - `list`에는 같은 의미의 멤버 `unique()`가 있음(18장)
+  - 보통 **정렬된** 순서열에 쓰지만, 정렬되지 않은 순서열에도 쓸 수 있음(이웃한 것만 합쳐짐)
+- `remove()`처럼 동작함: 남길 원소를 범위 앞쪽으로 옮기고, 지울 원소 범위의 첫 위치를 돌려줌. 그래서 `erase()`를 이어서 불러야 함
+
+```cpp
+std::vector log{ 1, 1, 2, 2, 2, 3, 1, 1 };
+log.erase(std::unique(log.begin(), log.end()), log.end());   // 1, 2, 3, 1
+```
+
+- `unique_copy()`: 결과를 새 대상 범위에 복사함
+- 모든 중복을 없애려면 먼저 `sort()`(5편) 하고 `unique()`
+
+## shuffle
+
+- `std::shuffle(first, last, engine)`: 범위의 원소를 무작위 순서로 다시 놓음. 선형 시간 <CppRef path="cpp/algorithm/random_shuffle" />
+  - 카드 섞기 같은 일에 유용함
+  - 난수를 어떻게 만들지 정하는 **균등 난수 생성기** 객체가 필요함. 난수 엔진과 씨앗(seed)은 23장
+
+```cpp
+std::random_device seeder;
+std::mt19937 engine{ seeder() };   // 실행마다 다른 씨앗
+std::shuffle(deck.begin(), deck.end(), engine);
+```
+
+- 씨앗을 고정하면(`std::mt19937 engine{ 42 }`) 같은 표준 라이브러리 구현에서는 매번 같은 결과가 나옴. 다만 `shuffle`의 알고리즘은 표준이 정하지 않아 구현마다 결과가 다를 수 있음
+- 예전의 `random_shuffle()`은 C++14에서 권장하지 않게 되고 C++17에서 제거됨
+
+## sample
+
+- `std::sample()` <Badge text="C++17" />: 원본 범위에서 n개를 무작위로 골라 대상 범위에 저장함 <CppRef path="cpp/algorithm/sample" />
+- 매개변수 다섯
+  - 원본의 시작·끝 반복자
+  - 고른 원소를 저장할 대상의 시작 반복자
+  - 고를 원소 수
+  - 난수 엔진
+
+```cpp
+std::vector<int> picked(3);
+std::sample(deck.cbegin(), deck.cend(), picked.begin(), 3, engine);
+```
+
+- 원본이 순방향 반복자 이상이면 고른 원소들이 원본에서의 상대 순서를 유지함
+
+## reverse
+
+- `std::reverse(first, last)`: 범위의 원소 순서를 뒤집음. 첫 원소와 마지막 원소를, 둘째와 끝에서 둘째를, … 맞바꿈 <CppRef path="cpp/algorithm/reverse" />
+- `reverse_copy(first, last, dest)`: 결과를 새 대상 범위에 복사함. 대상은 이미 충분히 커야 함
+
+## 원소 밀기
+
+- `std::shift_left(first, last, n)`, `std::shift_right(first, last, n)` <Badge text="C++20" />: 범위의 원소를 새 위치로 **이동**해 n칸 밂 <CppRef path="cpp/algorithm/shift" />
+  - `shift_left()`는 새 범위의 **끝**, `shift_right()`는 새 범위의 **시작**을 돌려줌
+  - 범위 끝으로 밀려난 원소는 사라지고, 반대편에 남는 자리는 이동된(쓰지 말아야 할) 원소
+  - 그래서 돌려받은 반복자로 `erase()`해서 크기를 맞춤
+
+```cpp
+std::vector q{ 11, 22, 33, 44, 55 };
+q.erase(std::shift_left(q.begin(), q.end(), 2), q.end());      // 33, 44, 55
+q.erase(q.begin(), std::shift_right(q.begin(), q.end(), 1));   // 33, 44
+```
+
+## 연산 알고리즘
+
+- `for_each()`, `for_each_n()` 두 가지. 범위의 각 원소(또는 처음 n개)에 콜백을 실행함 <CppRef path="cpp/algorithm/for_each" />
+  - 반복자가 `const`가 아니면 콜백이 원소를 고칠 수 있음
+  - 이런 것이 있다는 것만 알아 두면 됨. 보통은 범위 기반 `for` 문이 더 쉽고 읽기 좋음
+
+### for_each
+
+- `map`의 원소를 출력: 제네릭 람다의 매개변수 `p`는 `const std::pair<const std::string, int>&`
+
+```cpp
+std::for_each(stock.cbegin(), stock.cend(), [](const auto& p) {
+    std::println("{}: {}", p.first, p.second);
+});
+```
+
+- 합과 곱을 한 번에 구하기: 람다가 필요한 변수만 **참조로** 캡처함. 값으로 캡처하면 람다 안의 변경이 밖에서 보이지 않음
+- 함수 객체로 상태를 모을 수도 있음. 이때 `for_each()`가 돌려주는 값을 받아야 함
+  - `for_each()`는 함수 객체를 **복사**해 쓰고, 끝나면 그 복사본을 돌려줌(1편: 유일하게 복사본을 돌려주는 알고리즘)
+  - 반환값을 버리고 원래 함수 객체를 읽으면 처음 상태 그대로
+
+```cpp
+Stats st{ std::for_each(v.cbegin(), v.cend(), Stats{}) };   // 돌려받은 복사본
+// 또는
+Stats calc;
+std::for_each(v.cbegin(), v.cend(), std::ref(calc));         // 참조로 넘김
+```
+
+- 콜백이 `const`가 아닌 참조를 매개변수로 받아 원소를 고칠 수 있음: `[](int& v) { v *= 2; }`
+
+### for_each_n
+
+- <Badge text="C++17" /> `for_each_n(first, n, f)`: 시작 반복자와 원소 수 n, 콜백을 받음. `first + n`과 같은 반복자를 돌려줌
+- 범위 검사를 하지 않음. n이 원소 수를 넘지 않게 직접 확인함
+
+<RunCode client:load code={roCode} />
+
+- 볼 것
+  - `unique`는 이웃한 중복만 합쳐 마지막의 1, 1은 하나로 남음
+  - 씨앗 42로 고정한 `shuffle`과 `sample`. 고른 원소는 섞인 덱의 순서를 유지함
+  - `reverse`와 `reverse_copy`
+  - `shift_left` 2칸, `shift_right` 1칸 뒤 `erase`로 크기 맞추기
+  - `for_each_n`으로 `map`의 처음 둘, `for_each`가 돌려준 `Stats`로 합과 최대
+  - `int&` 매개변수로 원소를 두 배로
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `shift_left`, `shift_right` | C++20 | `erase`, `std::move`/`rotate`로 직접 |
+| `sample`, `for_each_n` | C++17 | `shuffle` 뒤 앞쪽 n개, 반복문 |
+| `shuffle`, `<random>` 엔진 | C++11 | `random_shuffle`(C++17에서 제거) |
+
+- `unique`, `reverse`, `for_each`는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={roCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `unique`는 모든 중복을 없앤다?
+  - **이웃한** 중복만. 먼저 정렬
+- `unique`를 부르면 크기가 준다?
+  - `remove`처럼 크기는 그대로. `erase`가 필요함
+- 같은 씨앗이면 어느 컴파일러에서나 `shuffle` 결과가 같다?
+  - 엔진의 수열은 같아도 `shuffle`의 알고리즘은 구현마다 다를 수 있음
+- `for_each`에 넘긴 함수 객체의 상태를 나중에 읽으면 된다?
+  - 복사본이 쓰였으므로 반환값을 받거나 `std::ref`로 넘김
+- `shift_left` 뒤에도 크기는 줄어 있다?
+  - 크기는 그대로이고 뒤쪽에 이동된 원소가 남음. `erase`
+
+## 정리
+
+| 알고리즘 | 핵심 |
+| --- | --- |
+| `unique`, `unique_copy` | 이웃한 중복 제거. 뒤에 `erase` |
+| `shuffle` | 난수 엔진으로 섞음(C++11) |
+| `sample` | n개를 무작위로 고름(C++17) |
+| `reverse`, `reverse_copy` | 순서 뒤집기 |
+| `shift_left`, `shift_right` | n칸 밀기(C++20). 돌려받은 반복자로 `erase` |
+| `for_each`, `for_each_n` | 원소마다 콜백. `for_each`는 콜백 복사본을 돌려줌 |
+
+## 복습 질문
+
+<details>
+<summary>`std::vector<std::string> tags`에서 중복된 태그를 모두 없애고 정렬된 상태로 두려면?</summary>
+
+```cpp
+std::sort(tags.begin(), tags.end());
+tags.erase(std::unique(tags.begin(), tags.end()), tags.end());
+```
+
+</details>
+
+<details>
+<summary>퀴즈 문제 100개 중 10개를 무작위로 뽑으려면(C++17)?</summary>
+
+```cpp
+std::vector<Question> chosen;
+std::mt19937 engine{ std::random_device{}() };
+std::sample(all.cbegin(), all.cend(), std::back_inserter(chosen), 10, engine);
+```
+
+</details>
+
+<details>
+<summary>`Counter c; std::for_each(v.begin(), v.end(), c); std::println("{}", c.count());`가 0을 출력하는 이유는?</summary>
+
+- `for_each`가 `c`의 복사본을 써서 원래 `c`는 그대로. `c = std::for_each(...)`로 돌려받거나 `std::ref(c)`를 넘김
+
+</details>
