@@ -1,0 +1,170 @@
+---
+title: 메모리 할당 오류
+description: 오류 처리 계획을 세우는 이유, new가 실패하면 던지는 std::bad_alloc, nullptr을 돌려주는 new(std::nothrow), set_new_handler로 할당 실패 때의 동작을 바꾸는 법을 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import allocCode from '../../../../examples/ch14/allocation-errors.cpp?raw';
+import allocCpp11Code from '../../../../examples/ch14/allocation-errors-cpp11.cpp?raw';
+
+- 다루는 것: 오류 처리에서 흔히 부딪치는 문제 중 첫째, 메모리 할당 실패
+- 이 글에서 배우는 요소: 오류 처리 계획, `std::bad_alloc`, `new (std::nothrow)`, new 처리기, `std::set_new_handler()`
+
+## 오류 처리 계획
+
+- 예외를 쓸지는 팀이 정할 일. 그러나 예외를 쓰든 안 쓰든 프로그램의 **오류 처리 계획**은 꼭 정해 두기를 권함
+- 예외를 쓰면 통일된 오류 처리 방식을 만들기가 대체로 쉽지만, 예외 없이도 불가능하지는 않음
+- 좋은 계획에서 가장 중요한 것: 프로그램의 모든 모듈에서 오류 처리가 **한결같을 것**. 프로젝트의 모든 프로그래머가 규칙을 이해하고 따르게 함
+- 이 글과 다음 글은 흔한 오류 처리 문제를 예외의 관점에서 다루지만, 예외를 쓰지 않는 프로그램에도 해당함
+
+## 메모리 할당 오류
+
+- 지금까지의 예제는 무시했지만 메모리 할당은 **실패할 수 있음**
+  - 요즘 64비트 플랫폼에서는 거의 일어나지 않지만, 모바일이나 오래된 시스템에서는 일어날 수 있음. 그런 시스템에서는 반드시 대비해야 함
+- `new`와 `new[]`는 메모리를 할당하지 못하면 기본으로 `<new>`의 **`std::bad_alloc`** 예외를 던짐 <CppRef path="cpp/memory/new/bad_alloc" />
+
+```cpp
+int* data{ nullptr };
+try {
+    data = new int[count];
+} catch (const std::bad_alloc& e) {
+    auto here{ std::source_location::current() };
+    std::println(std::cerr, "{}({}): 할당 실패: {}",
+                 here.file_name(), here.line(), e.what());
+    return;   // 할당 실패를 처리함
+}
+// 할당에 성공했다고 가정하는 코드
+```
+
+- `source_location`(6편)으로 파일 이름과 줄 번호를 넣어 디버깅을 쉽게 함
+- 모든 `new`를 `try`/`catch`로 감싸는 것은 현실적이지 않음. 최소한 **큰 블록**을 할당할 때는 감쌈
+- 프로그램에 맞다면 더 위쪽의 `try`/`catch` 하나로 여러 `new`의 실패를 한꺼번에 처리해도 됨
+- 주의: 오류를 기록하는 일 자체가 메모리를 할당하려 할 수 있음. `new`가 실패한 상황이라면 기록할 메모리조차 없을 수 있음
+
+## 던지지 않는 new
+
+- 예외가 싫다면 옛 C 방식처럼, 할당하지 못하면 널 포인터를 돌려받을 수 있음
+- `new (std::nothrow)`: 실패하면 예외 대신 `nullptr`을 돌려주는 `new`와 `new[]`의 판 <CppRef path="cpp/memory/new/nothrow" />
+
+```cpp
+int* data{ new (std::nothrow) int[count] };
+if (data == nullptr) {
+    std::println(std::cerr, "할당 실패");
+    return;
+}
+```
+
+:::tip
+던지지 않는 `new`보다 예외를 쓰는 기본 동작을 권한다. 할당 실패 예외는 무시할 수 없지만, `nullptr` 확인은 잊기 쉽다.
+:::
+
+## 할당 실패 때의 동작 바꾸기
+
+- **new 처리기** (new handler): 할당이 실패했을 때 불릴 콜백 함수 <CppRef path="cpp/memory/new/set_new_handler" />
+  - 기본으로는 new 처리기가 없어서 `new`와 `new[]`는 그냥 `bad_alloc`을 던짐
+  - new 처리기가 있으면 할당이 실패할 때 예외를 던지는 대신 **처리기를 부름**
+  - 처리기가 돌아오면 할당을 **다시 시도**하고, 또 실패하면 처리기를 또 부름
+- 처리기가 상황을 바꾸지 않으면 무한 반복이 됨. 처리기가 할 수 있는 일은 셋
+
+| 처리기가 하는 일 | 설명 |
+| --- | --- |
+| 메모리를 더 확보함 | 프로그램 시작 때 큰 덩어리를 미리 할당해 두었다가 처리기에서 해제함. 예: 사용자의 작업을 잃지 않게 문서 전체를 저장할 만큼 남겨 두었다가, 해제한 뒤 문서를 저장하고 프로그램을 다시 시작해 문서를 다시 불러옴 |
+| 예외를 던짐 | 표준 규정상 `bad_alloc`이거나 그 파생이어야 함. 예: 문서 복구를 시작하게 하는 예외, 맨 위 함수(`main()` 등)에서 잡아 돌아가 끝내게 하는 예외 |
+| 다른 new 처리기를 정함 | 처리기마다 메모리를 만들어 보고 실패하면 다음 처리기를 정하는 사슬. 이론상 가능하지만 대개 쓸모보다 복잡함 |
+
+- 프로그램을 끝낼 때는 `exit()` 같은 함수를 부르기보다 맨 위 함수에서 돌아가는 편을 권함
+- 처리기를 부르고 싶지 않은 할당이 있다면, 그 `new` 앞에서 잠시 처리기를 기본값 `nullptr`로 되돌림
+- `std::set_new_handler()`로 처리기를 정함. `<new>`에 있음. 이전 처리기를 돌려줌
+  - 처리기는 인수가 없고 아무것도 돌려주지 않는 함수
+  - `std::new_handler`는 `set_new_handler()`가 받는 함수 포인터 타입의 별칭
+
+```cpp
+class PleaseTerminate : public std::bad_alloc {};
+
+void onOutOfMemory()
+{
+    std::println(std::cerr, "메모리 부족");
+    throw PleaseTerminate{};
+}
+
+int main()
+{
+    try {
+        std::new_handler old{ std::set_new_handler(onOutOfMemory) };
+        int* p{ new int[huge] };       // 실패하면 onOutOfMemory()
+        std::set_new_handler(old);     // 이전 처리기로 되돌림
+    } catch (const PleaseTerminate&) {
+        std::println(std::cerr, "프로그램을 끝냄");
+        return 1;
+    }
+}
+```
+
+<RunCode client:load code={allocCode} />
+
+- 볼 것
+  - 2의 46제곱 개의 `int`(256TiB)를 요청해 실패시킴
+  - 기본 `new`는 `bad_alloc`, `new (std::nothrow)`는 `nullptr`
+  - new 처리기를 정하면 예외 대신 처리기가 불리고, 처리기가 던진 `PleaseTerminate`를 잡음. 처리기의 메시지는 표준 오류로 나감
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::source_location` | C++20 | `__FILE__`, `__LINE__` |
+| `std::get_new_handler()`(지금 처리기 얻기) | C++11 | `set_new_handler()`의 반환값으로만 |
+
+- `bad_alloc`, `new (std::nothrow)`, `set_new_handler()`는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={allocCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `new`가 실패하면 `nullptr`을 돌려준다?
+  - 기본은 `std::bad_alloc`을 던짐. `nullptr`은 `new (std::nothrow)`일 때만
+- 모든 `new`를 `try`로 감싸야 한다?
+  - 현실적이지 않음. 큰 할당은 감싸고, 나머지는 위쪽에서 한꺼번에 처리
+- new 처리기는 한 번만 불린다?
+  - 돌아오면 할당을 다시 시도하고, 실패하면 또 불림. 상황을 바꾸지 않으면 무한 반복
+- new 처리기는 아무 예외나 던져도 된다?
+  - `bad_alloc`이거나 그 파생이어야 함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 오류 처리 계획 | 모든 모듈에서 한결같이. 팀 전체가 따름 |
+| `std::bad_alloc` | `new`, `new[]`가 실패하면 던짐. `<new>` |
+| `new (std::nothrow)` | 실패하면 `nullptr`. 확인을 잊기 쉬움 |
+| new 처리기 | 실패 때 불림. 메모리 확보, `bad_alloc` 계열 던지기, 다른 처리기 정하기 중 하나 |
+| `std::set_new_handler()` | 처리기를 정하고 이전 것을 돌려줌 |
+
+## 복습 질문
+
+<details>
+<summary>`new (std::nothrow) Widget{}`의 결과를 확인하지 않고 바로 쓰면 무엇이 위험한가?</summary>
+
+- 할당이 실패하면 `nullptr`이 돌아와, 역참조하는 순간 정의되지 않은 동작(대개 프로그램이 죽음). 기본 `new`라면 예외로 확실히 알 수 있음
+
+</details>
+
+<details>
+<summary>new 처리기가 메시지만 출력하고 그냥 돌아오면 어떻게 되는가?</summary>
+
+- 할당을 다시 시도하고 또 실패해 처리기가 또 불림. 상황이 바뀌지 않으므로 무한 반복
+
+</details>
+
+<details>
+<summary>사용자 문서를 잃지 않으려고 new 처리기를 쓴다면 어떻게 준비하는가?</summary>
+
+- 시작할 때 문서를 저장할 만큼의 메모리를 미리 할당해 둠. 처리기에서 그것을 해제한 뒤 저장을 시작하게 하는 `bad_alloc` 파생 예외를 던지고, 위에서 잡아 저장하고 다시 시작함
+
+</details>
