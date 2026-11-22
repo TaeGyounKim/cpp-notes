@@ -1,0 +1,262 @@
+---
+title: 함수 객체와 표준 함수 객체
+description: operator()를 오버로드한 함수 객체, 표준의 산술·비교·논리·비트 함수 객체, 투명 연산자 펑터와 이질적 찾기, bind·bind_front·bind_back으로 인수 묶기, not_fn 부정자, mem_fn으로 멤버 함수를 콜백으로 쓰기를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import foCode from '../../../../examples/ch19/functors.cpp?raw';
+import foCpp11Code from '../../../../examples/ch19/functors-cpp11.cpp?raw';
+
+- 다루는 것: 함수 포인터 대신 쓸 수 있는 객체, 표준이 미리 만들어 둔 함수 객체와 그것을 고쳐 쓰는 어댑터
+- 이 글에서 배우는 요소: 함수 객체, 산술·비교·논리·비트 함수 객체, 투명 연산자, 바인더, 부정자, `mem_fn`
+
+## 함수 객체
+
+- 클래스에서 함수 호출 연산자 `operator()`를 오버로드하면 그 객체를 함수 포인터 대신 쓸 수 있음(15장)
+  - 이런 객체가 **함수 객체** (function object), **펑터** (functor)
+- 보통 함수보다 나은 점: 호출 사이에 **상태**를 가질 수 있음
+
+```cpp
+class Above
+{
+public:
+    explicit Above(int limit) : m_limit{ limit } {}
+    bool operator()(int value) const { return value > m_limit; }
+private:
+    int m_limit;
+};
+
+Above hot{ 25 };
+bool b{ hot(31) };   // true
+```
+
+- `operator()`에 `const`를 붙임. 이 예에서는 꼭 필요하지 않지만, 대부분의 표준 알고리즘은 조건자의 함수 호출 연산자가 `const`이기를 요구함(20장)
+- <Badge text="C++23" /> 비정적 데이터 멤버나 멤버 함수를 쓰지 않는 `operator()`는 `static`으로 만들 수 있음(15장). 컴파일러가 더 잘 최적화함
+
+## 표준 함수 객체
+
+- 20장의 많은 알고리즘(`find_if()`, `accumulate()` 등)은 콜백을 받아 동작을 맞춤
+- `<functional>`에는 가장 흔한 콜백 연산을 하는 함수 객체 클래스들이 미리 정의되어 있음 <CppRef path="cpp/utility/functional" />
+- 예전 `<functional>`에 있던 `bind1st()`, `bind2nd()`, `mem_fun()`, `mem_fun_ref()`, `ptr_fun()`은 C++17에서 제거됨. 쓰지 않음
+
+| 종류 | 함수 객체 | 감싸는 연산자 |
+| --- | --- | --- |
+| 산술 | `plus`, `minus`, `multiplies`, `divides`, `modulus`, `negate` | `+`, `-`, `*`, `/`, `%`, 단항 `-` |
+| 비교 | `equal_to`, `not_equal_to`, `less`, `greater`, `less_equal`, `greater_equal` | `==`, `!=`, `<`, `>`, `<=`, `>=` |
+| 논리 | `logical_and`, `logical_or`, `logical_not` | `&&`, `\|\|`, `!` |
+| 비트 | `bit_and`, `bit_or`, `bit_xor`, `bit_not` <Badge text="C++14" /> | `&`, `\|`, `^`, `~` |
+
+### 산술 함수 객체
+
+- 피연산자 타입으로 매개변수화된, 실제 연산자의 포장일 뿐: `std::plus<int> add; int r{ add(4, 5) };`
+  - 이렇게 직접 쓰면 `+`를 쓰는 것보다 나을 것이 없음
+- 장점: 콜백으로 **넘길 수 있음**. 연산자 자체는 넘길 수 없음
+- 예: 누적 연산을 받는 함수 템플릿에 `std::multiplies`를 넘겨 모든 원소의 곱을 구하고, 그것으로 기하 평균을 계산함
+
+```cpp
+auto product{ accumulateWith(v.begin(), v.end(), 1,
+                             std::multiplies<int>{}) };
+double geoMean{ std::pow(product, 1.0 / v.size()) };
+```
+
+:::caution
+산술 함수 객체는 산술 연산자의 포장일 뿐이다. 어떤 타입의 객체에 쓰려면 그 타입이 `operator*`나 `operator+` 같은 해당 연산을 구현해야 한다.
+:::
+
+### 투명 연산자 펑터
+
+- <Badge text="C++14" /> **투명 연산자 펑터** (transparent operator functor): 템플릿 타입 인수를 생략함. `std::multiplies<>{}`는 `std::multiplies<void>{}`의 줄임
+- 더 짧을 뿐 아니라 **이질적**(heterogeneous)임. 두 피연산자의 타입이 달라도 됨
+  - 예: `int` 벡터를 `double` 1.5에서 시작해 `std::multiplies<>{}`로 곱하면 결과가 `double`로 계산됨
+  - `std::multiplies<int>{}`라면 `int`로 계산되어 소수 부분을 잃고, 컴파일러가 데이터 손실을 경고함
+- 성능도 나아질 수 있음(아래 이질적 찾기)
+
+:::tip
+늘 투명 연산자 펑터를 쓴다.
+:::
+
+### 비교 함수 객체
+
+- `std::less`는 이미 18장에서 `priority_queue`, 정렬된 연관 컨테이너, 평평한 연관 컨테이너 어댑터의 기본 비교자로 봤음. 이제 그것을 바꾸는 법
+- `priority_queue`는 비교자 매개변수가 마지막이라 컨테이너 타입도 적어야 함
+
+```cpp
+// 작은 것부터
+std::priority_queue<int, std::vector<int>, std::greater<>> lowFirst;
+```
+
+- 비교자 타입을 받는 표준 컨테이너에는 늘 투명 연산자를 쓰기를 권함
+
+### 이질적 찾기
+
+- `std::set<std::string>`의 기본 비교자 `std::less<std::string>`은 투명하지 않음
+  - 문자열 리터럴로 `find("Key")`하면 `std::string`을 **만들어야** 해서 메모리를 할당함
+  - `find("Key"sv)`(`string_view`)는 컴파일되지 않음
+- 투명 비교자 `std::set<std::string, std::less<>>`를 쓰면 복사 없이 찾음. 이것을 **이질적 찾기** (heterogeneous lookup)라 함 <Badge text="C++14" />
+- <Badge text="C++23" /> 이질적 지우기와 꺼내기(`erase()`, `extract()`)도 지원
+- 정렬되지 않은 연관 컨테이너도 지원하지만 조금 더 복잡함 <Badge text="C++20" />
+  - `is_transparent` 타입 별칭(`void`)을 가진 해시 함수 객체를 직접 만들고, 같음 비교자로 `std::equal_to<>`를 줌
+
+```cpp
+struct Hasher
+{
+    using is_transparent = void;
+    std::size_t operator()(std::string_view sv) const
+    {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+std::unordered_set<std::string, Hasher, std::equal_to<>> names;
+```
+
+### 논리와 비트 함수 객체
+
+- 논리: `logical_not`, `logical_and`, `logical_or`. `true`와 `false`만 다룸
+  - 예: 누적 함수에 `std::logical_and<>{}`와 시작값 `true`를 넘기면 모든 플래그가 참인지 알 수 있음. 다만 20장의 `std::all_of()`, `any_of()`가 같은 일을 하면서 **단락 평가**(1장)를 해 더 빠름
+- 비트: `bit_and`, `bit_or`, `bit_xor`, `bit_not`. 예를 들어 20장의 `transform()`과 함께 컨테이너의 모든 원소에 비트 연산을 적용함
+
+## 어댑터 함수 객체
+
+- 표준 함수 객체를 쓰려는데 시그니처가 딱 맞지 않을 때, **어댑터 함수 객체**로 맞춤
+  - 함수 객체, 함수 포인터 등 호출할 수 있는 무엇이든 바꿀 수 있음
+  - 함수를 조합해 원하는 동작을 만드는 **함수 합성** (functional composition)을 어느 정도 지원함
+
+### 바인더
+
+- **바인더** (binder): 호출할 수 있는 것의 매개변수를 특정 값에 묶음
+- `std::bind()` <Badge text="C++11" />: 매개변수를 고정값에 묶거나 순서를 바꿈 <CppRef path="cpp/utility/functional/bind" />
+  - 반환 타입은 표준이 정하지 않아 `auto`로 받음
+  - 묶지 않은 인수는 `std::placeholders` 네임스페이스의 `_1`, `_2`, `_3`, …으로 표시함. `_1`은 "새 함수의 첫 번째 인수가 갈 자리"
+
+```cpp
+void announce(int floor, std::string_view room);
+
+auto onThird{ std::bind(announce, 3, std::placeholders::_1) };
+onThird("회의실");                     // announce(3, "회의실")
+auto swapped{ std::bind(announce, std::placeholders::_2,
+                        std::placeholders::_1) };
+swapped("창고", 1);                    // announce(1, "창고")
+```
+
+- 참조로 묶으려면 `std::ref()`, `std::cref()`(18장)
+  - `bind(increment, index)`는 `index`의 **복사본**을 저장하므로 부르면 복사본이 늘어남
+  - `bind(increment, std::ref(index))`라야 원본이 늘어남
+- 오버로드된 함수를 묶으려면 어느 것인지 밝혀야 함
+  - `std::bind(overloaded, _1)`은 컴파일되지 않음
+  - `std::bind(static_cast<void (*)(float)>(overloaded), _1)`처럼 함수 포인터 타입으로 바꿈
+- 멤버 함수를 콜백으로: 멤버 함수는 늘 객체의 문맥에서 불러야 함
+  - 엄밀히 모든 멤버 함수에는 객체의 포인터(`this`)를 받는 숨은 첫 매개변수가 있다고 볼 수 있음
+  - 그 첫 매개변수를 객체에 묶음: `std::bind(&Handler::handleMatch, &handler, _1, _2, _3)`
+- 표준 함수 객체의 매개변수도 묶을 수 있음: `std::bind(std::greater_equal<>{}, _1, 100)`은 "100 이상인지"
+- `std::bind_front()` <Badge text="C++20" />, `std::bind_back()` <Badge text="C++23" />: 앞쪽 / 뒤쪽 인수 n개를 묶음 <CppRef path="cpp/utility/functional/bind_front" />
+
+```cpp
+std::bind_front(announce, 5)("옥상");   // announce(5, "옥상")
+std::bind_back(announce, "로비")(1);    // announce(1, "로비")
+```
+
+:::note
+C++11 이전에는 `bind1st()`, `bind2nd()`가 있었지만 C++17에서 제거되었다. 람다 표현식(3편)이나 `bind()`, `bind_front()`, `bind_back()`을 쓴다.
+:::
+
+### 부정자
+
+- `std::not_fn()` <Badge text="C++17" />: 바인더와 비슷하지만 호출 결과를 **뒤집음** <CppRef path="cpp/utility/functional/not_fn" />
+  - 예: 같은 값을 찾는 조건자 `same`을 `std::not_fn(same)`으로 바꿔 다른 값을 찾음
+- C++17 이전의 `not1()`, `not2()`는 C++17에서 권장하지 않게 되고 C++20에서 제거됨
+
+### 멤버 함수 부르기
+
+- 알고리즘에 멤버 함수 포인터를 콜백으로 넘기고 싶을 수 있음
+  - 예: 문자열 컨테이너에서 조건에 맞는 것만 출력하는 함수 템플릿에 `&std::string::empty`를 넘김
+  - 알고리즘은 받은 것이 멤버 함수 포인터인지 알 수 없음. 멤버 함수 포인터는 객체의 문맥에서 불러야 하므로 부르는 코드가 다름
+- `std::mem_fn()`: 멤버 함수 포인터를, 첫 인수로 받은 객체에 대해 그 멤버 함수를 부르는 함수 객체로 바꿈 <CppRef path="cpp/utility/functional/mem_fn" />
+  - `&std::string::`를 생략할 수 없음
+
+```cpp
+auto notEmpty{ std::not_fn(std::mem_fn(&std::string::empty)) };
+bool b{ notEmpty(std::string{ "점검" }) };   // true
+```
+
+:::tip
+`mem_fn()`은 원하는 동작을 나타내는 가장 직관적인 방법이 아니다. 3편의 람다 표현식으로 쓰면 더 우아하고 읽기 쉽다. 예: `[](const std::string& s) { return !s.empty(); }`
+:::
+
+<RunCode client:load code={foCode} />
+
+- 볼 것
+  - 상태(기준 25도)를 가진 함수 객체 `Above`
+  - `std::multiplies<>`로 곱하고, 투명 연산자라 `double` 시작값과 섞임(1.5 × 24 = 36)
+  - `std::greater<>`로 가장 낮은 온도가 맨 위
+  - 투명 비교자를 쓴 `set`에서 `string_view`로 찾음
+  - `bind`로 묶고 순서를 바꾸고, `bind_front`, `bind_back`
+  - `bind(increment, count)`는 복사본을 늘려 `count`가 그대로, `std::ref`라야 1
+  - `not_fn(mem_fn(&std::string::empty))`로 빈 메모를 거름
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `bind_back`, `static operator()` | C++23 | 람다 |
+| `bind_front`, 콘셉트 제약, 해시 테이블의 이질적 찾기 | C++20 | `bind`, 람다, 제약 없는 템플릿 |
+| `not_fn` | C++17 | `not1`, `not2`(C++20에서 제거) 또는 람다 |
+| 투명 연산자 펑터, 정렬된 연관 컨테이너의 이질적 찾기, 비트 함수 객체 | C++14 | `std::less<int>`처럼 타입을 적음 |
+| `bind`, `mem_fn`, `ref` | C++11 | `bind1st`, `bind2nd`, `mem_fun`, `ptr_fun`(C++17에서 제거) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={foCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::plus<int>{}(a, b)`가 `a + b`보다 빠르다?
+  - 같은 연산. 장점은 콜백으로 넘길 수 있다는 것뿐
+- `std::less<>`와 `std::less<std::string>`은 같다?
+  - `std::less<>`는 투명해서 타입이 다른 두 값을 비교하고, 문자열 리터럴로 찾을 때 `std::string`을 만들지 않음
+- `std::bind(f, x)`는 `x`를 참조로 묶는다?
+  - 복사함. 참조는 `std::ref(x)`
+- `std::bind(overloaded, _1)`은 알아서 맞는 오버로드를 고른다?
+  - 컴파일 오류. 함수 포인터 타입으로 바꿔 밝힘
+- `not_fn`은 인수를 뒤집는다?
+  - 결과를 뒤집음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 함수 객체 | `operator()`를 가진 클래스. 상태를 가짐. 조건자의 `operator()`는 `const` |
+| 표준 함수 객체 | `plus` 등 산술, `less` 등 비교, `logical_and` 등 논리, `bit_and` 등 비트 |
+| 투명 연산자 | `std::less<>`. 이질적, 복사 없는 찾기. 늘 쓰기를 권함 |
+| 바인더 | `bind`(`_1`, `_2`…), `bind_front`(C++20), `bind_back`(C++23), 참조는 `std::ref` |
+| 부정자 | `not_fn`(C++17) |
+| 멤버 함수 | `mem_fn(&T::f)`. 람다가 더 읽기 쉬움 |
+
+## 복습 질문
+
+<details>
+<summary>`std::map<std::string, int>`을 `std::string_view` 키로 복사 없이 찾게 하려면 선언을 어떻게 바꾸는가?</summary>
+
+- `std::map<std::string, int, std::less<>>`. 비교자를 투명하게 해 이질적 찾기를 켬
+
+</details>
+
+<details>
+<summary>`void logMessage(int level, std::string_view msg)`에서 수준을 2로 고정한 콜백을 만들려면?</summary>
+
+- `auto warn{ std::bind_front(logMessage, 2) };` 후 `warn("디스크 부족");`(C++20 이전이면 `std::bind(logMessage, 2, std::placeholders::_1)`)
+
+</details>
+
+<details>
+<summary>`std::vector<int>`를 내림차순으로 정렬할 때 넘길 표준 함수 객체는?</summary>
+
+- `std::greater<>{}`. 예: `std::ranges::sort(v, std::greater<>{});`
+
+</details>
