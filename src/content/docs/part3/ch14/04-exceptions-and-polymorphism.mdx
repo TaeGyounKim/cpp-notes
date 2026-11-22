@@ -1,0 +1,315 @@
+---
+title: 예외와 다형성
+description: 표준 예외 계층, 기반 클래스로 예외를 다형적으로 잡기와 catch 순서, std::exception에서 파생한 사용자 정의 예외 클래스, 던진 예외는 복사·이동된다는 점, 중첩 예외를 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import hierCode from '../../../../examples/ch14/exception-hierarchy.cpp?raw';
+import hierCpp11Code from '../../../../examples/ch14/exception-hierarchy-cpp11.cpp?raw';
+
+- 다루는 것: 예외 클래스를 계층으로 만들고 다형성으로 잡는 법
+- 이 글에서 배우는 요소: 표준 예외 계층, 다형적으로 잡기, `catch` 순서, 사용자 정의 예외 클래스, 예외 객체의 복사·이동, 중첩 예외(`std::throw_with_nested`, `std::rethrow_if_nested`)
+
+## 표준 예외 계층
+
+- 어떤 타입이든 던질 수 있지만, 가장 쓸모 있는 것은 **클래스**. 예외 클래스는 보통 **계층**으로 만들어 잡을 때 다형성을 씀
+- 표준 라이브러리가 던지는 예외는 모두 이 계층의 클래스 객체 <CppRef path="cpp/error/exception" />
+  - 뒤의 장에서 다룰 부분이 던지는 것까지 포함한 주요 클래스
+
+```text
+std::exception
+├─ logic_error              프로그램의 논리 오류(미리 막을 수 있었던 것)
+│  ├─ invalid_argument
+│  ├─ domain_error
+│  ├─ length_error
+│  ├─ out_of_range
+│  └─ future_error
+├─ runtime_error            실행 중에야 알 수 있는 오류
+│  ├─ range_error
+│  ├─ overflow_error
+│  ├─ underflow_error
+│  ├─ regex_error
+│  ├─ format_error
+│  └─ system_error
+│     ├─ ios_base::failure
+│     └─ filesystem::filesystem_error
+├─ bad_alloc
+│  └─ bad_array_new_length
+├─ bad_cast
+│  └─ bad_any_cast
+├─ bad_typeid
+├─ bad_optional_access
+├─ bad_variant_access
+├─ bad_expected_access
+├─ bad_function_call
+├─ bad_weak_ptr
+└─ bad_exception
+```
+
+- 모든 클래스에 `what()`이 있어 설명 문자열(`const char*`)을 돌려줌. 오류 메시지에 씀
+- 일부 클래스는 `what()`이 돌려줄 문자열을 생성자에서 받아야 함. `runtime_error`와 `invalid_argument`에 문자열을 넘긴 이유
+- 오류 메시지에 파일 이름 같은 정보를 넣으면 좋음
+
+```cpp
+if (in.fail()) {
+    throw std::invalid_argument{ std::format("{}을(를) 열 수 없음", file) };
+}
+```
+
+## 다형적으로 잡기
+
+- 예외 계층의 장점: 예외를 **다형적으로** 잡을 수 있음
+- 다음 두 `catch`는 처리하는 예외 클래스만 다르고 내용은 같음
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (const std::invalid_argument& e) {
+    std::println(std::cerr, "{}", e.what());
+    return 1;
+} catch (const std::runtime_error& e) {
+    std::println(std::cerr, "{}", e.what());
+    return 1;
+}
+```
+
+- 둘 다 `std::exception`의 파생 클래스이므로 하나로 줄일 수 있음
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (const std::exception& e) {   // 모든 파생 예외와 맞음
+    std::println(std::cerr, "{}", e.what());
+    return 1;
+}
+```
+
+- 계층의 위쪽에서 잡을수록 처리가 덜 구체적이 됨. 보통은 되도록 구체적인 수준에서 잡음
+
+:::caution
+다형적으로 잡을 때는 반드시 **참조**로 잡는다. 값으로 잡으면 객체가 잘려 정보를 잃는다(10장).
+:::
+
+### catch의 순서
+
+- `catch`가 여럿이면 코드에 **나온 순서대로** 맞춰 보고, **처음 맞는 것**이 잡음. 가장 잘 맞는 것을 고르는 것이 아님
+- 앞의 `catch`가 뒤의 것보다 넓으면 앞의 것이 먼저 맞고, 뒤의 좁은 것은 절대 실행되지 않음
+- 그래서 **좁은 것(파생)에서 넓은 것(기반) 순서**로 둠
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (const std::invalid_argument& e) {   // 파생 클래스를 먼저
+    // 잘못된 파일 이름에 대한 특별한 처리
+} catch (const std::exception& e) {          // 그다음 기반 클래스
+    std::println(std::cerr, "{}", e.what());
+    return 1;
+}
+```
+
+- 순서를 뒤집으면 버그: `std::exception`이 모든 파생 예외를 먼저 잡아 `invalid_argument`용 `catch`에는 절대 가지 않음
+  - 경고를 내는 컴파일러도 있지만(GCC: ``will be caught by earlier handler [-Wexceptions]``) 기대하지 말 것
+
+## 예외 클래스 직접 만들기
+
+- 장점 둘
+  - 표준 예외의 종류는 한정되어 있음. `runtime_error` 같은 일반적인 이름 대신 프로그램의 오류에 맞는 **의미 있는 이름**을 줄 수 있음
+  - **자기 정보**를 더할 수 있음. 표준 예외는 대부분 오류 문자열만 담음
+- 직접 만든 예외 클래스는 모두 표준 `std::exception`에서 (직접이든 간접이든) 파생하기를 권함
+  - 모두가 이 규칙을 지키면 프로그램의 모든 예외가 `std::exception`에서 파생함(규칙을 어기는 서드파티 라이브러리를 쓰지 않는다면). 다형적 처리가 훨씬 쉬워짐
+
+### 파일 오류 계층
+
+- `invalid_argument`와 `runtime_error`는 파일 열기·읽기 오류를 잘 나타내지 못함. 파일 오류 계층을 만듦
+
+```cpp
+class FileError : public std::exception
+{
+public:
+    explicit FileError(std::string file) : m_file{ std::move(file) } {}
+    const char* what() const noexcept override { return m_message.c_str(); }
+    const std::string& file() const noexcept { return m_file; }
+
+protected:
+    void setMessage(std::string message) { m_message = std::move(message); }
+
+private:
+    std::string m_file;
+    std::string m_message;
+};
+```
+
+- `std::exception`에서 파생하면 `what()`을 재정의할 수 있음
+  - 원형은 위와 같고, 돌려주는 `const char*` 문자열은 **객체가 소멸될 때까지 유효**해야 함. 여기서는 데이터 멤버 `m_message`의 문자열
+- 파생 클래스는 `protected` 멤버 `setMessage()`로 메시지를 정함
+- 파일 열기 실패용
+
+```cpp
+class FileOpenError : public FileError
+{
+public:
+    explicit FileOpenError(std::string file) : FileError{ std::move(file) }
+    {
+        setMessage(std::format("{}을(를) 열 수 없음", this->file()));
+    }
+};
+```
+
+- 생성자 본문에서 매개변수 `file` 대신 `this->file()`로 파일 이름을 읽음. 생성자 초기화 목록에서 `file`을 `FileError` 생성자로 **이동**했기 때문. 이동한 객체는 더 쓰지 않음(9장)
+- 읽기 실패용. 오류가 난 줄 번호도 담음
+
+```cpp
+class FileReadError : public FileError
+{
+public:
+    FileReadError(std::string file, std::size_t line)
+        : FileError{ std::move(file) }, m_line{ line }
+    {
+        setMessage(std::format("{} {}번째 줄을 읽을 수 없음",
+                               this->file(), line));
+    }
+    std::size_t line() const noexcept { return m_line; }
+
+private:
+    std::size_t m_line{ 0 };
+};
+```
+
+- 줄 번호를 알려면 읽는 함수가 줄 단위로 읽어야 함: `std::getline()`으로 한 줄을 읽고, 그 줄로 문자열 스트림(13장)을 만들어 정수를 읽음
+- 이제 호출하는 쪽은 `FileError`로 다형적으로 잡을 수 있음
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (const FileError& e) {
+    std::println(std::cerr, "{}", e.what());
+    return 1;
+}
+```
+
+### 예외 객체는 복사·이동된다
+
+- 예외를 던지면 던진 객체나 값은 이동 생성자나 복사 생성자로 **이동 또는 복사**됨
+- 그래서 예외로 던질 클래스는 복사 또는 이동이 가능해야 함
+  - 동적으로 할당한 메모리가 있다면 소멸자뿐 아니라 복사·이동 생성자와 대입 연산자도 제대로 갖춰야 함(9장)
+
+:::caution
+예외로 던진 객체는 언제나 적어도 한 번은 이동되거나 복사된다.
+:::
+
+- 참조가 아니라 값으로 잡으면 한 번 더 복사될 수 있음. 불필요한 복사를 피하려고도 참조(되도록 `const` 참조)로 잡음
+
+## 중첩 예외
+
+- 첫 예외를 처리하는 중에 두 번째 예외적인 상황이 생겨 새 예외를 던져야 할 때가 있음. 그냥 던지면 처리 중이던 첫 예외의 정보는 모두 사라짐
+- 해법: **중첩 예외** (nested exception) <Badge text="C++11" />. 잡은 예외를 새 예외 안에 품음 <CppRef path="cpp/error/nested_exception" />
+  - 서드파티 라이브러리가 A 타입 예외를 던지는데 내 코드에서는 B 타입만 쓰고 싶을 때도 유용함. 라이브러리의 예외를 모두 잡아 B 안에 품어 던짐
+- `std::throw_with_nested(새예외)`: 지금 처리 중인 예외를 품은 새 예외를 던짐 <CppRef path="cpp/error/throw_with_nested" />
+
+```cpp
+void loadConfig()
+{
+    try {
+        readNumbers("config.txt");
+    } catch (const FileError&) {
+        std::throw_with_nested(std::runtime_error{ "설정을 불러오지 못함" });
+    }
+}
+```
+
+- 동작 원리
+  - 컴파일러가 만든 이름 없는 타입을 던짐. 이 타입은 `std::nested_exception`과 새 예외 타입(여기서는 `runtime_error`)을 둘 다 상속함. 쓸모 있는 다중 상속의 또 다른 예
+  - `nested_exception`의 기본 생성자가 `std::current_exception()`을 불러 지금 처리 중인 예외를 `std::exception_ptr`에 저장함
+  - `exception_ptr`: 널 또는 잡아 둔 예외 객체를 가리키는 포인터 같은 타입. 함수에 (보통 값으로) 넘기거나 다른 스레드로 넘길 수 있음
+- 품은 예외 꺼내기
+  - 잡은 예외를 `dynamic_cast`로 `const std::nested_exception*`으로 바꿔 보고, 널이 아니면 `rethrow_nested()`로 품은 예외를 다시 던져 다른 `try`/`catch`로 잡음
+  - 매번 `dynamic_cast`를 쓰는 대신 도우미 `std::rethrow_if_nested(e)`를 쓸 수 있음. 품은 예외가 있으면 다시 던지고, 없으면 아무것도 하지 않음 <CppRef path="cpp/error/rethrow_if_nested" />
+
+```cpp
+try {
+    loadConfig();
+} catch (const std::exception& e) {
+    std::println("바깥: {}", e.what());
+    try {
+        std::rethrow_if_nested(e);
+    } catch (const FileError& inner) {
+        std::println("  안쪽: {}", inner.what());
+    }
+}
+```
+
+- `throw_with_nested()`, `nested_exception`, `rethrow_if_nested()`, `current_exception()`, `exception_ptr`은 모두 `<exception>`에 있음
+
+<RunCode client:load code={hierCode} />
+
+- 볼 것
+  - `data.txt`의 둘째 줄에 `x`가 있어 `FileReadError`. 줄 번호를 함께 받음
+  - 없는 파일은 `FileOpenError`. `FileReadError`용 `catch`와 맞지 않아 다음의 `FileError`용이 잡음
+  - 바깥 예외의 메시지 뒤에 품은 예외의 메시지가 나옴
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 중첩 예외, `exception_ptr` | C++11 | 새 예외의 메시지에 이전 예외의 `what()` 문자열을 이어 붙임 |
+| `override`, `noexcept` | C++11 | 생략, `throw()` |
+| `std::format` | C++20 | 문자열 이어 붙이기, 문자열 스트림 |
+
+- 표준 예외 계층, 다형적으로 잡기, 사용자 정의 예외 클래스는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨. `runtime_error`에서 파생하면 메시지 저장을 기반 클래스에 맡길 수 있음
+
+<RunCode client:load code={hierCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `catch`는 가장 잘 맞는 것을 고른다?
+  - 나온 순서대로 처음 맞는 것. 파생 클래스를 먼저 둠
+- 사용자 정의 예외는 아무 클래스여도 된다?
+  - 되지만 `std::exception`에서 파생하기를 권함. 그래야 `const std::exception&` 하나로 모두 잡음
+- `what()`은 지역 `std::string`의 `c_str()`을 돌려줘도 된다?
+  - 객체가 살아 있는 동안 유효해야 함. 데이터 멤버의 문자열을 돌려줌
+- 던진 객체는 그대로 `catch`로 간다?
+  - 적어도 한 번 이동·복사됨. 복사·이동이 가능해야 함
+- 예외를 처리하다 새 예외를 던지면 처음 예외 정보도 함께 간다?
+  - 사라짐. 남기려면 `std::throw_with_nested()`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 표준 계층 | `exception` 아래 `logic_error`, `runtime_error`, `bad_alloc` 등 |
+| 다형적으로 잡기 | 기반 클래스의 참조로 파생 예외를 모두 잡음 |
+| `catch` 순서 | 나온 순서대로 처음 맞는 것. 파생 먼저, 기반 나중 |
+| 사용자 정의 예외 | `std::exception`에서 파생, `what()` 재정의(`noexcept`, 객체 수명 동안 유효) |
+| 복사·이동 | 던진 객체는 적어도 한 번 이동·복사됨 |
+| 중첩 예외 | `throw_with_nested()`로 품고 `rethrow_if_nested()`로 꺼냄 |
+
+## 복습 질문
+
+<details>
+<summary>`catch (const std::logic_error&)` 다음에 `catch (const std::out_of_range&)`를 두면?</summary>
+
+- `out_of_range`는 `logic_error`의 파생 클래스라 앞의 `catch`가 먼저 잡음. 뒤의 것은 실행되지 않음. 순서를 바꿈
+
+</details>
+
+<details>
+<summary>네트워크 오류용 예외 계층을 만든다면 어디서 파생하고, 무엇을 담는 것이 좋은가?</summary>
+
+- `std::runtime_error`(또는 `std::exception`)에서 파생한 `NetworkError`를 두고, 그 아래 `ConnectError`, `TimeoutError` 등. 호스트 이름, 포트, 기다린 시간 같은 정보를 멤버로 담음
+
+</details>
+
+<details>
+<summary>라이브러리의 예외를 내 예외 타입으로 바꿔 던지되 원래 예외도 남기려면?</summary>
+
+- 라이브러리 호출을 `try`로 감싸고 `catch`에서 `std::throw_with_nested(MyError{ ... })`를 씀. 받는 쪽은 `std::rethrow_if_nested()`로 원래 예외를 꺼냄
+
+</details>
