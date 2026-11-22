@@ -1,0 +1,259 @@
+---
+title: 할당자와 알고리즘 만들기
+description: 컨테이너의 할당자 템플릿 매개변수, allocate·deallocate와 construct_at·destroy_at, 맞춤 할당자를 쓰는 이유, 다형 메모리 할당자(pmr)와 메모리 자원, 표준 라이브러리를 확장하는 이유와 규칙, 반복자 기반 알고리즘 find_all을 만들고 센티널과 프로젝션을 지원하도록 고치는 법을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import afCode from '../../../../examples/ch25/allocator-find-all.cpp?raw';
+import afCpp11Code from '../../../../examples/ch25/allocator-find-all-cpp11.cpp?raw';
+
+- 다루는 것: 표준 라이브러리를 "쓰는" 것을 넘어 **맞춤 설정하고 확장**하는 법. 이 장은 표준 라이브러리 규칙을 따르는 알고리즘(`find_all`)과 컨테이너(`directed_graph`)를 만들어 봄
+- 이 글에서 배우는 요소: 할당자, `allocate`/`deallocate`, `construct_at`/`destroy_at`, 다형 메모리 할당자, `find_all`, 센티널, 프로젝션
+
+:::note
+표준 라이브러리를 맞춤 설정하거나 확장할 일은 드물다. 지금의 컨테이너와 알고리즘으로 충분하면 이 장은 건너뛰어도 된다. 다만 표준 라이브러리를 쓰기만 하는 것이 아니라 이해하고 싶다면 읽어 볼 만하다. 15장의 연산자 오버로딩과 12장의 템플릿에 익숙해야 한다.
+:::
+
+## 할당자
+
+- 모든 표준 컨테이너는 **할당자** (allocator) 타입을 템플릿 타입 매개변수로 받음. 보통은 기본값으로 충분함 <CppRef path="cpp/named_req/Allocator" />
+
+```cpp
+template <class T, class Allocator = std::allocator<T>>
+class vector;
+```
+
+- 컨테이너 생성자에 `Allocator` 객체를 넘겨, 컨테이너가 메모리를 얻는 방식을 바꿀 수 있음
+  - 컨테이너의 모든 메모리 할당은 할당자의 `allocate()`로, 모든 해제는 `deallocate()`로 함
+  - 지정하지 않으면 늘 `std::allocator<T>`. 그 `allocate()`, `deallocate()`는 `new`, `delete`를 감싼 것 <CppRef path="cpp/memory/allocator" />
+- `allocate()`는 **초기화되지 않은** 메모리만 잡음. 생성자를 부르지 않음
+- `deallocate()`는 메모리만 풀어 줌. 소멸자를 부르지 않음
+- 그래서 생성과 소멸은 따로 함
+
+```cpp
+std::allocator<Widget> alloc;
+Widget* memory{ alloc.allocate(1) };        // Widget 하나 크기의 빈 메모리
+std::construct_at(memory);                  // 그 자리에 생성(배치 new와 같음)
+std::destroy_at(memory);                    // 소멸자 호출
+alloc.deallocate(memory, 1);                // 메모리 반환
+```
+
+- `construct_at()` <Badge text="C++20" /> <CppRef path="cpp/memory/construct_at" />: 배치 `new`(15장) `::new (memory) Widget{}`와 같은 일
+- `destroy_at()` <Badge text="C++17" /> <CppRef path="cpp/memory/destroy_at" />: 소멸자 호출. 여러 개는 `destroy_n()`
+- 더 실제적인 할당자 쓰임(객체 풀)은 29장
+
+### 맞춤 할당자
+
+- 맞춤 할당자를 쓰는 이유
+  - 기본 할당자의 성능이 부족할 때 다른 방식으로 바꿈
+  - 공유 메모리 영역처럼 운영체제 고유 기능으로 메모리를 잡아야 할 때, 그 메모리에 표준 컨테이너를 둘 수 있음
+- `allocate()`, `deallocate()`와 필요한 다른 멤버 함수, 타입 별칭을 갖추면 어떤 클래스든 할당자로 쓸 수 있음
+- 복잡하고 조심하지 않으면 문제가 많으므로 가볍게 쓸 것이 아님
+
+### 다형 메모리 할당자 <Badge text="C++17" />
+
+- 할당자가 템플릿 매개변수라서 생기는 문제
+  - 할당자만 다른 두 컨테이너는 **완전히 다른 타입**: `vector<int, A1>`과 `vector<int, A2>`는 서로 대입할 수 없음
+- **다형 메모리 할당자** (polymorphic memory allocator): `<memory_resource>`, `std::pmr` 네임스페이스 <CppRef path="cpp/memory/polymorphic_allocator" />
+  - `polymorphic_allocator`는 할당자 요건을 모두 갖춘 할당자
+  - 할당 방식이 템플릿 매개변수가 아니라 생성할 때 받은 **메모리 자원** (`memory_resource`)으로 정해짐 <CppRef path="cpp/memory/memory_resource" />
+  - 그래서 할당 방식이 서로 달라도 타입은 같음
+- 표준이 주는 메모리 자원
+  - `synchronized_pool_resource`: 스레드 안전한 풀
+  - `unsynchronized_pool_resource`: 스레드 안전하지 않은 풀(더 빠름)
+  - `monotonic_buffer_resource`: 주어진 버퍼에서 앞으로만 잡고, 자원이 사라질 때 한꺼번에 풂 <CppRef path="cpp/memory/monotonic_buffer_resource" />
+- 별칭 템플릿: `std::pmr::vector<T>`는 `std::vector<T, std::pmr::polymorphic_allocator<T>>`
+  - `std::pmr::vector<T>`와 `std::vector<T>`는 여전히 다른 타입
+  - 메모리 자원이 다른 `std::pmr::vector<T>`끼리는 같은 타입이라 서로 대입할 수 있음
+
+```cpp
+std::byte buffer[1024];
+std::pmr::monotonic_buffer_resource pool{ buffer, sizeof buffer };
+std::pmr::vector<int> v{ &pool };      // buffer에서 메모리를 잡음
+```
+
+- 맞춤 할당자와 다형 할당자 모두 일상 코딩에서는 드물게 쓰는 고급 기능
+
+## 표준 라이브러리 확장하기
+
+- 어떤 라이브러리도 모든 사용자가 바라는 도구를 다 담을 수 없음. 좋은 라이브러리는 **확장 가능**함
+- 표준 라이브러리는 구조상 확장하기 좋음: 데이터(컨테이너)와 그 데이터를 다루는 알고리즘을 분리했기 때문(16장)
+  - 표준 규칙을 따르는 반복자를 주면 직접 만든 컨테이너를 표준 알고리즘과 쓸 수 있음
+  - 직접 만든 알고리즘도 표준 컨테이너의 반복자와 쓸 수 있음
+- 직접 만든 컨테이너와 알고리즘을 **`std` 네임스페이스에 넣으면 안 됨**
+- 이 장은 표준 라이브러리를 확장하므로 표준 라이브러리의 이름 규칙을 따름: 소문자와 밑줄(`find_all`, `directed_graph`)
+
+### 왜 표준 규칙을 따르는가
+
+- 간단한 것이라면 규칙을 따르는 수고가 아깝기도 함. 그러나 다시 쓸 큰 코드라면 수고할 만함
+  - 잘 알려진 인터페이스 규칙을 따르므로 다른 C++ 프로그래머가 이해하기 쉬움
+  - 특별한 꼼수나 어댑터 없이 표준 라이브러리의 다른 부분(알고리즘, 컨테이너)과 함께 쓸 수 있음
+  - 튼튼한 코드를 만드는 데 필요한 엄밀함을 강제함
+
+## 알고리즘 만들기: find_all
+
+- 범위에서 술어를 만족하는 **모든** 원소를, **위치까지** 알고 싶다면?
+  - `find()`, `find_if()`: 원소 하나의 반복자만 돌려줌
+  - `copy_if()`: 원소를 복사하므로 위치를 잃음
+  - `copy_if()` + `back_insert_iterator`로 `vector<reference_wrapper<T>>`에 담아도 위치는 모름
+  - 술어를 만족하는 모든 원소의 **반복자**를 얻는 표준 알고리즘은 없음 → `find_all()`을 만듦
+
+### 원형
+
+- `copy_if()`를 본뜸: 입력 반복자 쌍, 출력 시작 반복자, 술어를 받고, 출력에 쓴 마지막 원소 다음을 가리키는 반복자를 돌려줌
+- 템플릿 타입 매개변수에 콘셉트(12장)로 제약을 걺
+
+```cpp
+template <std::forward_iterator It,
+          std::output_iterator<It> Out,
+          std::indirect_unary_predicate<It> Pred>
+Out find_all(It first, It last, Out dest, Pred pred);
+```
+
+| 콘셉트 | 요구 |
+| --- | --- |
+| `forward_iterator<It>` | 역참조, 증가 등이 되는 순방향 반복자 <CppRef path="cpp/iterator/forward_iterator" /> |
+| `output_iterator<Out, It>` | `It` 타입 값을 받을 수 있는 출력 반복자 <CppRef path="cpp/iterator/output_iterator" /> |
+| `indirect_unary_predicate<Pred, It>` | `It`이 **가리키는 값**에 대한 단항 술어. 반복자 자체가 아니라 역참조한 값에 적용해서 "간접" <CppRef path="cpp/iterator/indirect_unary_predicate" /> |
+
+- 다른 설계: 출력 반복자 없이, 일치하는 원소만 훑는 입력 시퀀스용 반복자를 돌려줄 수도 있음. 그러려면 반복자 클래스를 직접 만들어야 함(4편)
+
+### 구현
+
+- 입력을 모두 훑으며 `std::invoke()`로 술어를 부르고, 일치하면 반복자를 출력에 씀
+
+```cpp
+{
+    for (; first != last; ++first) {
+        if (std::invoke(pred, *first)) {
+            *dest = first;
+            ++dest;
+        }
+    }
+    return dest;
+}
+```
+
+- `copy_if()`처럼 출력의 원소를 덮어쓰기만 함. 출력이 충분히 크거나, `back_inserter` 같은 반복자 어댑터를 씀
+
+```cpp
+std::vector<std::vector<int>::iterator> hits;
+find_all(values.begin(), values.end(), std::back_inserter(hits),
+         [](int v) { return v == 10; });
+// std::distance(values.begin(), it)로 위치를 얻음
+```
+
+### 범위 알고리즘처럼 고치기
+
+- 제약 있는 알고리즘(17장)은 보통
+  - 끝을 시작 반복자와 **다른 타입**으로 받음. 이 끝 표시를 **센티널** (sentinel)이라고 부름
+  - **프로젝션** (projection) 매개변수를 받음
+- 고친 원형
+
+```cpp
+template <std::forward_iterator It, std::sentinel_for<It> S,
+          std::output_iterator<It> Out, typename Proj = std::identity,
+          std::indirect_unary_predicate<std::projected<It, Proj>> Pred>
+Out find_all(It first, S last, Out dest, Pred pred, Proj proj = {});
+```
+
+- `sentinel_for<S, It>`: `first != last`가 성립하도록 보장 <CppRef path="cpp/iterator/sentinel_for" />
+- `Proj`의 기본값은 `std::identity`: 받은 것을 그대로 돌려주는 함수 객체 <CppRef path="cpp/utility/functional/identity" />
+- `projected<It, Proj>`: 역참조한 `It`에 `Proj`를 적용한 결과의 타입 <CppRef path="cpp/iterator/projected" />. 술어는 그 결과에 적용됨
+- 본문은 술어 호출만 바뀜: `std::invoke(pred, std::invoke(proj, *first))`
+- 예: 각 원소를 2배 한 값이 10인지 검사하면 원래 값이 5인 원소들이 찾아짐
+
+```cpp
+find_all(values.begin(), values.end(), std::back_inserter(hits),
+         [](int v) { return v == 10; },
+         [](int v) { return v * 2; });
+```
+
+<RunCode client:load code={afCode} />
+
+- 볼 것
+  - `allocate`로 빈 메모리 → `construct_at`으로 생성 → `destroy_n`으로 소멸 → `deallocate`
+  - `pmr::vector`가 스택 버퍼(`monotonic_buffer_resource`)에서 메모리를 잡음. 복사본은 기본 자원을 쓰지만 타입은 같음
+  - `find_all`로 10의 위치(4, 8)를 얻음
+  - 멤버 포인터 `&Task::priority`를 프로젝션으로 넘겨 우선순위로 거름
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 콘셉트 제약, 센티널, `projected`, `identity`, `construct_at` | C++20 | 제약 없는 템플릿, 같은 타입의 끝 반복자, 배치 `new` |
+| `pmr`, `destroy_at`, `destroy_n`, `std::invoke` | C++17 | 맞춤 할당자 타입, `p->~T()`, 술어 직접 호출 |
+| `std::allocator`의 `allocate`, `deallocate` | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={afCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `allocate(1)`은 객체를 만든다?
+  - 빈 메모리만. 생성은 `construct_at`이나 배치 `new`
+- `deallocate`가 소멸자를 부른다?
+  - 메모리만 풂. 먼저 `destroy_at`
+- 할당자만 다른 `vector`끼리 대입할 수 있다?
+  - 다른 타입. 같은 타입이 필요하면 `std::pmr::vector`
+- 직접 만든 알고리즘을 `std`에 넣어 표준처럼 쓴다?
+  - `std`에 넣으면 안 됨. 자기 네임스페이스에
+- `find_all`이 원소의 복사본을 모은다?
+  - 반복자를 모음. 그래서 위치를 알고 원소를 고칠 수도 있음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 할당자 | 컨테이너의 템플릿 매개변수. 기본 `std::allocator<T>` |
+| `allocate`/`deallocate` | 초기화되지 않은 메모리만. 생성은 `construct_at`, 소멸은 `destroy_at` |
+| `std::pmr` | 메모리 자원으로 할당 방식을 바꾸고 타입은 같음 |
+| 확장 규칙 | 데이터와 알고리즘 분리, 표준 반복자, `std`에 넣지 않음 |
+| `find_all` | 콘셉트 제약, `invoke`로 술어 호출, 출력 반복자에 반복자를 씀 |
+| 현대식 | 센티널 `sentinel_for`, 프로젝션 `identity`, `projected` |
+
+## 복습 질문
+
+<details>
+<summary>`find_all`의 결과로 찾은 원소들을 모두 0으로 바꾸려면?</summary>
+
+```cpp
+for (auto it : hits) { *it = 0; }
+```
+
+- 반복자를 모았기 때문에 원래 컨테이너의 원소를 바로 고칠 수 있음(그사이 컨테이너가 바뀌어 반복자가 무효화되지 않았다면)
+
+</details>
+
+<details>
+<summary>`find_all`을 범위(`vector` 자체)로도 부를 수 있게 하려면 오버로드를 어떻게 쓰는가?</summary>
+
+```cpp
+template <std::ranges::forward_range R, typename Out,
+          typename Proj = std::identity, typename Pred>
+Out find_all(R&& r, Out dest, Pred pred, Proj proj = {})
+{
+    return find_all(std::ranges::begin(r), std::ranges::end(r),
+                    dest, pred, proj);
+}
+```
+
+- 반복자 판의 제약은 그대로 적용됨. 엄밀하게는 `Out`과 `Pred`에도 `ranges::iterator_t<R>`로 제약을 걺
+
+</details>
+
+<details>
+<summary>`std::allocator`로 만든 메모리에 `std::string` 3개를 만들고 정리하는 순서는?</summary>
+
+- `allocate(3)` → `construct_at`을 3번 → 사용 → `destroy_n(p, 3)` → `deallocate(p, 3)`
+- 소멸 전에 `deallocate`하거나, 만들지 않은 자리를 소멸하면 정의되지 않은 동작
+
+</details>

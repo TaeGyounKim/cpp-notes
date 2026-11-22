@@ -60,6 +60,13 @@ const parts = [
 			chapter('24장. 그 밖의 어휘 타입', 'part3/ch24'),
 		],
 	},
+	{
+		label: 'Part 4 · C++ 고급 기능',
+		link: '/part4/ch25/01-allocators-and-algorithms/',
+		items: [
+			chapter('25장. 표준 라이브러리 맞춤과 확장', 'part4/ch25'),
+		],
+	},
 ];
 
 export default defineConfig({
