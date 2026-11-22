@@ -37,7 +37,8 @@ async () => {
 	const preScroll = [...main.querySelectorAll('pre')]
 		.filter((p) => !p.closest('astro-island') && p.scrollWidth > p.clientWidth + 2)
 		.map((p) => p.textContent.split('\n').find((l) => l.length > 60)?.slice(0, 40) ?? '?');
-	const missingGlyph = [...main.querySelectorAll('td, li, p')].filter((e) => /[⁰¹²³⁴⁵⁶⁷⁸⁹⁻₩]/.test(e.textContent)).length;
+	const missingGlyph = [...main.querySelectorAll('td, li, p')].filter((e) => /[⁰¹²³⁴⁵⁶⁷⁸⁹⁻₩⊕]/.test(e.textContent)).length;
+	const strike = main.querySelectorAll('del, s').length;
 	return {
 		title: document.title,
 		rawStyles,
@@ -51,6 +52,7 @@ async () => {
 		editorScroll,
 		preScroll,
 		missingGlyph,
+		strike,
 		height: document.documentElement.scrollHeight,
 	};
 }

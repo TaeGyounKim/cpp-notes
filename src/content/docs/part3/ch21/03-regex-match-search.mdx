@@ -1,0 +1,212 @@
+---
+title: regex 라이브러리, regex_match, regex_search
+description: regex 라이브러리의 기본 템플릿(basic_regex, match_results, sub_match)과 타입 별칭, 입력 전체를 검사하는 regex_match와 캡처 그룹으로 값 꺼내기, 부분 문자열을 찾는 regex_search와 prefix·suffix, regex_search를 반복문에 쓰면 안 되는 이유를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import msCode from '../../../../examples/ch21/regex-match-search.cpp?raw';
+import msCpp11Code from '../../../../examples/ch21/regex-match-search-cpp11.cpp?raw';
+
+- 다루는 것: 2편의 정규식을 C++ 코드에서 쓰는 법. 검증과 파싱, 부분 문자열 찾기
+- 이 글에서 배우는 요소: `basic_regex`, `match_results`, `sub_match`, `regex_match`, `regex_search`
+
+## regex 라이브러리
+
+- 모두 `<regex>`, `std` 네임스페이스 <CppRef path="cpp/regex" />
+- 기본 템플릿 타입
+
+| 템플릿 | 하는 일 |
+| --- | --- |
+| `basic_regex` | 특정 정규식을 나타내는 객체 |
+| `match_results` | 정규식과 일치한 부분 문자열과 모든 캡처 그룹. `sub_match`의 모음 |
+| `sub_match` | 입력 순서열을 가리키는 반복자 쌍. 일치한 캡처 그룹 하나의 첫 문자와 끝 다음 문자를 가리킴. `str()`로 문자열을 얻음 |
+
+- 핵심 알고리즘 셋: `regex_match()`, `regex_search()`, `regex_replace()`(4편)
+  - 원본을 `std::string`, C 스타일 문자열, 시작·끝 반복자 쌍으로 받는 오버로드가 있음
+  - 반복자는 `const char*`, `std::string::const_iterator` 등 양방향 반복자처럼 동작하는 것이면 됨(17장)
+- 패턴이 나오는 곳을 모두 찾는 정규식 반복자 둘(4편)
+  - `regex_iterator`: 원본에서 패턴이 나오는 모든 곳을 훑음
+  - `regex_token_iterator`: 패턴이 나오는 모든 곳의 모든 캡처 그룹을 훑음
+- 쓰기 쉽게 타입 별칭이 정의되어 있음. 접두사 규칙: `w`는 와이드, `c`는 C 문자열(`const char*`), `s`는 `std::string`
+
+| 템플릿 | `char` 별칭 | 와이드 별칭 |
+| --- | --- | --- |
+| `basic_regex` | `regex` | `wregex` |
+| `sub_match` | `csub_match`, `ssub_match` | `wcsub_match`, `wssub_match` |
+| `match_results` | `cmatch`, `smatch` | `wcmatch`, `wsmatch` |
+| `regex_iterator` | `cregex_iterator`, `sregex_iterator` | `wcregex_iterator`, `wsregex_iterator` |
+| `regex_token_iterator` | `cregex_token_iterator`, `sregex_token_iterator` | `wcregex_token_iterator`, `wsregex_token_iterator` |
+
+- `smatch`는 `std::string`을 검사할 때, `cmatch`는 `const char*`(문자열 리터럴)를 검사할 때 씀
+
+## regex_match
+
+- 원본 문자열을 정규식 패턴과 비교해, 패턴이 원본 **전체**와 일치하면 `true` <CppRef path="cpp/regex/regex_match" />
+- 일곱 오버로드가 모두 이 모양
+
+```text
+bool regex_match(입력[, 일치 결과], 정규식[, 플래그]);
+```
+
+- 입력: 시작·끝 반복자, `std::string`, C 스타일 문자열
+- 일치 결과(선택): `match_results`의 참조. 일치한 것을 받음
+  - `false`를 돌려줬다면 `match_results`의 `empty()`나 `size()`만 부를 수 있음. 그 밖은 정의되지 않음
+  - `true`면 무엇이 일치했는지 살펴볼 수 있음
+- 플래그(선택): 일치 알고리즘의 옵션. 대부분 기본값 그대로
+
+### 검증만 하기
+
+- 예: 연-월-일 날짜(연 네 자리, 월은 1부터 12까지, 일은 1부터 31까지)인지 검증
+
+```cpp
+std::regex date{ R"(\d{4}-(?:0?[1-9]|1[0-2])-(?:0?[1-9]|[12]\d|3[01]))" };
+bool ok{ std::regex_match(input, date) };
+```
+
+- 패턴의 세 부분
+  - `\d{4}`: 숫자 넷. 예: `1234`, `2026`
+  - `(?:0?[1-9]|1[0-2])`: 우선순위를 맞추려고 괄호로 감쌌고, 캡처가 필요 없으므로 `(?:...)`
+    - `0?[1-9]`: 앞에 0이 있을 수도 있는 1~9. `1`, `9`, `03`과 일치하고 `0`, `10`과는 일치하지 않음
+    - `1[0-2]`: `10`, `11`, `12`
+  - `(?:0?[1-9]|[12]\d|3[01])`: 1부터 9까지, 10부터 29까지, 30과 31
+
+### 캡처 그룹으로 값 꺼내기
+
+- `smatch` 같은 `match_results`를 넘기면, 정규식이 일치할 때 그 원소들이 채워짐. 부분 문자열을 꺼내려면 괄호로 **캡처 그룹**을 만들어야 함
+- 원소
+  - `[0]`: 패턴 전체와 일치한 문자열. `regex_match`라면 원본 전체, `regex_search`라면 일치한 부분 문자열
+  - `[1]`: 첫 캡처 그룹이 일치한 부분 문자열, `[2]`: 둘째, …
+  - i번째 그룹의 문자열은 `m[i]`(스트림에 바로 출력 가능) 또는 `m[i].str()`
+- `size()`는 전체 일치까지 포함한 원소 수(그룹 수 + 1)
+
+```cpp
+std::regex date{ R"((\d{4})-(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01]))" };
+if (std::smatch m; std::regex_match(line, m, date)) {
+    int year{ std::stoi(m[1]) };
+    int month{ std::stoi(m[2]) };
+    int day{ std::stoi(m[3]) };
+}
+```
+
+:::note
+이 날짜 패턴은 연 네 자리, 월은 1부터 12까지, 일은 1부터 31까지인지만 본다. 달마다 다른 일 수나 윤년은 검사하지 않는다. 그런 검사가 필요하면 꺼낸 값으로 코드에서 검사한다. 그렇게 한다면 정규식은 `(\d{4})-(\d{1,2})-(\d{1,2})`처럼 단순하게 해도 된다(날짜 검사는 22장의 `chrono`도 도움이 된다).
+:::
+
+## regex_search
+
+- `regex_match()`는 원본 전체가 일치해야 `true`. 일치하는 **부분 문자열**을 찾으려면 `regex_search()` <CppRef path="cpp/regex/regex_search" />
+- 일곱 오버로드가 모두 이 모양. 매개변수는 `regex_match()`와 비슷함
+
+```text
+bool regex_search(입력[, 일치 결과], 정규식[, 플래그]);
+```
+
+- 입력 어딘가에서 일치하는 것을 찾으면 `true`
+
+:::caution
+`regex_search()`를 반복문 안에서 시작·끝 반복자를 옮겨 가며 불러 패턴이 나오는 곳을 모두 찾으려 하지 않는다. 앵커(`^`, `$`)나 단어 경계에서 문제가 생기고, 빈 일치 때문에 무한 반복에 빠질 수도 있다. 모든 곳을 찾을 때는 4편의 `regex_iterator`나 `regex_token_iterator`를 쓴다.
+:::
+
+### 예: 주석 꺼내기
+
+- 코드 줄에서 `//` 뒤의 주석을 꺼냄
+  - `//` 다음 선택적 공백 `\s*`, 그다음 한 문자 이상을 캡처 그룹 `(.+)`로 잡음. 이 그룹에 주석 내용만 담김
+
+```cpp
+std::regex comment{ R"(//\s*(.+)$)" };
+if (std::smatch m; std::regex_search(line, m, comment)) {
+    std::println("주석 '{}'", m[1].str());
+}
+```
+
+- 주석 안에 `//`가 또 있어도(`// A // B`) 첫 `//` 뒤 전체가 잡힘. `.+`가 탐욕적이기 때문
+- `m[1].first`, `m[1].second` 반복자로 원본의 어디에서 찾았는지 알 수 있음. `m.position(i)`, `m.length(i)`도 있음
+- `prefix()`, `suffix()`: 일치한 부분의 앞, 뒤 문자열
+
+<RunCode client:load code={msCode} stdin={`2026-11-23
+2026-13-01
+int a; // 측정 횟수
+int b;`} />
+
+- 볼 것
+  - 한 줄씩 읽어, 날짜 전체와 일치하면 `regex_match`로 그룹 셋을 꺼냄. 13월은 일치하지 않음
+  - 날짜가 아니면 `regex_search`로 주석을 찾음. 앞부분(`prefix`)과 그룹 1의 위치(바이트 단위)
+  - 입력 칸에 다른 줄을 넣어 다시 실행해 볼 것
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `println` | C++23 | `cout` |
+| `if (std::smatch m; ...)` 초기화문 | C++17 | `smatch`를 바깥에 선언 |
+| `<regex>`, `regex_match`, `regex_search`, 날 문자열 | C++11 | 외부 라이브러리 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={msCpp11Code} flags="-std=c++11 -Wall -Wextra" stdin={`2026-11-23
+int a; // 측정 횟수`} />
+
+## 헷갈리기 쉬운 점
+
+- `regex_match`로 문자열 안에 숫자가 있는지 확인한다?
+  - 전체가 일치해야 함. 일부를 찾으려면 `regex_search`
+- `m[0]`이 첫 캡처 그룹이다?
+  - `m[0]`은 전체 일치. 첫 그룹은 `m[1]`
+- `regex_match`가 `false`일 때도 `m[1]`을 읽어도 된다?
+  - `empty()`, `size()` 말고는 정의되지 않음
+- `(?:...)`도 `m[i]`에 잡힌다?
+  - 비캡처 그룹이라 번호가 매겨지지 않음
+- 모든 일치를 찾으려고 `regex_search`를 반복한다?
+  - `regex_iterator`(4편)
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 타입 | `regex`(`basic_regex`), `smatch`/`cmatch`(`match_results`), `ssub_match`(`sub_match`) |
+| `regex_match` | 입력 **전체**가 일치하는지. 검증과 파싱 |
+| `regex_search` | 입력 안에 일치하는 **부분**이 있는지. `prefix()`, `suffix()` |
+| 결과 | `m[0]` 전체, `m[i]` i번째 그룹, `.str()`, `position(i)` |
+| 주의 | `regex_search`를 반복해 모두 찾지 않음 |
+
+## 복습 질문
+
+<details>
+<summary>"temp=21.5"에서 이름과 값을 꺼내려면 어떤 패턴과 함수를 쓰는가?</summary>
+
+```cpp
+std::regex kv{ R"((\w+)=([\d.]+))" };
+if (std::smatch m; std::regex_match(text, m, kv)) {
+    std::string name{ m[1] };
+    double value{ std::stod(m[2]) };
+}
+```
+
+</details>
+
+<details>
+<summary>로그 줄 어딘가에 "ERROR 코드 숫자"(예: `ERROR 404`)가 있으면 코드를 꺼내려면?</summary>
+
+```cpp
+std::regex err{ R"(ERROR (\d+))" };
+if (std::smatch m; std::regex_search(line, m, err)) {
+    int code{ std::stoi(m[1]) };
+}
+```
+
+</details>
+
+<details>
+<summary>`std::regex_match("abc", m, re)`처럼 문자열 리터럴을 검사할 때 `m`의 타입은?</summary>
+
+- `std::cmatch`(`const char*` 반복자). `std::smatch`는 `std::string`용
+- 임시 `std::string`을 `smatch`와 함께 넘기는 오버로드는 삭제되어 있어 컴파일되지 않음(결과의 반복자가 사라진 임시 문자열을 가리키게 되므로)
+
+</details>
