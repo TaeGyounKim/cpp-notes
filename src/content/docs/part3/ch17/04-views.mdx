@@ -1,0 +1,205 @@
+---
+title: 뷰
+description: 원소를 소유하지 않고 게으르게 계산하는 뷰, 범위 어댑터와 파이프 연산자로 만드는 파이프라인, 뷰를 통해 원소를 고치는 법, 다른 타입으로 바꾸는 법, C++23의 zip·enumerate·chunk 등 새 어댑터를 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import viewsCode from '../../../../examples/ch17/views.cpp?raw';
+import views23Code from '../../../../examples/ch17/views23.cpp?raw';
+import viewsCpp11Code from '../../../../examples/ch17/views-cpp11.cpp?raw';
+
+- 다루는 것: 원소를 거르고 변환하는 일을 `|`로 이어 붙여 한 줄로 쓰는 법
+- 이 글에서 배우는 요소: 뷰의 성질, 범위 어댑터, 파이프라인, 뷰를 통한 수정, C++23의 새 어댑터
+
+## 뷰란
+
+- **뷰** (view) <Badge text="C++20" />: 바탕 범위의 원소에 거르기, 변환하기 같은 연산을 거는 것 <CppRef path="cpp/ranges/view" />
+  - 뷰를 이어 붙여 여러 연산을 차례로 적용하는 **파이프라인**을 만듦
+  - 이어 붙이기는 비트 OR 연산자 `|`로 함. 예: 먼저 거르고 남은 것을 변환
+- 제약되지 않은 알고리즘으로 같은 일을 하면 중간 결과를 담을 임시 컨테이너가 필요해, 읽기 어렵고 느릴 수 있음
+- 뷰의 중요한 성질
+
+| 성질 | 뜻 |
+| --- | --- |
+| **게으른 평가** (lazy evaluation) | 뷰를 만들기만 해서는 아무 연산도 하지 않음. 뷰의 원소를 훑으며 반복자를 역참조하는 순간에 적용됨 |
+| **소유하지 않음** | 원소를 소유하지 않음. 데이터는 바탕 컨테이너가 소유하고, 뷰는 그것을 다르게 볼 뿐. 그래서 원소 수가 뷰의 복사·이동·소멸 비용에 영향을 주지 않음(`string_view`, `span`과 비슷함) |
+| **바꾸지 않음** | 뷰 자체는 바탕 범위의 데이터를 바꾸지 않음 |
+
+- C++23에서 뷰의 정의가 조금 바뀌어, 복사할 수 없거나 상수 시간에 복사할 수 있으면 원소를 소유해도 됨. 대부분의 뷰는 소유하지 않으므로 여기서는 다루지 않음
+- 뷰도 범위이지만 모든 범위가 뷰는 아님. 컨테이너는 원소를 소유하므로 범위이지만 뷰가 아님
+
+## 범위 어댑터
+
+- 뷰는 **범위 어댑터** (range adapter)로 만듦. 바탕 원소 나열과 (필요하면) 인수를 받아 새 뷰를 만듦 <CppRef path="cpp/ranges" />
+- 두 가지 형태
+  - `std::ranges` 네임스페이스의 클래스: `std::ranges::filter_view{ range, 인수... }`
+  - `std::ranges::views` 네임스페이스의 **범위 어댑터 객체**: `range | std::ranges::views::filter(인수...)`
+  - 보통은 어댑터 객체와 `|`를 씀. `std::views`는 `std::ranges::views`의 네임스페이스 별칭
+
+### C++20 어댑터
+
+| 어댑터 객체 | 만드는 뷰 |
+| --- | --- |
+| `views::all` | 범위의 모든 원소 |
+| `views::filter` | 조건자가 참인 원소만 남김 |
+| `views::transform` | 각 원소에 콜백을 적용해 다른 값(다른 타입일 수도)으로 |
+| `views::take` / `views::drop` | 처음 n개 / 처음 n개를 뺀 나머지 |
+| `views::take_while` / `views::drop_while` | 조건자가 거짓이 될 때까지의 앞부분 / 그 앞부분을 뺀 나머지 |
+| `views::join` | 범위들의 뷰를 하나로 폄. 예: `vector<vector<int>>`를 `int`의 나열로 |
+| `views::split`, `views::lazy_split` | 구분자(원소 하나 또는 원소들의 뷰)에서 부분 범위로 나눔 |
+| `views::reverse` | 거꾸로 훑음. 양방향 뷰여야 함 |
+| `views::elements<N>` | 튜플 같은 원소들의 N번째 원소 |
+| `views::keys` / `views::values` | 쌍 같은 원소들의 첫째 / 둘째 원소 |
+| `views::common` | `begin()`과 `end()`의 타입이 같은 **공통 범위**로 바꿈 |
+
+- `views::common`이 필요한 이유: 범위에 따라 `begin()`과 `end()`가 다른 타입(시작 반복자와 끝 **센티널**)을 돌려줄 수 있음. 두 반복자가 같은 타입이어야 하는 함수(예: 예전 알고리즘)에 넘길 때 씀
+- 맞는 어댑터가 없으면 직접 만들 수도 있지만, 기존 어댑터와 잘 어울리는 제품 수준의 어댑터를 만드는 일은 간단하지 않음
+
+### C++23 어댑터
+
+| 어댑터 객체 | 만드는 뷰 |
+| --- | --- |
+| `views::as_const` | 원소를 고칠 수 없는 뷰 |
+| `views::as_rvalue` | 모든 원소를 우측값으로(이동용) |
+| `views::enumerate` | 각 원소의 위치와 값 |
+| `views::zip` | 여러 뷰의 같은 위치 원소에 대한 참조의 튜플. 가장 짧은 뷰에 맞춤 |
+| `views::zip_transform` | 여러 뷰의 i번째 원소들에 콜백을 적용한 결과 |
+| `views::adjacent<N>` | i번째부터 N개 이웃 원소에 대한 참조의 튜플 |
+| `views::adjacent_transform<N>` | 이웃 N개 원소에 콜백을 적용한 결과 |
+| `views::pairwise`, `views::pairwise_transform` | `adjacent<2>`, `adjacent_transform<2>`의 줄임 |
+| `views::join_with` | 구분자를 끼워 넣으며 폄 |
+| `views::stride(n)` | n칸씩 건너뛰며 |
+| `views::slide(n)` | i번째부터 n개 원소에 대한 뷰. `adjacent`와 비슷하지만 n이 실행 시간 값 |
+| `views::chunk(n)` | 겹치지 않는 n개짜리 덩어리들 |
+| `views::chunk_by` | 이웃한 두 원소에 대해 조건자가 거짓인 곳마다 나눔 |
+| `views::cartesian_product` | 여러 범위의 데카르트 곱(모든 조합)의 튜플 |
+
+## 파이프라인
+
+```cpp
+namespace views = std::views;
+std::vector<int> temps{ 18, 23, 21, 26, 19, 28, 24, 30 };
+
+auto result{ temps
+             | views::filter([](int t) { return t >= 21; })      // 21도 이상
+             | views::transform([](int t) { return t + 273; })   // 켈빈으로
+             | views::drop(2)                                    // 앞 둘 버림
+             | views::reverse };                                 // 거꾸로
+```
+
+- 단계마다 `auto warm{ temps | views::filter(...) };`처럼 중간 뷰에 이름을 붙여도 됨. 필요 없으면 한 파이프라인으로 이어 씀
+- 생성자로도 만들 수 있음: `std::ranges::filter_view{ temps, 조건자 }`
+- **다시 강조**: `result`를 만드는 시점에는 거르기도 변환도 일어나지 않음. 출력하거나 `for`로 훑을 때 원소마다 계산됨
+
+<RunCode client:load code={viewsCode} />
+
+- 볼 것
+  - 단계별 중간 뷰를 출력하면 21도 이상, 켈빈, 앞 둘 버림, 거꾸로가 차례로 적용됨
+  - 게으른 평가: "뷰를 만들었다"가 먼저 찍히고, 훑을 때 `[검사 …]`와 `<…>`가 번갈아 나옴. 필요한 원소를 찾을 때까지만 검사함
+  - `take(2)`인데 26도 검사됨. 두 번째 원소를 쓴 뒤 `take`의 반복자가 바탕 `filter` 반복자를 한 칸 옮기고, 그때 `filter`가 다음 일치 원소를 찾기 때문
+  - 원본에서 26도 이상만 1도 올라감
+  - `transform`으로 `int`가 `std::string`이 됨
+
+### 뷰를 통해 원소 고치기
+
+- 읽기 전용인 범위도 있음. 예: `views::transform`의 결과는 변환된 값을 보여 줄 뿐 바탕 원소를 바꾸지 않으므로 읽기 전용
+- 읽기 전용이 아니면 뷰를 **통해** 바탕 범위의 원소를 고칠 수 있음. 뷰 자체가 아니라 원소를 소유한 컨테이너가 바뀜
+
+```cpp
+for (int& t : temps | views::filter([](int t) { return t >= 26; })) {
+    t += 1;   // temps의 원소가 바뀜
+}
+```
+
+:::caution
+`filter` 뷰로 원소를 고칠 때는 고친 값도 조건자를 만족해야 한다. 조건자를 더는 만족하지 않게 고치면 정의되지 않은 동작이다. 예: `t >= 28`로 거른 원소를 `27`로 바꾸기.
+:::
+
+### 다른 타입으로 바꾸기
+
+- 변환한 결과의 원소 타입이 원래와 같을 필요가 없음. 예: 정수를 `std::format()`으로 문자열로
+
+```cpp
+auto labels{ temps | views::take(3)
+             | views::transform([](int t) { return std::format("{}도", t); }) };
+```
+
+## C++23 어댑터 써 보기
+
+<RunCode client:load code={views23Code} />
+
+- 볼 것
+  - `zip`은 짧은 쪽(방 셋)에 맞춰 온도 넷 중 셋만 짝지음
+  - `enumerate`의 원소는 (위치, 값). 구조적 바인딩으로 풂
+  - `adjacent<2>`는 이웃 쌍, `pairwise_transform`은 이웃 쌍의 차, `chunk(2)`는 둘씩 덩어리(마지막은 하나), `stride(2)`는 한 칸씩 건너뜀
+  - `split`의 각 부분은 부분 범위라 `std::string_view`로 만들어 출력. `join_with`로 다시 이은 것을 `std::ranges::to`(5편)로 문자열로 모음
+  - `keys`와 `values`로 `map`의 키와 값만 봄
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `zip`, `enumerate`, `adjacent`, `chunk`, `stride`, `join_with`, `cartesian_product` 등 | C++23 | 인덱스 반복문, 직접 쓴 도우미 |
+| 뷰, 범위 어댑터, 파이프 연산자 | C++20 | 단계마다 임시 컨테이너와 `copy_if`, `transform` 등 알고리즘 |
+
+- 뷰가 없으면 단계마다 결과를 담을 컨테이너를 만들고, 모든 원소를 그 자리에서 계산함(게으르지 않음)
+- 아래 코드는 C++11 옵션으로 컴파일됨. 앞의 파이프라인과 같은 결과를 임시 벡터 셋으로 만듦
+
+<RunCode client:load code={viewsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `auto v{ c | views::filter(f) };`를 실행하면 걸러진 컨테이너가 생긴다?
+  - 아무것도 계산되지 않은 뷰가 생김. 훑을 때 계산됨. 원소를 따로 담으려면 `std::ranges::to`(5편)
+- 뷰는 원본 데이터를 복사해 둔다?
+  - 소유하지 않음. 바탕 컨테이너가 사라지면 뷰도 쓰면 안 됨
+- `views::transform`의 결과를 통해 원소를 고칠 수 있다?
+  - 읽기 전용. `filter`, `drop`, `reverse` 같은 뷰는 바탕 원소를 고칠 수 있음
+- `filter` 뷰로 원소를 아무 값으로나 고쳐도 된다?
+  - 고친 값도 조건자를 만족해야 함. 아니면 정의되지 않은 동작
+- `zip`은 길이가 다르면 오류다?
+  - 가장 짧은 범위에 맞춤
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 뷰 | 게으른 평가, 소유하지 않음, 바꾸지 않음 |
+| 범위 어댑터 | `views::filter`, `transform`, `take`, `drop`, `reverse`, `keys`, `split`, `join` … |
+| 파이프라인 | `range \| views::a(...) \| views::b(...)` |
+| 수정 | 읽기 전용이 아닌 뷰로 원소를 고치면 바탕 컨테이너가 바뀜 |
+| C++23 | `zip`, `enumerate`, `adjacent`, `pairwise`, `chunk`, `slide`, `stride`, `join_with`, `cartesian_product`, `as_rvalue` … |
+
+## 복습 질문
+
+<details>
+<summary>`std::vector<int> v`에서 3의 배수만 골라 제곱한 값 가운데 처음 4개를 뷰로 만들려면?</summary>
+
+```cpp
+auto r{ v | std::views::filter([](int x) { return x % 3 == 0; })
+          | std::views::transform([](int x) { return x * x; })
+          | std::views::take(4) };
+```
+
+</details>
+
+<details>
+<summary>위 `r`을 만든 직후 `v`에 원소를 더 넣으면 어떻게 될 수 있는가?</summary>
+
+- 뷰는 `v`의 원소를 소유하지 않고 가리킴. `v`가 재할당되면 `r` 안의 반복자가 무효가 될 수 있으므로, 바탕 컨테이너를 바꾼 뒤에는 뷰를 다시 만듦
+
+</details>
+
+<details>
+<summary>`std::map<std::string, int> m`의 키만 출력하려면?</summary>
+
+- `std::println("{}", m | std::views::keys);`
+
+</details>
