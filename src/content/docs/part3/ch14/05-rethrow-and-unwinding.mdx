@@ -1,0 +1,239 @@
+---
+title: 다시 던지기, 스택 풀기와 정리
+description: 잡은 예외를 throw;로 다시 던지기와 throw e;가 잘못인 이유, 예외가 났을 때 지역 객체의 소멸자를 부르는 스택 풀기, 날 포인터로 인한 누수와 이를 막는 스마트 포인터·RAII, 잡고 정리하고 다시 던지기를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import leakViz from '../../../../data/ch14/unwind-leak.js';
+import ruCode from '../../../../examples/ch14/rethrow-unwind.cpp?raw';
+import ruCpp11Code from '../../../../examples/ch14/rethrow-unwind-cpp11.cpp?raw';
+
+- 다루는 것: 잡은 예외를 위로 다시 넘기는 법, 그리고 예외가 지나가는 길에서 자원이 어떻게 정리되는가
+- 이 글에서 배우는 요소: `throw;`, `throw e;`의 잘림 문제, 스택 풀기, 메모리·자원 누수, 스마트 포인터와 RAII, 잡고 정리하고 다시 던지기
+
+## 다시 던지기
+
+- `catch` 블록 안에서 인수 없는 `throw;`는 지금 처리 중인 예외를 **복사하지 않고** 다시 던짐 <CppRef path="cpp/language/throw" />
+
+```cpp
+void g() { throw std::invalid_argument{ "어떤 예외" }; }
+
+void f()
+{
+    try {
+        g();
+    } catch (const std::invalid_argument& e) {
+        std::println("f()가 잡음: {}", e.what());
+        throw;   // 다시 던짐
+    }
+}
+
+int main()
+{
+    try {
+        f();
+    } catch (const std::invalid_argument& e) {
+        std::println("main()이 잡음: {}", e.what());
+    }
+}
+```
+
+- 출력: `f()가 잡음: 어떤 예외`, 그다음 `main()이 잡음: 어떤 예외`
+
+### throw e;는 잘못
+
+- 잡은 예외 `e`를 `throw e;`로 다시 던지면 될 것 같지만, 예외 객체가 **잘릴** 수 있음
+- 예: `f()`가 `std::exception`으로 잡고, `main()`은 `invalid_argument`와 `exception`을 나눠 잡음
+
+```cpp
+void f()
+{
+    try {
+        g();   // invalid_argument를 던짐
+    } catch (const std::exception& e) {
+        std::println("f()가 잡음: {}", e.what());
+        throw;   // 이것을 throw e;로 바꾸면?
+    }
+}
+
+int main()
+{
+    try {
+        f();
+    } catch (const std::invalid_argument& e) {   // 파생 클래스를 먼저(4편)
+        std::println("main(): invalid_argument");
+    } catch (const std::exception& e) {
+        std::println("main(): exception");
+    }
+}
+```
+
+- `throw;`면 기대대로 `main(): invalid_argument`
+- `throw e;`면 `main(): exception`
+  - `throw e;`는 `e`의 **정적 타입**(`const std::exception&`)으로 새 예외 객체를 복사해 만들어 던짐
+  - 그래서 `invalid_argument`가 `std::exception`으로 잘림(10장의 객체 잘림)
+
+:::danger
+예외를 다시 던질 때는 늘 `throw;`를 쓴다. 잡은 예외 `e`를 `throw e;`로 던지지 않는다.
+:::
+
+## 스택 풀기와 정리
+
+- 예외를 던지면 호출 스택에서 `catch` 처리기를 찾음. 처리기는 몇 단계 위의 함수에 있을 수도 있음(0단계 이상)
+- 처리기를 찾으면 그 사이의 모든 스택 프레임을 풀어, 처리기가 있는 단계까지 스택을 되돌림
+- **스택 풀기** (stack unwinding) <CppRef path="cpp/language/throw" />
+  - 풀리는 프레임의 **지역 변수 소멸자가 모두 불림**(만든 반대 순서로)
+  - 각 함수에서 지금 실행 지점 다음에 남은 코드는 모두 건너뜀
+- 하지만 포인터 변수가 가리키는 것은 당연히 지워지지 않음. 그 밖의 정리도 일어나지 않음
+
+### 누수가 생기는 예
+
+```cpp
+void funcOne()
+{
+    std::string s1;
+    std::string* s2{ new std::string{} };
+    funcTwo();
+    delete s2;
+}
+
+void funcTwo()
+{
+    std::ifstream file;
+    file.open("data.txt");
+    throw std::exception{};
+    file.close();
+}
+```
+
+- `funcTwo()`가 예외를 던지면 가장 가까운 처리기(예: `main()`의 `catch`)로 바로 건너뜀
+- `funcTwo()`의 `file.close();`는 실행되지 않음
+  - 다행히 `file`은 스택의 지역 변수라 `ifstream`의 소멸자가 불리고, 소멸자가 파일을 닫음. 자원 누수 없음
+  - `file`을 동적으로 할당했다면 소멸되지 않아 파일이 닫히지 않았을 것
+- `funcOne()`의 `delete s2;`도 실행되지 않음
+  - **메모리 누수**. 스택 풀기는 `s2`에 대해 `delete`를 불러 주지 않음
+  - 반면 `s1`은 스택의 지역 변수라 제대로 소멸됨
+
+<StepViz client:load data={leakViz} />
+
+:::caution
+예외 처리를 조심성 없이 하면 메모리와 자원이 샐 수 있다. 그래서 `new`를 쓰는 옛 C 방식의 할당(겉모습은 C++이어도)을 예외 같은 현대적인 방법과 섞어 쓰지 않는다. 되도록 스택에 할당하고, 그럴 수 없으면 아래 두 방법 중 하나를 쓴다.
+:::
+
+### 스마트 포인터 쓰기
+
+- 스택 할당이 안 되면 스마트 포인터(7장)를 씀. 예외 처리 중에도 메모리와 자원이 새지 않게 자동으로 막아 줌
+- 스마트 포인터 객체가 소멸하면 가진 자원을 해제함
+
+```cpp
+void funcOne()
+{
+    std::string s1;
+    auto s2{ std::make_unique<std::string>("안녕") };
+    funcTwo();
+}
+```
+
+- `funcOne()`에서 정상으로 돌아가든 예외로 빠져나가든 `s2`가 가진 문자열은 자동으로 지워짐
+- 물론 동적 할당은 그럴 이유가 있을 때만 씀. 위 `s2`는 그냥 스택의 `std::string`이면 충분함. 예외의 영향을 보이려고 일부러 만든 예
+
+:::note
+스마트 포인터를 비롯한 **RAII** (Resource Acquisition Is Initialization, 자원 획득은 초기화) 객체를 쓰면 자원 해제를 기억할 필요가 없다. 함수를 정상으로 빠져나가든 예외로 빠져나가든 RAII 객체의 소멸자가 해제한다(설계 기법은 32장).
+:::
+
+### 잡고, 정리하고, 다시 던지기
+
+- 다른 방법: 각 함수가 모든 예외를 잡아 필요한 정리를 하고, 예외를 다시 던져 위의 함수가 처리하게 함
+
+```cpp
+void funcOne()
+{
+    std::string s1;
+    std::string* s2{ new std::string{} };
+    try {
+        funcTwo();
+    } catch (...) {
+        delete s2;
+        throw;   // 다시 던짐
+    }
+    delete s2;
+}
+```
+
+- `funcTwo()` 호출을 감싸 정리(`delete s2`)한 뒤 다시 던짐. `catch (...)`로 모든 예외를 잡음
+- 동작은 하지만 지저분하고 실수하기 쉬움. 특히 `delete s2;`가 두 번 나옴: 예외를 처리할 때 한 번, 정상으로 끝날 때 한 번
+
+:::caution
+권하는 해법은 스택 할당이고, 그럴 수 없으면 스마트 포인터나 다른 RAII 클래스다. 잡고 정리하고 다시 던지는 방법보다 낫다.
+:::
+
+<RunCode client:load code={ruCode} />
+
+- 볼 것
+  - `inner()`가 던지자 `inner`의 지역 객체, `middle`의 `unique_ptr`, `middle`의 지역 객체가 만든 반대 순서로 정리됨
+  - `middle의 날 포인터`는 "확보"만 있고 "정리"가 없음. 누수
+  - `throw;`로 다시 던지면 `invalid_argument`로, `throw e;`면 `exception`으로 잡힘
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T(...))` |
+| `std::unique_ptr` | C++11 | `std::auto_ptr`(C++11에서 권장하지 않음, C++17에서 제거) |
+
+- `throw;`, 스택 풀기, 소멸자 호출 규칙은 C++98부터 같음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={ruCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `throw e;`와 `throw;`는 같다?
+  - `throw e;`는 정적 타입으로 복사해 던져 잘릴 수 있음. `throw;`는 원래 예외를 그대로
+- 스택 풀기 때 `new`로 만든 객체도 지워진다?
+  - 지역 변수의 소멸자만 불림. 날 포인터가 가리키는 것은 남음(누수)
+- 예외가 나면 지역 `ifstream`의 파일이 열린 채 남는다?
+  - 소멸자가 닫음. 동적으로 할당했다면 남음
+- 누수를 막으려면 함수마다 `try`/`catch`를 둔다?
+  - 가능하지만 지저분함. 스택 객체나 스마트 포인터(RAII)를 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `throw;` | 잡은 예외를 복사 없이 그대로 다시 던짐 |
+| `throw e;` | 정적 타입으로 복사, 잘림. 쓰지 않음 |
+| 스택 풀기 | 처리기까지 프레임을 풀며 지역 객체 소멸자를 반대 순서로 부름. 남은 코드는 건너뜀 |
+| 누수 | 날 포인터가 가리키는 힙 객체, 동적으로 할당한 자원 |
+| 해법 | 스택 할당 > 스마트 포인터·RAII > 잡고 정리하고 다시 던지기 |
+
+## 복습 질문
+
+<details>
+<summary>`catch (const std::exception& e) { log(e); throw e; }`를 고쳐야 하는 이유와 고친 코드는?</summary>
+
+- `throw e;`는 `std::exception`으로 잘린 사본을 던져, 위에서 파생 타입으로 잡지 못함
+- `catch (const std::exception& e) { log(e); throw; }`
+
+</details>
+
+<details>
+<summary>예외가 지나갈 수 있는 함수에서 `FILE* f = std::fopen(...)`로 연 파일을 확실히 닫으려면?</summary>
+
+- 소멸자에서 `std::fclose()`를 부르는 RAII 클래스로 감싸거나, `std::unique_ptr<FILE, 삭제자>`를 씀. 가장 간단하게는 `std::ifstream`/`std::ofstream`을 씀
+
+</details>
+
+<details>
+<summary>`void f() { Lock a; Buffer b; g(); }`에서 `g()`가 던지면 `a`와 `b`의 소멸자는 어떤 순서로 불리는가?</summary>
+
+- 만든 반대 순서: `b`가 먼저, 그다음 `a`
+
+</details>
