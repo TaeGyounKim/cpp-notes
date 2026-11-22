@@ -1,0 +1,233 @@
+---
+title: 객체 입출력, 사용자 정의 조작자, 문자열 스트림
+description: printf로는 할 수 없는 사용자 정의 타입 출력과 std::formatter 특수화, 매개변수 없는 조작자 만들기, ostringstream·istringstream으로 문자열을 쌓고 읽기, C++23의 스팬 기반 스트림을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import ssCode from '../../../../examples/ch13/string-streams.cpp?raw';
+import ssCpp11Code from '../../../../examples/ch13/string-streams-cpp11.cpp?raw';
+
+- 다루는 것: 직접 만든 타입의 입출력, 조작자 직접 만들기, 문자열과 고정 버퍼 위의 스트림
+- 이 글에서 배우는 요소: `std::formatter` 특수화, 사용자 정의 조작자, `std::ostringstream`, `std::istringstream`, 마샬링, `std::ispanstream`, `std::ospanstream`
+
+## 객체 입출력
+
+- C의 `printf()`는 유연하지 않고 사용자 정의 타입을 지원하지 않음. 아는 타입이 정해져 있고 더 가르칠 방법이 없음
+- 예: 측정값 클래스
+
+```cpp
+class Reading
+{
+public:
+    const std::string& place() const { return m_place; }
+    double value() const { return m_value; }
+    bool alarm() const { return m_alarm; }
+    // 생성자, 설정 함수 생략
+private:
+    std::string m_place;
+    double m_value{ 0 };
+    bool m_alarm{ false };
+};
+```
+
+- `printf("측정: %r\n", reading);`처럼 쓸 수 있으면 좋겠지만 `printf()`는 `Reading`을 모름
+  - 게다가 `printf()`의 선언 방식(C 스타일 가변 인자, 11장) 때문에 컴파일 오류가 아니라 **실행 시간 오류**가 됨(좋은 컴파일러는 경고를 냄)
+- `printf()`로 할 수 있는 최선은 `Reading`에 `output()` 멤버를 두는 것. 하지만 문장 중간에 끼우려면 출력을 여러 번으로 쪼개야 해서 번거로움
+
+### std::formatter 특수화
+
+- 더 나은 현대적인 방법: `Reading`용 `std::formatter`를 **특수화**(12장)함(2장) <CppRef path="cpp/utility/format/formatter" />
+- 간결하게 하려고 서식 지정자는 지원하지 않음. 그래서 `parse()`는 아무것도 해석하지 않고 시작 위치를 그대로 돌려줌
+
+```cpp
+template <>
+struct std::formatter<Reading>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const Reading& r, std::format_context& ctx) const
+    {
+        return std::format_to(ctx.out(), "{} {}도{}", r.place(), r.value(),
+                              r.alarm() ? " (경보)" : "");
+    }
+};
+
+std::println("측정: {}", reading);
+```
+
+- 또 다른 방법: `<<` 연산자를 오버로드해 `std::string`처럼 스트림에 넣고, `>>`를 오버로드해 스트림에서 읽음(15장)
+
+## 사용자 정의 조작자
+
+- 표준 조작자 외에 직접 만들 수도 있음
+- **매개변수 없는** 조작자는 쉬움: 스트림 참조를 받아 돌려주는 함수
+
+```cpp
+std::ostream& bullet(std::ostream& out) { return out << " - "; }
+
+std::cout << "목록" << bullet << "첫째" << '\n';
+```
+
+- `<<`에 함수를 넘기면 스트림이 그 함수를 자기 자신에게 적용함
+- **매개변수가 있는** 조작자는 더 복잡함. `std::ios_base`의 `xalloc()`, `iword()`, `pword()`, `register_callback()` 등을 써야 함. 거의 필요 없으므로 여기서는 다루지 않음
+
+## 문자열 스트림
+
+- **문자열 스트림** (string stream): 문자열에 스트림의 의미를 적용함. 텍스트 데이터를 나타내는 메모리 안의 스트림 <CppRef path="cpp/io/basic_stringstream" />
+- 쓸모
+  - GUI 프로그램에서 스트림으로 텍스트를 만들어 콘솔이나 파일 대신 메시지 상자 등에 보임
+  - 문자열 스트림을 여러 함수에 넘기면서 **읽기 위치를 유지**해, 각 함수가 다음 부분을 처리하게 함
+  - 스트림의 토큰 나누기 기능으로 텍스트를 해석함
+- `<sstream>`의 두 클래스
+  - `std::ostringstream`: 문자열에 씀(`o`는 출력)
+  - `std::istringstream`: 문자열에서 읽음(`i`는 입력)
+  - 각각 `ostream`, `istream`의 동작을 물려받아 쓰는 법이 거의 같음
+
+### 문자열에 쓰기
+
+```cpp
+std::ostringstream out;
+bool first{ true };
+for (const char* word : { "온도", "습도", "기압" }) {
+    if (!first) { out << ", "; }
+    out << '"' << word << '"';
+    first = false;
+}
+std::println("결과: {}", out.str());   // "온도", "습도", "기압"
+```
+
+- `str()` 멤버 함수로 쌓은 내용을 `std::string`으로 꺼냄
+
+### 문자열에서 읽기
+
+- 정해진 형식의 데이터를 객체로 바꿈. 형식: 따옴표로 감싼 장소, 값, `true`/`false`
+
+```cpp
+Reading parseReading(std::istringstream& in)
+{
+    std::string place;
+    double value{ 0 };
+    bool alarm{ false };
+    in >> std::quoted(place) >> value >> std::boolalpha >> alarm;
+    if (in) { return Reading{ place, value, alarm }; }   // 읽기 성공
+    return Reading{};
+}
+```
+
+- `std::quoted`가 따옴표 안의 공백까지 읽음(`"큰 방"`)
+- `std::boolalpha`로 `true`, `false` 글자를 `bool`로 읽음
+
+:::note
+객체를 문자열 같은 "평평한" 타입으로 바꾸는 것을 흔히 **마샬링** (marshaling)이라 한다. 객체를 디스크에 저장하거나 네트워크로 보낼 때 쓸모가 있다.
+:::
+
+### std::string보다 나은 점
+
+- 데이터뿐 아니라 다음 읽기·쓰기가 일어날 **현재 위치**를 앎
+- 조작자와 지역 설정을 써서 더 다양한 서식을 줄 수 있음
+- 작은 문자열 여러 개를 이어 붙여 큰 문자열을 만들 때, `std::string`을 직접 이어 붙이는 것보다 빠름
+
+## 스팬 기반 스트림
+
+- **스팬 기반 스트림** (span-based stream) <Badge text="C++23" />: `<spanstream>`. 이미 있는 **고정 메모리 버퍼** 위에서 스트림을 씀. 버퍼를 어떻게 할당했는지는 상관없음 <CppRef path="cpp/io/basic_spanstream" />
+- 주로 쓰는 클래스
+  - `std::ispanstream`: 입력
+  - `std::ospanstream`: 출력
+  - `std::spanstream`: 입력과 출력
+  - 실제로는 `basic_ispanstream` 등 클래스 템플릿의 `char` 인스턴스. `wchar_t`용 `wispanstream` 등도 있음
+- 생성자는 `std::span`(18장)을 받음
+  - 연속된 메모리 블록 위의 뷰. `std::string_view`(2장)가 문자열 위의 읽기 전용 뷰인 것과 비슷하지만, `span`은 쓰기 가능한 뷰도 될 수 있음
+
+```cpp
+char text[]{ "11 2.5 hello" };
+std::ispanstream in{ std::span{ text, sizeof(text) - 1 } };
+int i; double d; std::string s;
+in >> i >> d >> s;          // 11, 2.5, "hello"
+```
+
+- 문자 배열 전체로 `std::span{ text }`를 만들면 끝의 널 문자까지 포함됨. 그러면 마지막 `s`에 널 문자가 붙어 읽힘. 그래서 길이를 `sizeof(text) - 1`로 줌
+
+```cpp
+char buffer[32]{};
+std::ospanstream out{ std::span{ buffer } };
+out << "값=" << 42 << ' ' << 0.5;
+std::println("버퍼: \"{}\"", buffer);   // 버퍼: "값=42 0.5"
+```
+
+- 버퍼보다 많이 쓰면 넘치지 않고 스트림이 실패 상태가 됨
+
+<RunCode client:load code={ssCode} />
+
+- 볼 것
+  - `std::println`이 `Reading`을 바로 출력함
+  - `in` 하나에서 `parseReading()`을 두 번 불러 두 측정값을 차례로 읽음. 위치를 기억하기 때문
+  - `ispanstream`이 고정 배열에서 세 값을 읽음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::formatter` 특수화 | C++20 | `operator<<` 오버로드(15장) |
+| `std::quoted` | C++14 | 따옴표를 직접 처리 |
+| 스팬 기반 스트림 | C++23 | 문자열 스트림에 복사해서 쓰거나, 권장하지 않는 `std::strstream` |
+
+- 문자열 스트림과 매개변수 없는 사용자 정의 조작자는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={ssCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `printf()`에 사용자 정의 타입을 넘기면 컴파일 오류가 난다?
+  - 실행 시간 오류가 됨(경고만 날 수 있음). `std::formatter`나 `<<` 오버로드를 씀
+- 사용자 정의 조작자는 클래스여야 한다?
+  - 매개변수 없는 조작자는 스트림 참조를 받아 돌려주는 함수면 됨
+- `ostringstream`의 내용은 `<<`로 꺼낸다?
+  - `str()`로 꺼냄
+- `std::span{ text }`로 문자 배열을 감싸면 문자열 내용만 들어간다?
+  - 끝의 널 문자도 들어감. 길이를 직접 줌
+- `ospanstream`에 버퍼보다 많이 쓰면 버퍼가 넘친다?
+  - 넘치지 않고 스트림이 실패 상태가 됨
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 사용자 정의 타입 출력 | `std::formatter<T>` 특수화(`parse`, `format`), 또는 `<<` 오버로드 |
+| 사용자 정의 조작자 | `std::ostream& f(std::ostream&)` |
+| `ostringstream` | 문자열에 씀. `str()`로 꺼냄 |
+| `istringstream` | 문자열에서 읽음. 위치를 기억함 |
+| 마샬링 | 객체를 문자열 같은 평평한 형태로 |
+| 스팬 기반 스트림 | `ispanstream`, `ospanstream`, `spanstream`. 고정 버퍼 위(C++23) |
+
+## 복습 질문
+
+<details>
+<summary>`std::cout << "값" << indent << 3;`처럼 쓸 `indent` 조작자(공백 4칸)를 만들면?</summary>
+
+```cpp
+std::ostream& indent(std::ostream& out) { return out << "    "; }
+```
+
+</details>
+
+<details>
+<summary>`"12,34,56"`을 쉼표로 나눠 정수 셋으로 읽으려면 문자열 스트림을 어떻게 쓰는가?</summary>
+
+- `std::istringstream in{ text };` 후 `std::getline(in, item, ',')`로 조각을 읽고 `std::stoi(item)`으로 바꿈
+- 또는 `in >> a >> comma >> b >> comma >> c`처럼 `char` 변수로 쉼표를 읽어 버림
+
+</details>
+
+<details>
+<summary>`std::string`을 `+=`로 수천 번 이어 붙이는 대신 쓸 수 있는 것은?</summary>
+
+- `std::ostringstream`에 `<<`로 쌓고 마지막에 `str()`로 꺼냄. 서식과 지역 설정도 쓸 수 있음
+
+</details>
