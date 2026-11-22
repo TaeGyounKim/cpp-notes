@@ -1,0 +1,252 @@
+---
+title: 역방향 반복자와 편의 기능
+description: 가역 컨테이너의 reverse_iterator와 rbegin·rend, 이웃 노드를 복사 없이 훑는 범위, initializer_list 생성자와 대입(복사 후 교환), 반복자 범위 생성자와 assign, C++23 insert_range, 값으로 지우는 erase, 더 개선할 점과 다른 종류의 컨테이너를 만들 때 본받을 표준 컨테이너를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import gfCode from '../../../../examples/ch25/graph-final.cpp?raw';
+import gfCpp11Code from '../../../../examples/ch25/graph-final-cpp11.cpp?raw';
+
+- 다루는 것: 반복자를 갖춘 `directed_graph`를 표준 컨테이너에 더 가깝게 다듬기
+- 이 글에서 배우는 요소: `reverse_iterator`, `rbegin`/`rend`, 이웃 노드 범위, `initializer_list` 생성자, `assign`, `insert_range`, 값으로 `erase`
+
+## 역방향 반복자
+
+- 양방향 반복자를 제공하는 컨테이너는 **가역** (reversible) 컨테이너 <CppRef path="cpp/named_req/ReversibleContainer" />
+- 가역 컨테이너가 더 갖출 것
+  - 타입 별칭 `reverse_iterator`, `const_reverse_iterator`: 원소를 거꾸로 훑는 반복자
+  - `rbegin()`, `rend()`: `begin()`, `end()`와 대칭
+  - `crbegin()`, `crend()`: `cbegin()`, `cend()`와 대칭
+- 직접 만들 필요 없이 표준 어댑터 `std::reverse_iterator`(17장)로 감쌈 <CppRef path="cpp/iterator/reverse_iterator" />
+
+```cpp
+using reverse_iterator = std::reverse_iterator<iterator>;
+using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+reverse_iterator rbegin() const noexcept { return reverse_iterator{ end() }; }
+reverse_iterator rend() const noexcept { return reverse_iterator{ begin() }; }
+const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+const_reverse_iterator crend() const noexcept { return rend(); }
+```
+
+- `rbegin()`은 `end()`를 감쌈. 역방향 반복자는 역참조할 때 감싼 반복자의 **한 칸 앞**을 보므로 마지막 원소가 나옴
+- 양방향 반복자가 있으면 `std::views::reverse`(17장)도 바로 됨 <CppRef path="cpp/ranges/reverse_view" />
+
+## 이웃 노드를 복사 없이 훑기
+
+- 2편의 `adjacent_values()`는 이웃의 값을 새 `set<T>`에 **복사**해 돌려줌. 이웃만 훑을 때는 낭비
+- 개선: 이웃을 훑는 **범위**를 돌려줌
+  - 방법 1: 이웃 인덱스 집합을 훑으며 값을 돌려주는 반복자 클래스를 하나 더 만들고, `begin()`, `end()`를 가진 작은 구조체로 묶어 돌려줌
+  - 방법 2: 뷰로 만듦. 인덱스 집합에 `views::transform`(17장)을 씌워 인덱스를 값으로 바꿈 <CppRef path="cpp/ranges/transform_view" />
+- 여기서는 방법 2
+
+```cpp
+auto adjacent(const T& value) const
+{
+    static const std::set<size_type> none;   // 없는 노드면 빈 범위
+    auto it{ find(value) };
+    const auto& targets{ it == end() ? none : m_nodes[index(it)].targets };
+    return targets | std::views::transform(
+        [this](size_type i) -> const T& { return m_nodes[i].value; });
+}
+```
+
+- 람다의 반환 타입을 `const T&`로 적어 값을 복사하지 않음
+- 돌려준 뷰는 그래프 안을 가리키므로, 그래프가 바뀌거나 사라지면 쓸 수 없음(반복자 무효화와 같음)
+- 그래프 출력이 짧아짐
+
+```cpp
+for (const auto& v : g) {
+    std::print("{} ->", v);
+    for (const auto& n : g.adjacent(v)) { std::print(" {}", n); }
+    std::println("");
+}
+```
+
+:::note
+그래프를 그림으로 보고 싶으면 그래프 기술 언어 DOT 형식(`digraph G { A -> B; }`)으로 출력해 그래프 도구로 그릴 수 있다. 위 출력 함수의 화살표 줄만 DOT 문법으로 바꾸면 된다.
+:::
+
+## 표준 컨테이너 같은 편의 기능
+
+### initializer_list 생성자와 대입
+
+- `vector`처럼 `directed_graph<int> g{ 11, 22, 33 };`으로 만들 수 있게 함 <CppRef path="cpp/utility/initializer_list" />
+- 생성자를 하나라도 직접 선언하면 기본 생성자는 자동으로 생기지 않으므로 `= default`로 되살림
+  - 복사·이동 생성자와 대입 연산자는 그대로 자동 생성됨. 뜻을 분명히 하려고 함께 `= default`로 적어 두어도 됨
+
+```cpp
+directed_graph() = default;
+directed_graph(std::initializer_list<T> values) { assign(values); }
+```
+
+- **CTAD** 덕분에 원소 타입도 생략 가능: `directed_graph g{ 11, 22, 33 };`
+- 대입 연산자: **복사 후 교환** (copy-and-swap, 9장)으로 강한 예외 보장
+  - 임시 그래프에 모든 작업을 하고, 예외를 던지지 않는 `swap`으로 결과를 바꿔 낌. 중간에 예외가 나도 원래 그래프는 그대로
+
+```cpp
+directed_graph& operator=(std::initializer_list<T> values)
+{
+    directed_graph fresh{ values };
+    swap(fresh);
+    return *this;
+}
+// 쓰기: g = { 66, 77, 88 };
+```
+
+### assign과 반복자 범위 생성자
+
+- `vector`처럼 `assign()`: 지금 그래프를 비우고 새 노드를 넣음
+  - 반복자 범위판(멤버 함수 템플릿)과 `initializer_list`판
+
+```cpp
+template <std::input_iterator It>
+void assign(It first, It last)
+{
+    clear();
+    insert(first, last);
+}
+void assign(std::initializer_list<T> values)
+{
+    assign(values.begin(), values.end());
+}
+```
+
+- 반복자 범위를 받는 생성자도 `assign`에 넘김: `directed_graph<int> h(src.begin(), src.end());`
+- `insert`에도 `initializer_list`판을 더함: `g.insert({ 40, 50 });`
+
+### insert_range <Badge text="C++23" />
+
+- C++23은 대부분의 표준 컨테이너에 `insert_range()`를 더함 <CppRef path="cpp/container/vector/insert_range" />
+- 범위 콘셉트 `std::ranges::input_range`로 제약을 걸고 반복자판 `insert`에 넘김
+
+```cpp
+template <std::ranges::input_range R>
+void insert_range(R&& range)
+{
+    insert(std::ranges::begin(range), std::ranges::end(range));
+}
+// 쓰기: g.insert_range(std::vector{ 60, 70 });
+```
+
+### 값으로 지우는 erase
+
+- `std::set`처럼 값을 받아 지우고, 지운 원소 수를 돌려줌. 이 그래프에서는 0 또는 1
+
+```cpp
+size_type erase(const T& value)
+{
+    auto it{ find(value) };
+    if (it == end()) { return 0; }
+    erase(it);
+    return 1;
+}
+```
+
+<RunCode client:load code={gfCode} />
+
+- 볼 것
+  - `directed_graph g{ 10, 20, 30 }`: `initializer_list` 생성자와 CTAD
+  - `insert({ ... })`, `insert_range(vector)`. 이미 있는 20은 무시됨
+  - `adjacent()` 뷰로 이웃을 복사 없이 출력
+  - `rbegin`/`rend`와 `views::reverse`로 거꾸로 훑기. `ranges::to`(17장)로 `vector`에 모으기
+  - 값으로 `erase`가 1과 0을 돌려줌. 20이 사라지며 `10 -> 20` 간선도 사라짐
+  - `g = { 1, 2 }` 대입, 반복자 범위 생성자
+
+## 더 개선할 점
+
+- 순환 검사: 지금은 순환(cycle)을 막지 않음. 검사를 더하면 **방향 비순환 그래프** (directed acyclic graph, DAG)가 됨
+- 양방향 대신 **임의 접근** 반복자 지원
+- 노드 관련 기능: 표준 연관 컨테이너처럼(18장) `node_type` 별칭과 `extract()` 같은 멤버 함수
+- **맞춤 할당자** 지원(1편): 모든 표준 컨테이너처럼. `std::allocator_traits<A>`의 `construct()`, `destroy()`, `propagate_on_container_move_assignment`, `propagate_on_container_copy_assignment`, `propagate_on_container_swap` 등을 써야 해서 복잡함 <CppRef path="cpp/memory/allocator_traits" />
+
+## 다른 종류의 컨테이너
+
+- `directed_graph`는 기본적으로 **순차** 컨테이너지만, 그래프의 성격상 연관 컨테이너의 기능 일부(`insert`의 반환 타입 등)도 가짐
+- 순수한 순차, 정렬 연관, 비정렬 연관 컨테이너를 만들려면 표준이 정한 그 종류의 요건을 따라야 함 <CppRef path="cpp/named_req/SequenceContainer" />
+- 요건을 나열하기보다 본받을 표준 컨테이너
+  - 순차 컨테이너: `deque`. 요건을 거의 정확히 따르고, 다른 점은 요건에 없는 `resize()`를 더 가진 것뿐
+  - 정렬 연관 컨테이너: `map`
+  - 비정렬 연관 컨테이너: `unordered_map`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `insert_range`, `ranges::to` | C++23 | 반복자판 `insert`, 반복문 |
+| 뷰(`views::transform`, `views::reverse`), 콘셉트 제약 | C++20 | 이웃 값을 복사해 돌려줌, 제약 없는 템플릿 |
+| CTAD | C++17 | 원소 타입을 적음 |
+| `initializer_list`, `= default` | C++11 | 원소를 하나씩 `insert` |
+| `std::reverse_iterator` | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨(역방향 반복자와 `initializer_list`만)
+
+<RunCode client:load code={gfCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 역방향 반복자 클래스를 따로 만들어야 한다?
+  - `std::reverse_iterator`로 감싸면 됨. 양방향이기만 하면 됨
+- `rbegin()`은 마지막 원소를 감싼다?
+  - `end()`를 감쌈. 역참조할 때 한 칸 앞을 봄
+- `initializer_list` 생성자만 더해도 기본 생성자가 남는다?
+  - 생성자를 선언하면 기본 생성자가 사라짐. `= default`로 되살림
+- 대입 연산자에서 `clear()` 후 하나씩 넣으면 충분하다?
+  - 중간에 예외가 나면 반쯤 바뀐 그래프가 남음. 복사 후 교환으로 강한 예외 보장
+- `adjacent()`가 돌려준 뷰는 언제까지나 쓸 수 있다?
+  - 그래프 안을 가리킴. 그래프를 바꾸거나 없애면 무효
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 가역 컨테이너 | `reverse_iterator` 별칭, `rbegin`/`rend`/`crbegin`/`crend`. `std::reverse_iterator`로 감쌈 |
+| 이웃 범위 | 복사 대신 뷰(`views::transform`)나 전용 반복자 |
+| 생성과 대입 | `initializer_list` 생성자(+`= default`), 복사 후 교환 대입, 반복자 범위 생성자 |
+| 넣기 | `assign`, `insert({...})`, `insert_range` |
+| 지우기 | 값으로 `erase` → 지운 수 |
+| 본보기 | 순차 `deque`, 정렬 연관 `map`, 비정렬 연관 `unordered_map` |
+
+## 복습 질문
+
+<details>
+<summary>그래프를 거꾸로 훑으며 처음 만나는 짝수 노드를 찾으려면?</summary>
+
+```cpp
+auto even{ [](int v) { return v % 2 == 0; } };
+auto it{ std::find_if(g.rbegin(), g.rend(), even) };
+if (it != g.rend()) { std::println("{}", *it); }
+```
+
+- 또는 `std::ranges::find_if(g | std::views::reverse, ...)`
+
+</details>
+
+<details>
+<summary>역방향 반복자 `rit`가 가리키는 원소를 `erase`로 지우려면 무엇을 넘기는가?</summary>
+
+- `g.erase(std::next(rit).base())`. `base()`는 감싼 정방향 반복자를 돌려주는데, 그것은 `rit`가 가리키는 원소의 **다음**이므로 한 칸 당긴 뒤 꺼냄
+
+</details>
+
+<details>
+<summary>노드 수가 아주 많은 그래프에서 `adjacent_values()` 대신 `adjacent()` 뷰가 나은 이유는?</summary>
+
+- `set<T>`를 새로 만들지 않아 메모리 할당과 값 복사가 없음. 필요한 만큼만 훑고 멈출 수도 있음
+
+</details>
+
+## 25장을 마치며
+
+- 컨테이너가 메모리를 잡고 푸는 방식을 맞춤 설정하는 **할당자**를 봄
+- 표준 컨테이너의 데이터와 함께 동작하는 **알고리즘**(`find_all`)을 직접 만듦
+- 이 장의 대부분은 표준 규칙을 따르는 **컨테이너** `directed_graph`를 거의 완성하는 과정이었음. 반복자를 갖춰 표준 알고리즘과 함께 쓸 수 있음
+- 표준 알고리즘이나 컨테이너를 다시 만들 일이 없더라도, 그 과정을 따라가며 표준 라이브러리의 사고방식과 능력을 더 잘 이해하게 되고 더 잘 쓸 수 있음
+- 이것으로 표준 라이브러리 둘러보기를 마침. 다룬 기능을 억지로 다 쓰려 하지 말고, 컨테이너부터 시작해 알고리즘 한두 개씩, 알맞은 곳에 들여 쓰면 됨
