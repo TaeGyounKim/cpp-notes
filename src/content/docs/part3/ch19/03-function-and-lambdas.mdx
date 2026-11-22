@@ -1,0 +1,267 @@
+---
+title: std::function과 람다 표현식
+description: 무엇이든 호출할 수 있는 것을 감싸는 std::function과 C++23 move_only_function, 이름 없는 함수를 그 자리에서 만드는 람다 표현식의 문법, 컴파일러가 만드는 클로저, 값·참조 캡처와 mutable, 기본 캡처, this 캡처, 전체 문법을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import capViz from '../../../../data/ch19/capture.js';
+import lamCode from '../../../../examples/ch19/lambdas.cpp?raw';
+import lamCpp11Code from '../../../../examples/ch19/lambdas-cpp11.cpp?raw';
+
+- 다루는 것: 콜백을 저장하는 그릇과, 콜백을 가장 편하게 만드는 방법
+- 이 글에서 배우는 요소: `std::function`, `std::move_only_function`, 람다 문법, 클로저, 캡처, `mutable`
+
+## 다형적 함수 포장
+
+- `std::function`과 `std::move_only_function`: **다형적 함수 포장** (polymorphic function wrapper)
+  - 함수, 함수 객체, 람다 표현식 등 호출할 수 있는 **무엇이든** 감싸는 함수 객체
+
+### std::function
+
+- `<functional>` <Badge text="C++11" /> <CppRef path="cpp/utility/functional/function" />
+  - 함수 포인터처럼 쓰거나, 콜백을 받는 함수의 매개변수로 씀
+  - 저장하고, 복사하고, 이동하고, 물론 실행할 수 있음
+- 템플릿 인수의 모양이 독특함: `std::function<R(ArgTypes...)>`. `R`은 반환 타입, `ArgTypes`는 쉼표로 나눈 매개변수 타입들
+
+```cpp
+void announce(int floor, std::string_view room);
+
+std::function<void(int, std::string_view)> f1{ announce };
+f1(3, "회의실");
+std::function f2{ announce };   // 클래스 템플릿 인수 추론(C++17)
+auto f3{ announce };            // 이것은 std::function이 아니라 함수 포인터
+```
+
+- 매개변수 목록이 정확히 같지 않아도 됨. `ArgTypes` 인수로 부를 수 있고 반환값을 `R`로 바꿀 수 있으면 담을 수 있음
+  - 예: `announce`가 첫 매개변수를 `const int&`로 받아도 위 코드는 그대로 됨
+- 1편의 함수 포인터 별칭을 `std::function`으로 바꿔도 나머지 코드는 그대로
+
+```cpp
+using Matcher = std::function<bool(int, int)>;
+using MatchHandler = std::function<void(std::size_t, int, int)>;
+```
+
+- 하지만 함수 매개변수로는 여전히 **함수 템플릿**을 권함(타입이 지워지는 `std::function`은 호출에 약간의 비용이 있음)
+- `std::function`이 진가를 발휘할 때: 콜백을 **클래스의 데이터 멤버로 저장**할 때. 저장할 콜백의 타입이 제각각이어도 같은 타입으로 담음
+- 빈 `std::function`을 부르면 `std::bad_function_call` 예외. `if (m_alarm)`처럼 비었는지 확인할 수 있음
+
+### std::move_only_function
+
+- <Badge text="C++23" /> `std::function`은 담는 콜백이 **복사할 수 있어야** 함 <CppRef path="cpp/utility/functional/move_only_function" />
+- `std::move_only_function`: 이동만 되는 콜백도 담음. `<functional>`
+  - 함수 호출 연산자를 `const`나 `noexcept`로 표시할 수 있음: `std::move_only_function<int() const>`
+  - `std::function`의 함수 호출 연산자는 늘 `const`라 이렇게 할 수 없음
+- 예: `unique_ptr`를 데이터 멤버로 가진 함수 객체는 복사할 수 없으므로 `std::function`에 담을 수 없지만 `move_only_function`에는 담을 수 있음
+
+## 람다 표현식
+
+- 함수나 함수 객체 클래스를 만들고, 다른 이름과 겹치지 않는 이름을 붙이고, 그 이름을 쓰는 일은 본질적으로 간단한 개념치고 부담이 큼
+- **람다 표현식** (lambda expression) <Badge text="C++11" />: **이름 없는 함수**를 그 자리에 씀 <CppRef path="cpp/language/lambda" />
+  - 문법이 쉽고 코드가 짧고 읽기 쉬워짐
+  - 다른 함수에 넘기는 작은 콜백을 그 자리에서 정의하므로 모든 논리가 한곳에 있어 이해하고 고치기 쉬움
+- 매개변수를 받고, 값을 돌려주고, 템플릿이 될 수 있고, 둘러싼 범위의 변수에 값이나 참조로 접근하는 등 유연함
+
+### 문법
+
+- 가장 간단한 람다: 대괄호 `[]`(**람다 도입부**, lambda introducer) 뒤에 본문 `{}`
+
+```cpp
+auto hello{ [] { std::println("람다 안녕"); } };
+hello();   // 보통 함수 호출 문법으로 실행
+```
+
+- 컴파일러는 모든 람다 표현식을 컴파일러가 지은 유일한 이름의 함수 객체로 바꿈. 이것을 **람다 클로저** (lambda closure)라 함
+  - 이름은 `__lambda_17Za`처럼 알 수 없지만 알 필요도 없음(그래서 `auto`로 받음)
+  - 위 람다는 대략 다음과 같은 함수 객체가 됨. 함수 호출 연산자는 **`const`** 멤버 함수이고 반환 타입은 `auto`
+
+```cpp
+class CompilerGeneratedName
+{
+public:
+    auto operator()() const { std::println("람다 안녕"); }
+};
+```
+
+- 매개변수: 보통 함수처럼 괄호 안에 쉼표로. 클로저의 `operator()`의 매개변수가 됨
+  - 매개변수가 없으면 빈 괄호를 쓰거나 생략함
+- 반환 타입: 화살표 뒤에 씀(**뒤따르는 반환 타입**, trailing return type). 생략하면 함수 반환 타입 추론(1장)과 같은 규칙으로 추론함
+
+```cpp
+auto add{ [](int a, int b) -> int { return a + b; } };
+auto add2{ [](int a, int b) { return a + b; } };   // 반환 타입 추론
+```
+
+- 반환 타입 추론은 참조와 `const`를 떼어 냄
+  - `[](const Person& p) { return p.getName(); }`은 `getName()`이 `const std::string&`를 돌려줘도 `std::string`을 돌려줌(복사)
+  - 참조 그대로 돌려주려면 `-> decltype(auto)`(12장)
+
+### 캡처
+
+- 지금까지의 람다는 둘러싼 범위에서 아무것도 **캡처**하지 않으므로 **상태가 없음** (stateless)
+- 둘러싼 범위의 변수를 캡처하면 **상태가 있는** (stateful) 람다가 됨
+  - 대괄호 부분이 **캡처 블록** (capture block). 변수를 캡처하면 람다 본문에서 그 변수를 쓸 수 있음
+  - `[]`: 아무것도 캡처하지 않음
+- 캡처한 변수는 클로저의 **데이터 멤버**가 됨
+  - **값으로 캡처** `[limit]`: 데이터 멤버에 복사됨. 데이터 멤버의 `const` 여부는 캡처한 변수와 같음
+  - **참조로 캡처** `[&count]`: 데이터 멤버가 원본을 가리키는 참조. 람다 본문에서 원본을 바꿀 수 있음
+  - 참조로 캡처하면, 람다를 **실행하는 시점에** 참조가 여전히 유효한지 확인해야 함
+
+<StepViz client:load data={capViz} />
+
+### mutable
+
+- 클로저의 `operator()`는 기본이 `const`
+  - 그래서 `const`가 아닌 변수를 값으로 캡처해도 본문에서 그 복사본을 고칠 수 없음
+- `mutable`을 붙이면 `operator()`가 `const`가 아니게 되어 복사본을 고칠 수 있음. 원본은 그대로
+
+```cpp
+int calls{ 0 };
+auto counter{ [calls]() mutable { return ++calls; } };   // 복사본이 늘어남
+```
+
+### 기본 캡처와 캡처 목록
+
+- **기본 캡처** (capture default): 둘러싼 범위의 모든 변수를 캡처
+  - `[=]`: 모두 값으로
+  - `[&]`: 모두 참조로
+  - 실제로 본문에서 쓰는 변수만 캡처됨
+- 기본 캡처와 함께 변수마다 방식을 고를 수 있음. 기본 캡처가 있다면 목록의 맨 앞이어야 함
+
+| 캡처 블록 | 뜻 |
+| --- | --- |
+| `[&x]` | `x`만 참조로 |
+| `[x]` | `x`만 값으로 |
+| `[=, &x, &y]` | 기본은 값으로, `x`와 `y`만 참조로 |
+| `[&, x]` | 기본은 참조로, `x`만 값으로 |
+| `[&x, &x]` | 오류: 같은 이름 반복 |
+| `[=, x]`, `[&, &x]` | 오류: 기본 캡처와 같은 방식을 다시 적음 |
+
+- 객체의 범위(예: 멤버 함수 안)에서 만든 람다는 `this`를 캡처할 수 있음
+  - `[this]`: 현재 객체(의 포인터)를 캡처. 본문에서 `this->` 없이 멤버에 접근함. 람다를 마지막으로 실행할 때까지 객체가 살아 있어야 함
+  - `[*this]` <Badge text="C++17" />: 현재 객체의 **복사본**을 캡처. 람다를 실행할 때 원래 객체가 없을 수 있을 때 유용함
+  - `[=, this]`: 모두 값으로 캡처하고 `this`는 명시적으로. C++20 이전에는 `[=]`가 `this`를 암시적으로 캡처했지만, C++20에서 권장하지 않게 되어 필요하면 `this`를 명시함
+  - `this`를 캡처하면 그 객체의 `public`, `protected`, `private` 멤버에 모두 접근할 수 있음
+- 객체의 데이터 멤버는 따로 캡처할 수 없음(4편의 캡처 표현식으로는 됨)
+
+:::caution
+기본 캡처는 쓰지 않기를 권한다. 본문에서 쓰는 변수만 캡처된다 해도, `=`는 실수로 비싼 복사를 일으키고 `&`는 실수로 둘러싼 범위의 변수를 바꿀 수 있다. 무엇을 어떻게 캡처할지 명시한다.
+:::
+
+:::caution
+전역 변수는 값으로 캡처하라고 해도 언제나 **참조로** 쓰인다(엄밀히는 캡처되지 않고 그냥 이름으로 접근한다). `[=] { global = 2; }`를 실행하면 전역 변수가 바뀐다. `[global]`처럼 명시적으로 캡처하는 것은 표준이 허용하지 않는다(컴파일러에 따라 오류, GCC는 경고). 애초에 전역 변수는 권하지 않는다.
+:::
+
+### 전체 문법
+
+```text
+[캡처 블록] <템플릿 매개변수> requires1 특성1 (매개변수) 지정자 noexcept 특성2
+    -> 반환 타입 requires2 { 본문 }
+```
+
+- 캡처 블록과 본문 말고는 모두 생략할 수 있음
+
+| 부분 | 뜻 |
+| --- | --- |
+| 캡처 블록 | 둘러싼 범위의 변수를 어떻게 본문에서 쓰게 할지 |
+| 템플릿 매개변수 <Badge text="C++20" /> | 매개변수화된 람다(4편) |
+| 매개변수 | 보통 함수와 같음. 없으면 괄호를 생략하거나 `()` |
+| 지정자 | `mutable`, `constexpr`, `consteval` <Badge text="C++20" />, `static` <Badge text="C++23" /> |
+| `noexcept` | 함수 호출 연산자의 `noexcept` |
+| 특성1 <Badge text="C++23" /> | 함수 호출 연산자의 특성(예: `[[nodiscard]]`) |
+| 특성2 | 클로저 타입 자체의 특성 |
+| 반환 타입 | 생략하면 추론 |
+| `requires` 절 <Badge text="C++20" /> | 함수 호출 연산자의 타입 제약(12장) |
+
+- C++23 전에는 `mutable`, `constexpr`, `noexcept`, 특성, 반환 타입, `requires` 절 중 하나라도 쓰면 빈 괄호 `()`를 생략할 수 없었음
+- `constexpr`를 생략해도, 제약을 만족하면 함수 호출 연산자는 암시적으로 `constexpr` <Badge text="C++17" />
+- `static`은 캡처 블록이 빈(상태 없는) 람다에만 씀. 특히 `std::function`이나 `move_only_function`에 담을 때 최적화에 도움이 됨
+
+:::note
+아무것도 캡처하지 않는 람다에는 컴파일러가 함수 포인터로 바꾸는 변환 연산자를 자동으로 만들어 준다. 그래서 함수 포인터를 받는 함수(예: C API의 콜백)에 넘길 수 있다. 캡처가 있는 람다는 바뀌지 않는다.
+:::
+
+<RunCode client:load code={lamCode} />
+
+- 볼 것
+  - 값으로 캡처한 `limit`은 나중에 원본을 30으로 바꿔도 25로 비교
+  - `mutable` 람다는 자기 복사본만 늘려 원본 `calls`는 0
+  - `std::function` 데이터 멤버에 서로 다른 람다를 바꿔 담음. 참조로 캡처한 `alarms`가 1
+  - `[this]`로 멤버에 접근, 캡처 없는 람다를 함수 포인터에 대입
+  - `unique_ptr`를 캡처한 람다는 `move_only_function`에만 담을 수 있음
+  - 람다를 알고리즘(`count_if`)의 조건자로
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `move_only_function`, `static` 람다, 람다의 특성1, `()` 생략 확대 | C++23 | 복사 가능한 콜백만, `std::shared_ptr`로 감싸 복사 가능하게 |
+| 템플릿 람다, `consteval` 람다, `[=, this]` 권장 | C++20 | 제네릭 람다(C++14), `[=]` |
+| `[*this]`, 암시적 `constexpr` 람다, `std::function` 인수 추론 | C++17 | 복사본을 지역 변수로 만들어 캡처 |
+| 람다, `std::function` | C++11 | 함수 객체 클래스, 함수 포인터 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={lamCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 값으로 캡처한 변수는 람다를 부를 때의 값을 쓴다?
+  - 람다를 **만들 때** 복사됨. 그 뒤 원본이 바뀌어도 모름
+- 값으로 캡처한 변수를 본문에서 고칠 수 있다?
+  - `operator()`가 `const`라 안 됨. `mutable`이면 복사본만 고침
+- `[&]`로 캡처한 람다를 함수에서 돌려줘도 된다?
+  - 지역 변수가 사라진 뒤 참조가 매달림(정의되지 않은 동작). 값으로 캡처하거나 4편의 캡처 표현식으로 옮김
+- `auto f{ announce };`도 `std::function`이다?
+  - 함수 포인터. `std::function`이 필요하면 타입을 적음
+- `[=]`면 전역 변수도 복사된다?
+  - 전역 변수는 캡처되지 않고 그대로 접근됨
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `std::function<R(Args...)>` | 호출할 수 있는 무엇이든 담음. 데이터 멤버로 콜백 저장에 좋음 |
+| `std::move_only_function` | C++23. 이동만 되는 콜백, `const`·`noexcept` 지정 |
+| 람다 | `[캡처](매개변수) -> 반환 { 본문 }`. 클로저(함수 객체)로 바뀜 |
+| 캡처 | `[x]` 값, `[&x]` 참조, `[=]`/`[&]` 기본, `[this]`, `[*this]` |
+| `mutable` | 값으로 캡처한 복사본을 고치게 함 |
+| 함수 포인터로 | 캡처 없는 람다만 |
+
+## 복습 질문
+
+<details>
+<summary>버튼 클릭 때 부를 콜백을 클래스에 저장하려면 데이터 멤버 타입을 무엇으로 하는가?</summary>
+
+- `std::function<void()>`(이동만 되는 콜백도 받으려면 C++23 `std::move_only_function<void()>`)
+
+</details>
+
+<details>
+<summary>다음 코드의 출력은?</summary>
+
+```cpp
+int x{ 1 };
+auto f{ [x] { return x; } };
+auto g{ [&x] { return x; } };
+x = 5;
+std::println("{} {}", f(), g());
+```
+
+- `1 5`. `f`는 만들 때의 복사본 1, `g`는 참조로 원본 5
+
+</details>
+
+<details>
+<summary>멤버 함수 안에서 만든 람다를 비동기로 나중에 실행하는데, 그때 객체가 이미 사라졌을 수 있다. 어떻게 캡처하는가?</summary>
+
+- `[*this]`(C++17)로 객체의 복사본을 캡처함. `[this]`는 매달린 포인터가 됨
+
+</details>
