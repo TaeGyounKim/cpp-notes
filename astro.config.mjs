@@ -57,6 +57,7 @@ const parts = [
 			chapter('21장. 문자열 지역화와 정규식', 'part3/ch21'),
 			chapter('22장. 날짜와 시간 도구', 'part3/ch22'),
 			chapter('23장. 난수 기능', 'part3/ch23'),
+			chapter('24장. 그 밖의 어휘 타입', 'part3/ch24'),
 		],
 	},
 ];
