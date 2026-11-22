@@ -48,6 +48,7 @@ const parts = [
 			chapter('12장. 템플릿으로 제네릭 코드 쓰기', 'part3/ch12'),
 			chapter('13장. C++ 입출력 자세히 보기', 'part3/ch13'),
 			chapter('14장. 오류 처리', 'part3/ch14'),
+			chapter('15장. 연산자 오버로딩', 'part3/ch15'),
 		],
 	},
 ];
