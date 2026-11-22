@@ -1,5 +1,5 @@
 // 실행 예제를 사이트와 같은 조건(Compiler Explorer, GCC 16.2, -std=c++23 -Wall -Wextra)으로 실행해 본다.
-// 사용법: node scripts/run-example.mjs <파일.cpp ...> [--stdin "값"] [--std c++11]
+// 사용법: node scripts/run-example.mjs <파일.cpp ...> [--stdin "값"] [--std c++11] [--extra "-fsanitize=address"]
 import { readFile } from 'node:fs/promises';
 
 const args = process.argv.slice(2);
@@ -7,6 +7,8 @@ const at = args.indexOf('--stdin');
 const stdin = at >= 0 ? args.splice(at, 2)[1] + '\n' : '';
 const stdAt = args.indexOf('--std');
 const std = stdAt >= 0 ? args.splice(stdAt, 2)[1] : 'c++23';
+const extraAt = args.indexOf('--extra');
+const extra = extraAt >= 0 ? ' ' + args.splice(extraAt, 2)[1] : '';
 const text = (rows) => (rows ?? []).map((r) => r.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')).join('\n');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -19,7 +21,7 @@ const request = (source) =>
 			lang: 'c++',
 			allowStoreCodeDebug: false,
 			options: {
-				userArguments: `-std=${std} -Wall -Wextra`,
+				userArguments: `-std=${std} -Wall -Wextra${extra}`,
 				executeParameters: { args: [], stdin },
 				compilerOptions: { executorRequest: true },
 				filters: { execute: true },
