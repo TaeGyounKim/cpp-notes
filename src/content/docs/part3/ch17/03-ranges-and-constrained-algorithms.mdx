@@ -1,0 +1,179 @@
+---
+title: 범위와 제약된 알고리즘
+description: 반복자 위의 추상화인 범위 라이브러리의 구성, 범위 접근 함수, 반복자 쌍 대신 범위를 받는 제약된 알고리즘, 원소를 비교 전에 다른 값으로 바꾸는 프로젝션을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import conCode from '../../../../examples/ch17/constrained.cpp?raw';
+import conCpp11Code from '../../../../examples/ch17/constrained-cpp11.cpp?raw';
+
+- 다루는 것: 반복자 쌍 대신 컨테이너를 통째로 넘기는 알고리즘
+- 이 글에서 배우는 요소: 범위 라이브러리의 구성 요소, 범위 접근 함수, 제약된 알고리즘, 프로젝션
+
+## 범위 라이브러리
+
+- 반복자 덕분에 알고리즘은 실제 컨테이너와 독립적으로 동작함. 하지만 늘 시작·끝 반복자 **두 개**를 넘겨야 함
+  - 번거롭고, 서로 다른 컨테이너의 반복자를 짝짓는 실수가 생길 수 있음
+- **범위 라이브러리** (ranges library) <Badge text="C++20" />: 반복자 위의 추상화 계층. `<ranges>` <CppRef path="cpp/ranges" />
+  - 반복자를 잘못 짝짓는 오류를 없앰
+  - 범위 어댑터로 바탕 원소를 **게으르게** 거르고 변환하는 기능을 더함
+
+| 구성 요소 | 뜻 | 다루는&nbsp;곳 |
+| --- | --- | --- |
+| **범위** (range) | 원소를 훑을 수 있는 타입의 요구 사항을 정한 콘셉트(12장). `begin()`과 `end()`를 지원하면 범위. `std::array`, `vector`, `string_view`, `span`, 크기가 정해진 C 배열 등 | 이 글 |
+| **제약된 알고리즘** (constrained algorithm) | 반복자 쌍 또는 범위를 받는 알고리즘. 대부분의 표준 알고리즘에 있음 | 이 글 |
+| **프로젝션** (projection) | 원소를 알고리즘에 넘기기 전에 다른 값으로 바꾸는 콜백 | 이 글 |
+| **뷰** (view) | 바탕 범위의 원소를 변환하거나 거름. 이어 붙여 파이프라인을 만듦 | 4편 |
+| **범위 팩토리** (range factory) | 필요할 때 값을 만들어 내는 뷰를 만듦 | 5편 |
+
+### 범위 접근 함수
+
+- 범위의 반복자는 `std::ranges::begin()`, `end()`, `rbegin()` 등으로 얻음 <CppRef path="cpp/ranges/begin" />
+- 그 밖에 `ranges::empty()`, `data()`, `cdata()`, `size()`
+  - `ranges::size()`는 **상수 시간**에 크기를 알 수 있을 때만 됨. 아니면 `std::ranges::distance()`나 `std::distance()`로 셈
+- 모두 멤버 함수가 아니라 **범위를 인수로 받는 독립 함수**
+- `std::format()`, `print()`, `println()`은 범위를 그대로 서식화·출력함 <Badge text="C++23" />. 예: 벡터 `v`를 `std::println("{}", v)`로 출력
+
+## 제약된 알고리즘
+
+- 예전 방식: `std::sort(std::begin(data), std::end(data));`
+  - 원하는 일(모든 원소 정렬)보다 반복자 지정이 앞에 나옴
+- **제약된 알고리즘**: `std::ranges` 네임스페이스에 있고, 대응하는 제약되지 않은 판과 **같은 헤더**에 정의됨 <CppRef path="cpp/algorithm/ranges" />
+
+```cpp
+std::ranges::sort(data);   // 의도가 분명함
+```
+
+- 장점
+  - 의도가 분명함. 반복자를 직접 쓰지 않으므로 짝이 맞지 않는 반복자를 넘길 수 없음
+  - 템플릿 타입 매개변수에 콘셉트 제약이 있어 잘못된 컨테이너를 넘기면 **오류 메시지가 분명함**
+- 반복자처럼 범위도 범주가 있음: 입력·출력·순방향·양방향·임의 접근·연속 범위. 콘셉트 `ranges::input_range`, …, `ranges::random_access_range`, `ranges::contiguous_range`
+- 예: `std::list`에 `std::ranges::sort()`를 쓰면 GCC는 호출할 수 있는 `sort`가 없다고 알리고, 후보의 요구 조건으로 `random_access_range`를 보여 줌
+
+```text
+error: no match for call to '(const std::ranges::__sort_fn)
+                            (std::__cxx11::list<int>&)'
+note: ... requires (random_access_range<_Range>) && ...
+```
+
+- 1편의 제약되지 않은 `std::sort` 오류(`operator-`가 없다)보다 원인(임의 접근 범위가 아님)에 가까움
+
+:::tip
+대부분의 표준 알고리즘에는 `std::ranges`에 제약된 판이 있다. 가능하면 늘 제약된 판을 쓴다. 타입 제약 덕분에 잘못 썼을 때 더 나은 오류 메시지를 받는다.
+:::
+
+## 프로젝션
+
+- 많은 제약된 알고리즘에 **프로젝션** 매개변수가 있음. 각 원소를 알고리즘에 넘기기 **전에** 다른 값으로 바꾸는 콜백 <CppRef path="cpp/algorithm/ranges/sort" />
+- 예: 방 이름과 온도를 가진 `Sensor` 클래스에 `operator<`가 없다면
+  - `std::sort(begin, end)`는 원소를 `<`로 비교하므로 컴파일되지 않음
+  - `std::ranges::sort(sensors)`도 비교할 방법을 모르므로 컴파일되지 않음
+- 프로젝션으로 각 `Sensor`를 방 이름으로 "투영"해서 그 값으로 정렬함
+
+```cpp
+std::ranges::sort(sensors, {},
+                  [](const Sensor& s) { return s.room(); });
+// 멤버 함수 포인터도 됨
+std::ranges::sort(sensors, {}, &Sensor::room);
+```
+
+- 프로젝션은 **세 번째** 매개변수. 두 번째인 비교자도 써야 함
+  - `{}`는 기본 비교자 `std::ranges::less`를 쓴다는 뜻
+  - 내림차순이면 `std::ranges::greater{}`
+- 프로젝션 자리에는 람다, 멤버 함수 포인터, 데이터 멤버 포인터(`&Sensor::m_room`처럼, 접근할 수 있다면) 등 `std::invoke`로 부를 수 있는 것이면 무엇이든 옴
+- `ranges::find`, `ranges::min_element`, `ranges::count` 등도 프로젝션을 받음. `std::ranges::find(sensors, "거실", &Sensor::room)`은 방 이름이 `"거실"`인 원소를 찾음
+
+### 람다 표현식 미리 보기
+
+- 이 장에서는 간단한 **람다 표현식** (lambda expression)을 씀. 자세한 것은 19장
+- 필요한 자리에 쓰는 이름 없는 작은 인라인 함수
+
+```cpp
+[](const Sensor& s) { return s.room(); }
+// [] : 람다의 시작
+// (const Sensor& s) : 함수처럼 매개변수 목록
+// { ... } : 본문
+```
+
+- 다음 독립 함수와 하는 일이 같음
+
+```cpp
+auto roomOf(const Sensor& s) { return s.room(); }
+```
+
+- 매개변수 타입을 `auto`로 쓸 수도 있음: `[](const auto& s) { return s.room(); }`
+
+<RunCode client:load code={conCode} />
+
+- 볼 것
+  - `std::ranges::sort(data)`, `std::ranges::size(raw)`처럼 범위를 통째로 넘김. C 배열도 범위
+  - 방 이름 프로젝션으로 정렬하면 거실, 부엌, 침실 순
+  - 비교자 `ranges::greater{}`와 온도 프로젝션으로 가장 따뜻한 곳이 맨 앞
+  - 주석 처리한 `std::ranges::sort(linked)`의 주석을 풀고 실행해 오류 메시지를 볼 것
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 범위를 출력하는 `println("{}", v)` | C++23 | 반복문으로 출력 |
+| 범위 라이브러리, 제약된 알고리즘, 프로젝션 | C++20 | 반복자 쌍과, 투영한 값을 비교하는 비교자 람다 |
+| 람다 표현식 | C++11 | 함수 객체 클래스 |
+
+- 프로젝션 없이 같은 일을 하려면 두 원소를 받는 비교자 안에서 직접 값을 꺼내 비교함(아래 코드 19번 줄)
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={conCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::ranges::sort(sensors, &Sensor::room)`처럼 프로젝션만 넘기면 된다?
+  - 두 번째 매개변수는 비교자. 프로젝션은 세 번째라 `{}`로 기본 비교자를 채워야 함
+- 프로젝션은 원소를 바꾼다?
+  - 비교에 쓸 값만 만들 뿐, 정렬되는 것은 원래 원소
+- `std::ranges::size()`는 어떤 범위에도 된다?
+  - 상수 시간에 크기를 알 수 있는 범위만. 아니면 `std::ranges::distance()`
+- 제약된 알고리즘은 다른 헤더에 있다?
+  - 대응하는 제약되지 않은 판과 같은 헤더(예: `<algorithm>`)
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 범위 | `begin()`/`end()`를 지원하는 것. 콘셉트 |
+| 범위 접근 함수 | `ranges::begin`, `end`, `size`, `empty`, `data` 등. 독립 함수 |
+| 제약된 알고리즘 | `std::ranges::sort(v)`. 짝 오류 없음, 분명한 오류 메시지 |
+| 범위 범주 | `input_range` … `random_access_range`, `contiguous_range` |
+| 프로젝션 | 세 번째 매개변수. `ranges::sort(v, {}, &T::member)` |
+
+## 복습 질문
+
+<details>
+<summary>`std::vector<Sensor>`에서 온도가 가장 낮은 센서를 프로젝션으로 찾으려면?</summary>
+
+```cpp
+auto it{ std::ranges::min_element(sensors, {}, &Sensor::celsius) };
+```
+
+</details>
+
+<details>
+<summary>`std::ranges::sort(v, {}, f)`에서 `{}`는 무엇인가?</summary>
+
+- 두 번째 매개변수인 비교자를 기본값(`std::ranges::less`)으로 채운 것. 프로젝션이 세 번째라서 필요함
+
+</details>
+
+<details>
+<summary>`std::forward_list`를 `std::ranges::sort`로 정렬할 수 없는 이유는? 대신 무엇을 쓰는가?</summary>
+
+- `ranges::sort`는 `random_access_range`를 요구하지만 `forward_list`는 순방향 범위
+- 멤버 함수 `forward_list::sort()`를 씀
+
+</details>
