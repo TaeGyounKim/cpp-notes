@@ -1,0 +1,209 @@
+---
+title: 함수 포인터와 멤버 포인터
+description: 함수를 값처럼 다루는 일급 함수와 콜백, 함수 포인터 선언과 타입 별칭, 함수를 받는 고차 함수와 그것을 함수 템플릿으로 바꾸는 법, 동적 라이브러리의 함수 포인터, 멤버 함수와 데이터 멤버를 가리키는 포인터와 .*·->* 연산자를 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import fpCode from '../../../../examples/ch19/fn-pointers.cpp?raw';
+import fpCpp11Code from '../../../../examples/ch19/fn-pointers-cpp11.cpp?raw';
+
+- 다루는 것: 함수를 다른 함수에 넘겨 동작을 바꾸게 하는 법. 다음 장(20장)의 알고리즘이 대부분 이렇게 동작함
+- 이 글에서 배우는 요소: 일급 함수, 콜백, 함수 포인터, 고차 함수, 멤버 포인터
+
+## 일급 함수와 콜백
+
+- C++의 함수는 **일급 함수** (first-class function): 보통 변수처럼 쓸 수 있음
+  - 다른 함수의 인수로 넘기고, 함수에서 돌려주고, 변수에 대입할 수 있음
+- **콜백** (callback): 호출할 수 있는 무언가. 다음 중 하나
+  - 함수 포인터
+  - 함수 포인터처럼 동작하는 것: `operator()`를 오버로드한 객체(2편), 인라인 람다 표현식(3편)
+- `operator()`를 오버로드한 클래스를 **함수 객체** (function object), 줄여서 **펑터** (functor)라 함
+- 표준 라이브러리는 콜백 객체를 만들고 기존 콜백을 바꾸는 클래스들을 제공함
+- 람다 표현식은 필요한 자리에서 바로 작은 인라인 콜백을 만들게 해 줘 읽기 쉽고 고치기 쉬운 코드가 됨
+
+## 함수 포인터
+
+- 함수는 메모리의 특정 주소에 있음. C++에서는 함수의 주소를 얻어 변수처럼 쓸 수 있음 <CppRef path="cpp/language/pointer" />
+- **함수 포인터** (function pointer)의 타입은 호환되는 함수의 매개변수 타입들과 반환 타입으로 정해짐
+  - `int` 둘을 받아 `bool`을 돌려주는 함수를 가리킬 수 있는 변수 `fun`:
+
+```cpp
+bool (*fun)(int, int){ nullptr };   // 초기화하지 않은 데이터는 피함
+```
+
+- `*fun`을 감싸는 괄호를 빼먹으면 변수가 아니라 `int` 둘을 받아 `bool*`를 돌려주는 함수 `fun`의 선언이 됨
+- 대입과 호출
+
+```cpp
+fun = &same;          // &는 생략해도 됨. 함수 이름만 쓰면 주소로 바뀜
+bool r{ fun(3, 3) };  // 보통 함수처럼 부름
+```
+
+### 타입 별칭
+
+- 함수 포인터 타입은 읽기 어려우므로 **타입 별칭**을 붙임. 주어진 특성을 가진 함수들의 집합에 이름을 주는 셈
+
+```cpp
+using Matcher = bool (*)(int, int);              // int 둘 → bool
+using MatchHandler = void (*)(std::size_t, int, int);
+```
+
+### 고차 함수
+
+- **고차 함수** (higher-order function): 다른 함수를 매개변수로 받거나 함수를 돌려주는 함수
+- 예: 두 측정값 나열을 같은 위치끼리 비교해, 조건(`Matcher`)에 맞으면 처리기(`MatchHandler`)를 부르는 함수
+
+```cpp
+void compareReadings(std::span<const int> a, std::span<const int> b,
+                     Matcher matcher, MatchHandler handler)
+{
+    if (a.size() != b.size()) { return; }
+    for (std::size_t i{ 0 }; i < a.size(); ++i) {
+        if (matcher(a[i], b[i])) { handler(i, a[i], b[i]); }
+    }
+}
+```
+
+- `Matcher` 타입에 맞는 함수(같은지, 둘 다 30 이상인지 등)를 넘기기만 하면 같은 함수가 다른 기준으로 비교함
+  - 이렇게 콜백으로 동작을 맞춤으로써 아주 일반적이고 설정 가능한 코드를 쓸 수 있음. 표준 알고리즘이 강력한 이유
+
+### 함수 템플릿으로
+
+- 함수 포인터 매개변수를 명시하지 않아도 됨. 함수 템플릿으로 만들면 함수 포인터뿐 아니라 함수 객체, 람다도 받음
+
+```cpp
+template <typename Matcher, typename MatchHandler>
+void compareReadings(std::span<const int> a, std::span<const int> b,
+                     Matcher matcher, MatchHandler handler);
+```
+
+- 더 나은 판: 콘셉트(12장)로 제약 <Badge text="C++20" />
+  - `std::predicate<int, int>`: `int` 둘로 부를 수 있고 불리언을 돌려주는 콜백 <CppRef path="cpp/concepts/predicate" />
+  - `std::invocable<std::size_t, int, int>`: 그 인수들로 부를 수 있는 콜백 <CppRef path="cpp/concepts/invocable" />
+- 축약 함수 템플릿 문법으로 쓰면 템플릿 머리가 없어 더 깔끔함
+
+```cpp
+void compareAny(std::span<const int> a, std::span<const int> b,
+                std::predicate<int, int> auto matcher,
+                std::invocable<std::size_t, int, int> auto handler);
+```
+
+- 함수 템플릿 인수 추론 덕분에 부르는 쪽 코드는 함수 포인터 판과 같음
+
+:::note
+명시적인 함수 포인터 매개변수보다 (제약된) 함수 템플릿이나 축약 함수 템플릿으로 구현하는 것을 권한다.
+:::
+
+### 동적 라이브러리의 함수
+
+- 함수 포인터의 흔한 쓰임: **동적 링크 라이브러리**에서 함수를 실행 중에 꺼냄
+  - 예: Windows에서 `LoadLibraryA()`로 라이브러리를 불러오고 `GetProcAddress()`로 함수의 주소를 얻어, 알맞은 함수 포인터 타입으로 바꿔 부름. 실패하면 `nullptr`
+  - Linux·macOS에서는 `dlopen()`, `dlsym()`이 같은 역할
+- 함수의 정확한 원형을 알아야 함수 포인터 타입 별칭을 만들 수 있음
+- 플랫폼별 내용이라 이 사이트에서는 자세히 다루지 않음
+
+## 멤버 함수와 데이터 멤버를 가리키는 포인터
+
+- 클래스의 데이터 멤버와 멤버 함수의 주소를 얻는 것도 완전히 정당함 <CppRef path="cpp/language/pointer" />
+- 하지만 `static`이 아닌 데이터 멤버와 멤버 함수는 **객체 없이는** 접근하거나 부를 수 없음. 객체마다 존재하기 때문
+  - 그래서 포인터를 **객체의 문맥에서** 역참조함: `.*`(객체), `->*`(객체 포인터)
+
+```cpp
+int (Sensor::*getter)() const{ &Sensor::reading };
+Sensor kitchen{ "kitchen" };
+int a{ (kitchen.*getter)() };
+Sensor* ptr{ &kitchen };
+int b{ (ptr->*getter)() };
+```
+
+- 첫 줄: 인수가 없고 `int`를 돌려주는 `Sensor`의 `const` 멤버 함수를 가리키는 포인터 `getter`를 선언하고 `reading()`으로 초기화함
+  - 보통 함수 포인터와 비슷하지만 `*getter` 앞에 `Sensor::`가 붙음
+  - 여기서는 `&`가 **꼭 필요함**
+- `(kitchen.*getter)()`의 괄호가 필요한 이유: `()`가 `.*`보다 우선순위가 높음
+- 읽기 쉽게: 타입 별칭이나 `auto`
+
+```cpp
+using PtrToGet = int (Sensor::*)() const;
+PtrToGet p1{ &Sensor::reading };
+auto p2{ &Sensor::reading };
+```
+
+- 데이터 멤버 포인터도 같음: `int Sensor::*field{ &Sensor::offset }; kitchen.*field = 5;`
+- `.*`, `->*` 문법은 2편의 `std::mem_fn()`이나 4편의 `std::invoke()`로 피할 수 있음
+- 일상에서 자주 쓰지는 않음. 다만 `static`이 아닌 멤버의 포인터는 **객체 없이 역참조할 수 없다**는 것을 기억할 것
+  - 예: 함수 포인터를 요구하는 C 함수 `qsort()`에 `static`이 아닌 멤버 함수의 포인터를 넘길 수 없음
+  - `static` 데이터 멤버나 `static` 멤버 함수의 포인터는 객체 없이 역참조할 수 있음(보통 포인터와 같음)
+
+<RunCode client:load code={fpCode} />
+
+- 볼 것
+  - 같은 `compareReadings()`가 `same`과 `bothHot`으로 다른 결과를 냄
+  - 제약된 템플릿 판도 같은 결과
+  - 멤버 함수 포인터를 객체(`.*`)와 포인터(`->*`)로 부름
+  - 데이터 멤버 포인터로 `offset`을 고침
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::span`, `std::predicate`, `std::invocable`, 축약 함수 템플릿 | C++20 | `const std::vector<int>&`, 제약 없는 템플릿 |
+| `using` 타입 별칭 | C++11 | `typedef bool (*Matcher)(int, int);` |
+
+- 함수 포인터와 멤버 포인터 자체는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={fpCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `bool *fun(int, int);`은 함수 포인터 변수다?
+  - `bool*`를 돌려주는 함수의 선언. 변수는 `bool (*fun)(int, int);`
+- 멤버 함수 포인터도 `&` 없이 이름만 쓰면 된다?
+  - 멤버 함수는 `&Sensor::reading`처럼 `&`가 필요함
+- `kitchen.*getter()`로 부른다?
+  - `()`가 먼저 묶이므로 `(kitchen.*getter)()`
+- 멤버 함수 포인터를 일반 함수 포인터 자리에 넘길 수 있다?
+  - 객체가 있어야 부를 수 있어 타입이 다름. 람다로 감싸거나 `std::mem_fn`(2편)
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 일급 함수 | 함수를 넘기고, 돌려주고, 대입함 |
+| 콜백 | 함수 포인터, 함수 객체, 람다 |
+| 함수 포인터 | `bool (*fun)(int, int)`. `using Matcher = bool (*)(int, int);` |
+| 고차 함수 | 함수를 받거나 돌려줌. 함수 템플릿 + 콘셉트가 권장 |
+| 멤버 포인터 | `int (C::*p)() const{ &C::f }`, `(obj.*p)()`, `(ptr->*p)()`, 데이터 멤버 `int C::*` |
+
+## 복습 질문
+
+<details>
+<summary>`double`을 받아 `double`을 돌려주는 함수를 가리키는 포인터 타입에 별칭 `Transform`을 붙이려면?</summary>
+
+- `using Transform = double (*)(double);`
+
+</details>
+
+<details>
+<summary>`std::vector<Sensor> sensors`의 모든 원소에 멤버 함수 포인터 `p`(`int (Sensor::*)() const`)를 적용해 합을 구하려면?</summary>
+
+```cpp
+int sum{ 0 };
+for (const auto& s : sensors) { sum += (s.*p)(); }
+```
+
+</details>
+
+<details>
+<summary>콜백을 `bool (*)(int, int)`로 받는 함수에 람다 `[limit](int a, int b) { return a > limit; }`를 넘길 수 있는가?</summary>
+
+- 없음. 캡처가 있는 람다는 함수 포인터로 바뀌지 않음(3편). 함수 템플릿이나 `std::function`(3편)으로 받게 바꿈
+
+</details>
