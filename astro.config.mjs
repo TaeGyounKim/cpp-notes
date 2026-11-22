@@ -53,6 +53,7 @@ const parts = [
 			chapter('17장. 반복자와 범위 라이브러리', 'part3/ch17'),
 			chapter('18장. 표준 라이브러리 컨테이너', 'part3/ch18'),
 			chapter('19장. 함수 포인터, 함수 객체, 람다 표현식', 'part3/ch19'),
+			chapter('20장. 표준 라이브러리 알고리즘', 'part3/ch20'),
 		],
 	},
 ];

@@ -1,0 +1,203 @@
+---
+title: 알고리즘 개요와 콜백
+description: 반복자로 컨테이너와 분리된 표준 알고리즘의 동작 방식, 반복자 요구 사항, find·find_if로 찾기, accumulate로 합과 곱 구하기, 알고리즘의 이동 의미론, 알고리즘이 콜백을 복사한다는 점과 std::ref로 막는 법을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import abCode from '../../../../examples/ch20/algo-basics.cpp?raw';
+import abCpp11Code from '../../../../examples/ch20/algo-basics-cpp11.cpp?raw';
+
+- 다루는 것: 16장에서 훑어본 표준 알고리즘을 실제로 쓰는 법. 이 장(20장)은 분류별로 대표적인 것을 예제로 다룸
+- 이 글에서 배우는 요소: 알고리즘의 동작 방식, `find`, `find_if`, `accumulate`, 이동 의미론, 콜백의 복사
+
+## 알고리즘의 동작 방식
+
+- 제약되지 않은 알고리즘의 "마법": 컨테이너 자체가 아니라 **반복자**라는 중개자를 다룸. 그래서 특정 컨테이너 구현에 묶이지 않음 <CppRef path="cpp/algorithm" />
+- 모든 표준 라이브러리 알고리즘은 **함수 템플릿**. 템플릿 타입 매개변수는 보통 반복자 타입이고, 반복자는 함수 인수로 넘김
+  - 함수 템플릿은 인수에서 템플릿 타입을 추론하므로 보통 함수처럼 부를 수 있음
+- 대부분 알고리즘은 적용할 **원본 순서열**이 필요함
+  - 제약되지 않은 알고리즘에서는 시작·끝 반복자 쌍, 즉 **공통 범위**로 줌(17장)
+  - 반열린 범위: 첫 원소는 포함하고 끝은 포함하지 않음. 끝 반복자는 사실 "끝 다음" 표시
+- 알고리즘은 넘긴 반복자에 **요구 사항**이 있음
+  - 예: 마지막 원소부터 다른 순서열로 복사하는 `copy_backward()`는 양방향 반복자, 같은 원소의 순서를 지키며 정렬하는 `stable_sort()`는 임의 접근 반복자가 필요함
+  - 그래서 순방향 반복자만 주는 `forward_list`에는 둘 다 쓸 수 없음
+- 대부분 `<algorithm>`에, 일부 수치 알고리즘은 `<numeric>`에 있음. 모두 `std` 네임스페이스
+- 대부분 `constexpr`이라 `constexpr` 함수 구현에도 쓸 수 있음 <Badge text="C++20" />. 정확히 어느 것인지는 참고 자료로 확인
+
+## find와 find_if
+
+- `std::find(first, last, value)`: 범위에서 값과 같은 첫 원소를 찾음 <CppRef path="cpp/algorithm/find" />
+  - 어떤 컨테이너의 원소에나 쓸 수 있음
+  - 찾으면 그 원소를 참조하는 반복자, 못 찾으면 범위의 끝 반복자를 돌려줌
+  - 범위는 컨테이너 전체가 아니라 일부여도 됨
+
+:::caution
+`find()`가 원소를 찾지 못하면 바탕 컨테이너의 끝 반복자가 아니라 **호출할 때 넘긴** 끝 반복자와 같은 반복자를 돌려준다.
+:::
+
+```cpp
+if (auto it{ std::find(v.cbegin(), v.cend(), 36.5) }; it == v.cend()) {
+    std::println("36.5 없음");
+} else {
+    std::println("36.5는 {}번째", it - v.cbegin());
+}
+```
+
+- `if` 초기화문(C++17)으로 찾기와 검사를 한 문장에 씀
+
+:::caution
+컨테이너가 일반 알고리즘과 같은 기능의 멤버 함수를 제공하면 멤버 함수를 쓴다. 더 빠르다. 예: 일반 `find()`는 `map`에서도 선형 시간이지만 `map`의 멤버 `find()`는 로그 시간이다.
+:::
+
+- `std::find_if(first, last, pred)`: 값 대신 `true`/`false`를 돌려주는 **조건자** 콜백을 받음
+  - 범위의 각 원소에 조건자를 부르다가 `true`가 나오면 그 원소의 반복자를 돌려줌
+  - 조건자로 함수 포인터, 함수 객체, 람다를 줄 수 있음
+
+```cpp
+bool isFever(double t) { return t >= 37.5; }
+auto it{ std::find_if(v.cbegin(), v.cend(), isFever) };
+auto it2{ std::find_if(v.cbegin(), v.cend(), [](double t) { return t >= 37.5; }) };
+```
+
+- <Badge text="C++23" /> `static operator()`를 가진 함수 객체라면 `&IsFever::operator()`처럼 그 함수의 포인터를 넘길 수도 있음
+
+## accumulate
+
+- `<numeric>`(`<algorithm>`이 아님)의 `std::accumulate(first, last, init)`: 범위 원소의 합 <CppRef path="cpp/algorithm/accumulate" />
+  - 세 번째 매개변수가 합의 **시작값**. 덧셈의 항등원 0, 소수점 계산이면 0.0
+
+```cpp
+double mean(std::span<const double> v)
+{
+    return std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+}
+```
+
+:::caution
+시작값의 타입이 결과 타입이 된다. `double`을 더하면서 시작값을 `0`(`int`)으로 주면 매 단계 `int`로 잘린다. 0.0을 준다.
+:::
+
+- 두 번째 오버로드: 덧셈 대신 할 **이항 연산** 콜백을 받음
+  - 예: 기하 평균(모든 수의 곱을 원소 수의 역수만큼 거듭제곱). 곱셈의 항등원 1에서 시작
+
+```cpp
+int product{ std::accumulate(v.begin(), v.end(), 1, std::multiplies<>{}) };
+double geo{ std::pow(product, 1.0 / v.size()) };
+```
+
+- 콜백으로 별도 함수, 람다(`[](int a, int b) { return a * b; }`), 투명 함수 객체 `std::multiplies<>`(19장)를 모두 쓸 수 있음
+
+## 알고리즘과 이동 의미론
+
+- 표준 컨테이너처럼 표준 알고리즘도 적절할 때 **이동 의미론**을 씀. 비쌀 수 있는 복사 대신 객체를 옮김
+  - 예: 3편의 `remove()`가 크게 빨라짐
+- 그래서 컨테이너에 담을 클래스에는 이동 생성자와 이동 대입 연산자를 구현하길 강력히 권함
+  - 18장처럼 둘 다 `noexcept`여야 표준 컨테이너와 알고리즘이 씀(9장)
+
+## 알고리즘 콜백
+
+:::caution
+알고리즘은 넘겨받은 콜백(함수 객체, 람다)을 **여러 번 복사**하고, 원소마다 다른 복사본을 부를 수 있다.
+:::
+
+- 그래서 콜백의 부작용에 강한 제약이 생김. 기본적으로 콜백은 **상태가 없어야** 함
+  - 함수 객체는 함수 호출 연산자가 `const`여야 하고, 호출 사이에 내부 상태가 일관되리라 기대하면 안 됨
+  - 람다는 `mutable`이면 안 됨
+- 예외
+  - `generate()`, `generate_n()`은 상태 있는 콜백을 받을 수 있음. 하지만 콜백을 한 번 복사하고 그 복사본을 돌려주지 않아, 끝난 뒤 바뀐 상태를 볼 수 없음
+  - `for_each()`만 유일하게 콜백을 한 번 복사해 쓰고, 끝나면 그 복사본을 **돌려줌**. 돌려받은 값으로 바뀐 상태에 접근함(4편)
+- 콜백이 복사되지 않게 하려면 `std::ref()`로 콜백의 **참조**를 넘김. 알고리즘이 늘 같은 콜백을 씀
+
+```cpp
+auto counted{ [n = 0](double t) mutable { ++n; return t >= 37.5; } };
+std::find_if(v.cbegin(), v.cend(), counted);             // 복사본의 n이 늘어남
+std::find_if(v.cbegin(), v.cend(), std::ref(counted));   // counted의 n이 늘어남
+```
+
+- 또는 람다가 바깥 변수를 **참조로** 캡처해 세게 함. 복사돼도 같은 변수를 가리킴
+
+<RunCode client:load code={abCode} stdin="36.8 36.5 38.2 37.0 0" />
+
+- 볼 것
+  - 입력한 체온 중 36.5의 위치, 처음 두 개에만 38.2가 있는지
+  - `find_if`로 첫 발열
+  - `accumulate`로 평균, `multiplies<>`로 기하 평균(2와 8의 곱 16의 제곱근 4)
+  - `std::ref`로 넘긴 `counted`는 알고리즘 안에서 센 횟수(3번)에 이어 4번째를 셈. 입력을 바꿔 다시 실행해 볼 것
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `static operator()` 함수 객체 | C++23 | 보통 `operator()` |
+| `std::span`, `constexpr` 알고리즘 | C++20 | `const std::vector&`, 실행 시간에만 |
+| `if` 초기화문 | C++17 | 반복자 변수를 미리 선언 |
+| 캡처 표현식 `[n = 0]`, 투명 연산자 `multiplies<>` | C++14 | 바깥 변수를 참조로 캡처, `multiplies<int>` |
+| 람다, `std::ref` | C++11 | 함수 객체 클래스, `boost::ref` |
+
+- `find`, `find_if`, `accumulate`는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={abCpp11Code} flags="-std=c++11 -Wall -Wextra" stdin="36.8 36.5 38.2 37.0 0" />
+
+## 헷갈리기 쉬운 점
+
+- 못 찾으면 `find()`는 `v.end()`를 돌려준다?
+  - 넘겨준 끝 반복자. 일부 범위를 넘겼다면 그 범위의 끝
+- `std::find`로 `map`을 찾는 것이 멤버 `find`와 같다?
+  - 일반 알고리즘은 선형 시간, 멤버는 로그 시간. 게다가 일반 `find`는 키-값 쌍 전체와 비교함
+- `std::accumulate(v.begin(), v.end(), 0)`로 `double`의 합을 구한다?
+  - 시작값이 `int`라 결과도 `int`로 잘림. `0.0`
+- 상태 있는 람다를 알고리즘에 넘기면 원래 람다의 상태가 바뀐다?
+  - 복사본이 쓰일 수 있음. `std::ref`나 참조 캡처
+- `accumulate`는 `<algorithm>`에 있다?
+  - `<numeric>`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 동작 방식 | 함수 템플릿 + 반복자 범위. 반복자 범주 요구 사항이 있음 |
+| `find` / `find_if` | 값 / 조건자로 첫 원소. 없으면 넘긴 끝 반복자 |
+| 멤버 우선 | 같은 기능의 멤버 함수가 있으면 그것이 빠름 |
+| `accumulate` | `<numeric>`. 시작값의 타입이 결과 타입. 이항 연산 콜백 |
+| 이동 | 알고리즘도 이동을 씀. 원소에 `noexcept` 이동을 구현 |
+| 콜백 | 복사될 수 있으니 상태 없이. 필요하면 `std::ref`. `for_each`만 복사본을 돌려줌 |
+
+## 복습 질문
+
+<details>
+<summary>`std::vector<std::string> names`에서 길이가 10을 넘는 첫 이름을 찾으려면?</summary>
+
+```cpp
+auto it{ std::find_if(names.cbegin(), names.cend(),
+                      [](const std::string& s) { return s.size() > 10; }) };
+if (it != names.cend()) { /* *it 사용 */ }
+```
+
+</details>
+
+<details>
+<summary>`std::vector<int> v`의 제곱합을 `accumulate` 한 번으로 구하려면?</summary>
+
+```cpp
+auto addSquare{ [](long long acc, int x) { return acc + 1LL * x * x; } };
+long long sum{ std::accumulate(v.begin(), v.end(), 0LL, addSquare) };
+```
+
+- 시작값 `0LL`로 결과 타입을 `long long`으로 해 넘침을 막음
+
+</details>
+
+<details>
+<summary>`std::set<int> s`에서 7을 찾을 때 `std::find(s.begin(), s.end(), 7)`보다 나은 것은?</summary>
+
+- 멤버 `s.find(7)`(로그 시간) 또는 `s.contains(7)`(C++20)
+
+</details>
