@@ -1,0 +1,173 @@
+---
+title: 재사용을 위한 상속
+description: 소스를 바꿀 수 없는 기존 클래스를 상속해 기능을 더하고, 마음에 들지 않는 동작을 재정의로 바꾸는 예로 상속을 통한 코드 재사용을 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import RunCode from '../../../../components/RunCode.svelte';
+import reuseCode from '../../../../examples/ch10/reuse.cpp?raw';
+import reuseCpp11Code from '../../../../examples/ch10/reuse-cpp11.cpp?raw';
+
+- 다루는 것: 상속이 C++에서 중요한 큰 이유 하나, **기존 코드의 재사용**
+- 이 글에서 배우는 요소: 파생 클래스에서 기능 더하기, 파생 클래스에서 기능 바꾸기
+
+## 예: 외부 라이브러리의 강수량 측정기
+
+- 상황: 강수량을 재고 내일 강수량을 예측하는 프로그램을 써야 함. 밀리미터와 인치를 모두 다뤄야 함
+- 예측은 전문 분야가 아니므로, 다른 회사가 만든 라이브러리를 구함
+  - 예측 알고리즘을 보호하려고 **컴파일된 라이브러리**로만 배포됨. 클래스 정의는 볼 수 있지만 구현은 볼 수도 바꿀 수도 없음
+
+```cpp
+// 강수량을 인치 단위로만 다룬다. 내일 강수량 예측도 해 준다.
+class RainGauge
+{
+public:
+    virtual ~RainGauge();
+    virtual void setTodayInches(double inches);   // 오늘 강수량(인치)
+    virtual double tomorrowInches() const;        // 내일 예측(인치)
+    virtual double chanceOfRain() const;          // 비 올 확률 0~1
+    virtual void showReport() const;              // 결과를 출력
+private:
+    double m_today{ 0.0 };
+};
+```
+
+- 이 클래스는 멤버 함수를 모두 `virtual`로 선언함. 파생 클래스에서 재정의할 수 있다고 가정하기 때문
+- 대부분의 문제를 해결해 주지만, 늘 그렇듯 딱 맞지는 않음
+  - 모든 값이 **인치** 단위. 이 프로그램은 밀리미터도 다뤄야 함
+  - `showReport()`의 출력 모양이 원하는 것과 다름
+
+## 파생 클래스에서 기능 더하기
+
+- 5장에서 처음 본 상속 기법이 기능 더하기
+- 필요한 것은 `RainGauge`와 거의 같고 몇 가지가 더 있는 클래스. 재사용을 위한 상속이 딱 맞는 경우
+
+```cpp
+class MetricRainGauge : public RainGauge
+{
+};
+```
+
+- 이것만으로도 컴파일되고, `RainGauge` 대신 쓸 수 있음. 아직 새 기능이 없을 뿐
+- 밀리미터 지원을 더하려는데 문제가 있음: 클래스가 내부에서 무엇을 하는지 모름. 내부 계산이 모두 인치로 되어 있다면?
+  - 해법: 파생 클래스가 **중개자** 역할을 함. 사용하는 쪽은 어느 단위든 쓰고, 기반 클래스에는 인치로만 전달함
+- 더할 것
+  - 밀리미터로 오늘 강수량을 설정하고, 내일 예측을 밀리미터로 받는 멤버 함수
+  - 단위를 서로 바꾸는 `private` 도우미. 모든 객체에 똑같으므로 `static`
+
+```cpp
+class MetricRainGauge : public RainGauge
+{
+public:
+    virtual void setTodayMillimeters(double mm);
+    virtual double tomorrowMillimeters() const;
+private:
+    static double toInches(double mm);
+    static double toMillimeters(double inches);
+};
+```
+
+- 새 멤버 함수의 이름은 기반 클래스의 이름 규칙을 따름
+  - 사용하는 쪽에서 `MetricRainGauge` 객체는 두 클래스의 기능을 모두 가짐. 같은 규칙이면 일관된 인터페이스가 됨
+- 구현: 단위를 바꾼 뒤 기반 클래스의 기존 기능에 맡김
+
+```cpp
+void MetricRainGauge::setTodayMillimeters(double mm)
+{
+    setTodayInches(toInches(mm));
+}
+
+double MetricRainGauge::tomorrowMillimeters() const
+{
+    return toMillimeters(tomorrowInches());
+}
+```
+
+- 두 함수는 기존 기능을 **감싸서** 새 인터페이스를 제공함. 그래서 기반 클래스를 재사용하는 것
+- 기존 기능과 전혀 관계없는 기능을 더할 수도 있음. 예: 인터넷에서 다른 예보를 받아오는 함수, 예보에 따라 할 일을 추천하는 함수
+
+## 파생 클래스에서 기능 바꾸기
+
+- 상속의 다른 큰 기법: 기존 기능을 **바꾸기**
+- 기반 클래스의 `showReport()`는 손볼 필요가 있음. `MetricRainGauge`가 재정의해 자기 구현으로 바꿈
+
+```cpp
+class MetricRainGauge : public RainGauge
+{
+public:
+    virtual void setTodayMillimeters(double mm);
+    virtual double tomorrowMillimeters() const;
+    void showReport() const override;
+private:
+    static double toInches(double mm);
+    static double toMillimeters(double inches);
+};
+
+void MetricRainGauge::showReport() const
+{
+    std::println("내일 강수량 {:.1f}mm ({:.2f}in)", tomorrowMillimeters(),
+                 tomorrowInches());
+    std::println("비 올 확률 {:.0f}%", chanceOfRain() * 100);
+    if (chanceOfRain() > 0.5) {
+        std::println("우산을 챙기세요!");
+    }
+}
+```
+
+- 이 클래스를 쓰는 쪽에서는 원래의 `showReport()`가 없었던 것과 같음. 객체가 `MetricRainGauge`인 한 새 판이 불림
+  - 기반 클래스 참조로 불러도 마찬가지(`virtual`이므로)
+- 결과: 더 구체적인 목적에 맞춘 새 클래스가 생김. 그런데 기반 클래스의 기존 기능을 활용했으므로 코드는 많이 필요하지 않았음
+
+<RunCode client:load code={reuseCode} />
+
+- 예제에서는 한 파일에 넣으려고 `RainGauge`의 구현까지 적었지만, 실제 상황이라면 이 부분은 볼 수 없는 라이브러리 안에 있음
+
+## 이전 표준에서는
+
+- 이 글의 상속 기법은 처음 표준(C++98)부터 쓸 수 있음. 바뀌는 것은 출력과 몇몇 문법뿐
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `override` | C++11 | 없음 |
+| `std::println`의 서식 지정 `{:.1f}` | C++23 | `std::printf("%.1f", ...)`나 `std::cout`과 `std::setprecision` |
+
+<RunCode client:load code={reuseCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 소스가 없으면 클래스를 고칠 방법이 없다?
+  - 정의만 있으면 상속해 기능을 더하거나, `virtual` 함수를 재정의해 동작을 바꿀 수 있음
+- 기능을 더하려면 기반 클래스의 내부를 알아야 한다?
+  - 기반 클래스의 `public`·`protected` 인터페이스만으로 감싸면 됨. 여기서는 단위를 바꿔 기존 함수에 넘김
+- 재정의한 함수는 파생 클래스 타입으로 부를 때만 쓰인다?
+  - `virtual`이면 기반 클래스 참조나 포인터로 불러도 재정의한 판이 쓰임
+
+## 정리
+
+| 기법 | 방법 | 이 글의 예 |
+| --- | --- | --- |
+| 기능 더하기 | 새 멤버 함수가 기존 기능을 감쌈 | 밀리미터 단위 설정·조회 |
+| 기능 바꾸기 | `virtual` 함수를 `override`로 재정의 | `showReport()`의 새 출력 |
+| 도우미 | 모든 객체에 같은 계산은 `private static` | 단위 변환 |
+
+## 복습 질문
+
+<details>
+<summary>외부 라이브러리 클래스의 멤버 함수가 `virtual`이 아니라면 이 글의 어떤 기법을 쓸 수 없는가?</summary>
+
+- 기능 바꾸기. 비`virtual` 함수는 재정의할 수 없고, 다시 정의해도 감추기일 뿐이라 기반 클래스 참조로 부르면 원래 판이 불림
+- 기능 더하기는 여전히 가능
+
+</details>
+
+<details>
+<summary>`setTodayMillimeters()`가 `m_today`에 직접 값을 넣지 않고 `setTodayInches()`를 부르는 이유는?</summary>
+
+- `m_today`는 기반 클래스의 `private` 멤버라 파생 클래스에서 접근할 수 없음
+- 또한 기반 클래스가 내부에서 무엇을 하는지 모르므로, 공개된 인터페이스로 넘기는 것이 안전함
+
+</details>

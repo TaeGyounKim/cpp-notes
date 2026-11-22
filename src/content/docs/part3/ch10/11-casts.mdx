@@ -1,0 +1,204 @@
+---
+title: 캐스트
+description: C++의 다섯 가지 캐스트 static_cast, reinterpret_cast, dynamic_cast, const_cast, std::bit_cast의 쓰임새와 한계, C 스타일 캐스트를 피하는 이유, 상황별로 쓸 캐스트를 익힙니다. 10장을 마무리합니다.
+sidebar:
+  order: 11
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import castsCode from '../../../../examples/ch10/casts.cpp?raw';
+import castsCpp11Code from '../../../../examples/ch10/casts-cpp11.cpp?raw';
+
+- 다루는 것: 한 타입을 다른 타입으로 바꾸는 **캐스트**의 까다로운 부분. 1장에서 기본 타입을, 8~10장에서 직접 만든 클래스를 다뤘으니 이제 상속까지 포함해 정리함
+- 이 글에서 배우는 요소: `static_cast`, `reinterpret_cast`, `dynamic_cast`, `std::bit_cast`, 캐스트 고르기
+
+## 다섯 가지 캐스트
+
+- C++이 제공하는 캐스트: `const_cast`, `static_cast`, `reinterpret_cast`, `dynamic_cast`, `std::bit_cast`
+  - `const_cast`는 1장에서, `static_cast`는 1장에서 기본 타입 사이의 변환으로 봄. 상속과 관련해 더 볼 것이 있음
+- C 스타일 캐스트 `(int)value`도 C++에서 여전히 동작하고, 기존 코드에서 아주 많이 쓰임
+  - `bit_cast`를 뺀 모든 C++ 캐스트를 한꺼번에 다룸. 그래서 무엇을 하려는지 드러나지 않고, 뜻밖의 결과가 나오기 쉬움
+  - 새 코드에서는 C++ 스타일 캐스트만 쓸 것. 더 안전하고, 문법상·눈으로 잘 드러남
+
+## static_cast
+
+- 언어가 직접 지원하는 변환을 **명시적으로** 할 때 <CppRef path="cpp/language/static_cast" />
+  - 예: 정수 나눗셈을 피하려고 `int`를 `double`로. 피연산자 하나만 바꿔도 실수 나눗셈이 됨
+
+```cpp
+int sum{ 7 };
+int count{ 2 };
+double average{ static_cast<double>(sum) / count };   // 3.5
+```
+
+- 사용자가 정의한 생성자나 변환 함수로 가능한 변환도 할 수 있음
+  - 예: `A`에 `B` 객체를 받는 생성자가 있으면 `static_cast<A>(b)`. 대부분은 컴파일러가 알아서 변환해 줌
+- 상속 계층에서 **다운캐스트**에도 씀
+
+```cpp
+Thermometer thermo;
+Device* device{ &thermo };                               // 위로: 캐스트 필요 없음
+auto* t{ static_cast<Thermometer*>(device) };            // 아래로: 캐스트 필요
+Device& ref{ thermo };
+auto& tr{ static_cast<Thermometer&>(ref) };              // 참조도 됨
+```
+
+- 포인터와 참조에 쓸 수 있음. 객체 자체에는 안 됨
+- `static_cast`는 **실행 중 타입 검사를 하지 않음**
+  - 실제로는 `Thermometer`가 아닌 `Device` 포인터도 `Thermometer` 포인터로 바꿔 줌
+  - 컴파일되고 실행되지만, 그 포인터를 쓰면 객체 경계 밖의 메모리를 덮어쓰는 것을 포함해 큰 사고가 날 수 있음
+  - 검사가 필요하면 `dynamic_cast`
+- `static_cast`로 할 수 없는 것: C++의 타입 규칙에 맞는 일만 할 수 있음
+  - 관계없는 타입의 포인터끼리: `invalid 'static_cast' from type 'X*' to type 'Y*'`
+  - 변환 생성자가 없는 다른 타입의 객체로
+  - `const`를 떼기: `invalid 'static_cast' from type 'const int*' to type 'int*'` (`const_cast`의 일)
+  - 포인터를 정수로
+
+## reinterpret_cast
+
+- `static_cast`보다 강력하고, 그만큼 덜 안전함 <CppRef path="cpp/language/reinterpret_cast" />
+- C++의 타입 규칙상 허용되지 않지만, 상황에 따라 프로그래머에게는 말이 되는 캐스트
+  - 관계없는 타입의 참조끼리, 상속 관계가 없는 포인터끼리
+- `void*` 다루기
+  - 포인터를 `void*`로는 캐스트 없이 암시적으로 바뀜
+  - `void*`에서 원래 타입 포인터로 돌아올 때는 `static_cast`로 충분함
+  - `void*`는 메모리의 한 위치를 가리킬 뿐, 타입 정보가 없음
+
+```cpp
+X x;
+Y y;
+X* xp{ &x };
+Y* yp{ &y };
+xp = reinterpret_cast<X*>(yp);   // 관계없는 클래스의 포인터: reinterpret_cast 필요
+void* p{ xp };                   // void*로: 캐스트 필요 없음
+xp = static_cast<X*>(p);         // void*에서: static_cast로 충분
+Y& yr{ reinterpret_cast<Y&>(x) };   // 관계없는 클래스의 참조
+```
+
+- `reinterpret_cast`도 만능은 아님. 무엇을 무엇으로 바꿀 수 있는지 제약이 꽤 많음. 신중하게 쓸 것
+- 타입 검사 없이 변환하므로 늘 조심해야 함
+
+:::caution
+`reinterpret_cast`로 포인터를 정수 타입으로 바꿨다가 되돌릴 수도 있다. 단 포인터를 담을 만큼 큰 정수 타입이어야 한다. 포인터보다 작은 정수 타입으로 바꾸려 하면 컴파일 오류다(예: 64비트 포인터를 8비트 정수로 바꾸면 `cast from 'int*' to 'uint8_t' loses precision`). 이런 용도로는 `std::uintptr_t`를 쓴다.
+:::
+
+## dynamic_cast
+
+- 상속 계층 안의 캐스트를 **실행 중에 검사**함 <CppRef path="cpp/language/dynamic_cast" />
+  - 포인터와 참조에 쓸 수 있음
+  - 객체의 실행 시간 타입 정보를 확인해, 말이 안 되는 캐스트면 포인터판은 `nullptr`를, 참조판은 `std::bad_cast` 예외를 던짐(5편)
+- `static_cast`나 `reinterpret_cast`로도 계층 아래로 같은 캐스트를 할 수 있음. 차이는 `dynamic_cast`만 실행 중 검사를 하고, 나머지는 잘못된 캐스트라도 그냥 해 버린다는 것
+- 실행 시간 타입 정보는 객체의 vtable에 있음. 그래서 가상 멤버 함수가 하나 이상 있어야 하고, 없으면 컴파일 오류(10편)
+
+## std::bit_cast
+
+- `<bit>`에 정의됨 <Badge text="C++20" /> <CppRef path="cpp/numeric/bit_cast" />. 다섯 가운데 유일하게 표준 라이브러리에 속한 캐스트. 나머지는 언어 자체의 일부
+- `reinterpret_cast`와 비슷하지만, 목표 타입의 **새 객체**를 만들고 원본 객체의 비트를 그대로 복사함
+  - 원본의 비트를 목표 타입의 비트인 것처럼 해석하는 셈
+- 조건: 원본과 목표의 크기가 같고, 둘 다 **자명하게 복사 가능** (trivially copyable)해야 함
+  - 크기가 다르면 오류: `no matching function for call to 'bit_cast<uint32_t>(double&)'`
+
+:::note
+자명하게 복사 가능한 타입: 객체를 이루는 바이트를 예컨대 `char` 배열로 복사했다가 다시 객체로 복사해 넣어도 원래 값이 유지되는 타입.
+:::
+
+```cpp
+float value{ 1.5f };
+auto bits{ std::bit_cast<std::uint32_t>(value) };   // 0x3fc00000
+float back{ std::bit_cast<float>(bits) };           // 1.5
+```
+
+- 쓰임새: 자명하게 복사 가능한 타입의 이진 입출력. 바이트를 파일에 쓰고, 다시 읽어 들인 바이트를 `bit_cast`로 올바르게 해석함
+
+<RunCode client:load code={castsCode} />
+
+- 볼 것
+  - `asThermometer(&plain)`: 실제로 `Device`인 객체라 `dynamic_cast`가 `nullptr`를 돌려줌
+  - 1.5f의 비트 패턴 `0x3fc00000`과, 그것을 다시 `float`로 해석한 1.5
+- 이 예제는 `dynamic_cast`를 따로 함수에 넣었음. 같은 함수 안에서 `Device` 객체를 바로 `dynamic_cast`하면 GCC가 "결코 성공할 수 없다"고 경고함(`can never succeed`). 컴파일러가 타입을 이미 알기 때문
+
+## 상황별 캐스트
+
+| 상황 | 캐스트 |
+| --- | --- |
+| `const` 떼기 | `const_cast` |
+| 언어가 지원하는 명시적 변환(`int`→`double`, `int`→`bool` 등) | `static_cast` |
+| 사용자 정의 생성자·변환 함수가 지원하는 명시적 변환 | `static_cast` |
+| 관계없는 클래스의 객체를 다른 클래스의 객체로(비트 해석) | `bit_cast` |
+| 같은 상속 계층 안의 다른 클래스 포인터로 | `dynamic_cast` 권장, 또는 `static_cast` |
+| 같은 상속 계층 안의 다른 클래스 참조로 | `dynamic_cast` 권장, 또는 `static_cast` |
+| 관계없는 타입의 포인터로 | `reinterpret_cast` |
+| 관계없는 타입의 참조로 | `reinterpret_cast` |
+| 함수 포인터를 다른 함수 포인터로 | `reinterpret_cast` |
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::bit_cast` | C++20 | `std::memcpy`로 바이트를 복사 |
+| `std::uintptr_t` | C++11 | 플랫폼에 맞는 정수 타입을 직접 고름 |
+
+- `static_cast`, `reinterpret_cast`, `dynamic_cast`, `const_cast`는 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨. `bit_cast` 대신 `memcpy`
+
+<RunCode client:load code={castsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `static_cast`로 다운캐스트하면 안전하다?
+  - 실행 중 검사가 없음. 실제 타입이 다르면 정의되지 않은 동작. 검사가 필요하면 `dynamic_cast`
+- `void*`에서 돌아올 때는 `reinterpret_cast`가 필요하다?
+  - `static_cast`로 충분함
+- C 스타일 캐스트가 더 짧아서 편하다?
+  - 어떤 변환인지 드러나지 않고 위험한 변환도 조용히 해 버림. C++ 스타일 캐스트를 씀
+- `bit_cast`는 값을 변환한다?
+  - 값을 바꾸지 않고 비트를 그대로 다른 타입으로 해석함. `bit_cast<int>(1.5f)`는 1이 아님
+
+## 정리
+
+| 캐스트 | 하는 일 | 검사 |
+| --- | --- | --- |
+| `static_cast` | 언어·사용자 정의 변환, 계층 다운캐스트 | 컴파일 시점만 |
+| `reinterpret_cast` | 관계없는 포인터·참조, 포인터↔정수 | 없음 |
+| `dynamic_cast` | 계층 안의 캐스트 | 실행 중. 실패하면 `nullptr`/`bad_cast` |
+| `const_cast` | `const` 떼기 | - |
+| `std::bit_cast` | 같은 크기 타입 사이에 비트를 그대로 복사 | 크기·복사 가능성은 컴파일 시점 |
+
+## 복습 질문
+
+<details>
+<summary>`int a = 7, b = 2;`에서 `a / b`를 3.5로 만들려면?</summary>
+
+- `static_cast<double>(a) / b`. 피연산자 하나를 `double`로 바꾸면 실수 나눗셈이 됨
+
+</details>
+
+<details>
+<summary>`Device* d`가 실제로 무엇을 가리키는지 모를 때 `Thermometer*`로 안전하게 바꾸려면?</summary>
+
+- `dynamic_cast<Thermometer*>(d)`. 실패하면 `nullptr`이므로 확인 후 씀
+- `Device`에 가상 함수가 있어야 함
+
+</details>
+
+<details>
+<summary>`float`의 비트 패턴을 정수로 보고 싶을 때 쓰는 캐스트는? 조건은?</summary>
+
+- `std::bit_cast<std::uint32_t>(value)`
+- 두 타입의 크기가 같고 둘 다 자명하게 복사 가능해야 함
+
+</details>
+
+## 10장을 마치며
+
+- 상속의 많은 세부 사항을 다룸
+  - 쓰임새: 코드 재사용, 다형성
+  - 오용: 설계가 나쁜 다중 상속 등
+  - 그 과정에서 특별히 주의해야 할 경우들(가상 소멸자, 재정의의 특수한 경우, 생성자 상속, 가상 기반 클래스, 캐스트)
+- 상속은 익숙해지는 데 시간이 걸리는 강력한 기능. 이 장의 예제를 고쳐 가며 실험해 보면 객체 지향 설계의 주된 도구가 될 것
+- 다음 장(11장): 모듈, 헤더 파일, 그 밖의 주제

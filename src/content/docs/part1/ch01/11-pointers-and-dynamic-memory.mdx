@@ -1,0 +1,270 @@
+---
+title: 포인터와 동적 메모리
+description: 스택과 자유 저장소, 주소를 담는 포인터, new와 delete, 동적 배열, nullptr을 익힙니다.
+sidebar:
+  order: 11
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import pointerBasicViz from '../../../../data/ch01/pointer-basic.js';
+import pointerHeapViz from '../../../../data/ch01/pointer-heap.js';
+import pointerBasicCode from '../../../../examples/ch01/pointer-basic.cpp?raw';
+import pointerHeapCode from '../../../../examples/ch01/pointer-heap.cpp?raw';
+import pointerStructCode from '../../../../examples/ch01/pointer-struct.cpp?raw';
+import pointerArrayCode from '../../../../examples/ch01/pointer-array.cpp?raw';
+import nullptrCode from '../../../../examples/ch01/nullptr.cpp?raw';
+import pointersCpp11Code from '../../../../examples/ch01/pointers-cpp11.cpp?raw';
+
+- 다루는 것: 메모리의 두 영역과, 메모리의 위치를 직접 다루는 포인터
+- 배우는 요소: 스택과 자유 저장소, 포인터, `&`와 `*`, `new`와 `delete`, `->`, 동적 배열, `nullptr`
+- 미리 알아 둘 것: 새 코드에서는 여기서 배우는 `new`와 `delete`를 직접 쓰지 않는 것이 목표. 그래도 배우는 이유는 오래된 코드에 가득하고, 뒤에 나올 더 안전한 도구들이 이 위에 만들어져 있기 때문
+
+## 스택과 자유 저장소
+
+- 프로그램이 쓰는 메모리는 크게 두 영역으로 나뉨
+
+| | **스택** (stack) | **자유 저장소** (free store) |
+| --- | --- | --- |
+| 무엇이 놓이나 | 함수 안에서 선언한 변수, 매개변수 | `new`로 만든 것 |
+| 언제 생기나 | 선언한 줄이 실행될 때 | `new`를 실행할 때 |
+| 언제 사라지나 | 그 변수가 속한 블록이나 함수가 끝날 때. **자동** | `delete`를 실행할 때. **직접** 해야 함 |
+| 크기 | 컴파일할 때 정해져 있어야 함 | 실행 중에 정할 수 있음 |
+
+- 자유 저장소는 흔히 힙(heap)이라고도 부름
+- 스택을 떠올리는 법: 쌓아 올린 카드 더미
+  - 함수를 호출할 때마다 그 함수의 변수들을 담은 카드 한 장이 맨 위에 놓임. 이 한 장을 **스택 프레임** (stack frame)이라고 부름
+  - 함수가 끝나면 맨 위 카드가 치워지고, 그 안의 변수는 모두 사라짐
+  - 함수마다 자기 카드가 따로 있으므로 다른 함수의 변수를 실수로 바꿀 일이 없음
+- 자유 저장소가 필요한 때
+  - 만든 함수가 끝난 뒤에도 데이터가 남아 있어야 할 때
+  - 크기를 실행 중에야 알 수 있을 때
+- **동적 메모리** (dynamic memory): 실행 중에 자유 저장소에서 마련하는 메모리
+
+## 포인터
+
+- **포인터** (pointer): 메모리 주소를 담는 변수 <CppRef path="cpp/language/pointer" />
+- 선언: 타입 뒤에 별표(`*`)를 붙임. `int*`는 "`int`가 놓인 곳의 주소를 담는 타입"
+
+```cpp
+int* p{ nullptr };
+```
+
+- 포인터에 쓰는 두 연산자
+
+| 연산자 | 이름 | 뜻 | 예 |
+| --- | --- | --- | --- |
+| `&변수` | 주소 연산자 (address-of) | 그 변수의 주소 | `int* p{ &score };` |
+| `*포인터` | **역참조** (dereference) | 그 포인터가 가리키는 곳의 값 | `*p = 10;` |
+
+- 별표의 두 가지 뜻
+  - 선언에서: `int* p` → `p`는 포인터라는 표시
+  - 식에서: `*p` → `p`가 가리키는 곳으로 따라가라는 뜻
+
+<StepViz client:load data={pointerBasicViz} />
+
+- 볼 것: `*p = 10;`과 `p = &bonus;`의 차이
+  - 별표가 있으면 가리키는 곳의 값이 바뀜
+  - 별표가 없으면 포인터에 든 주소, 즉 화살표의 방향이 바뀜
+
+### 널 포인터 <Badge text="C++11" />
+
+- **널 포인터** (null pointer): 아무것도 가리키지 않는다는 뜻의 특별한 포인터 값. `nullptr`로 적음 <CppRef path="cpp/language/nullptr" />
+- 포인터는 반드시 초기화할 것
+  - 초기화하지 않은 포인터는 메모리의 아무 곳이나 가리킴. 그것을 쓰면 프로그램이 죽거나 엉뚱하게 동작함
+  - 당장 가리킬 곳이 없으면 `nullptr`로 초기화
+- 조건 자리에 쓰면 널 포인터는 거짓, 그 밖의 포인터는 참
+  - `if (!p) { ... }`: `p`가 널 포인터일 때 실행됨
+
+<RunCode client:load code={pointerBasicCode} />
+
+## 동적 메모리 쓰기
+
+- `new`: 자유 저장소에 메모리를 마련하고 그 주소를 돌려줌 <CppRef path="cpp/language/new" />
+- `delete`: `new`로 마련한 메모리를 돌려줌 <CppRef path="cpp/language/delete" />
+
+```cpp
+int* p{ new int{ 5 } };   // 자유 저장소에 int 하나를 만들고 5로 초기화
+*p = 6;                   // 그 int의 값을 바꿈
+delete p;                 // 돌려줌
+p = nullptr;              // 포인터를 비움
+```
+
+- `delete` 뒤에 포인터를 `nullptr`로 바꿔 두는 이유: `delete`는 메모리만 돌려줄 뿐, 포인터에 든 주소는 그대로 남음. 실수로 다시 쓰는 것을 막음
+- **메모리 누수** (memory leak): `delete`를 하지 않아 메모리가 돌려지지 않고 남는 것. 그 메모리에 닿을 포인터까지 잃으면 프로그램이 끝날 때까지 되찾을 수 없음
+- **매달린 포인터** (dangling pointer): 이미 돌려준 메모리를 여전히 가리키는 포인터
+- **정의되지 않은 동작** (undefined behavior): 언어가 결과를 정해 두지 않은 동작. 프로그램이 죽을 수도, 멀쩡해 보이다가 이상한 결과를 낼 수도 있음 <CppRef path="cpp/language/ub" />
+  - 널 포인터, 초기화하지 않은 포인터, 매달린 포인터를 역참조하면 정의되지 않은 동작
+
+<StepViz client:load data={pointerHeapViz} />
+
+- 그림 오른쪽의 "힙" 칸이 자유 저장소
+- 볼 것: `delete p;` 뒤에도 `p`와 `q`의 화살표가 남아 있음. `p`만 `nullptr`로 바꿨으므로 `q`는 여전히 매달린 포인터
+
+<RunCode client:load code={pointerHeapCode} />
+
+### 구조체와 클래스를 가리키는 포인터
+
+- 포인터가 가리키는 구조체의 필드에 접근하는 방법 두 가지
+
+| 코드 | 뜻 |
+| --- | --- |
+| `(*item).price` | 역참조한 뒤 점으로 접근 |
+| `item->price` | **화살표 연산자** (arrow operator). 위와 같은 뜻을 한 번에 <CppRef path="cpp/language/operator_member_access" /> |
+
+- `->`를 쓰는 것이 보통. `(*item).price`는 괄호가 꼭 필요해서 번거로움
+- 단락 평가로 널 포인터를 걸러 내기
+  - `item != nullptr && item->price > 0`
+  - `item`이 널 포인터면 `&&` 뒤는 실행되지 않으므로 안전
+  - 줄여서 `item && item->price > 0`이라고도 씀
+
+<RunCode client:load code={pointerStructCode} />
+
+### 동적으로 만드는 배열
+
+- `new 타입[크기]`: 자유 저장소에 배열을 만듦. 크기를 변수로 줄 수 있음
+- `delete[]`: `new[]`로 만든 배열을 돌려줌. 대괄호를 빠뜨리지 말 것
+
+```cpp
+int* numbers{ new int[size]{} };
+numbers[0] = 10;
+delete[] numbers;
+numbers = nullptr;
+```
+
+- 포인터 변수 `numbers`는 스택에, 배열 자체는 자유 저장소에 놓임
+- 만든 뒤에는 보통의 배열처럼 `[ ]`로 씀
+- 짝을 맞출 것
+
+| 만들 때 | 돌려줄 때 |
+| --- | --- |
+| `new` | `delete` |
+| `new[]` | `delete[]` |
+
+- 짝이 맞지 않거나 돌려주지 않으면 메모리 누수 또는 정의되지 않은 동작
+
+<RunCode client:load code={pointerArrayCode} />
+
+## nullptr과 NULL
+
+- C++11 이전: 널 포인터를 `NULL`이라는 상수로 적었음. `<cstddef>` 헤더
+- `NULL`의 문제: 진짜 포인터가 아니라 정수 0과 같은 것
+  - 정수를 받는 함수에 `NULL`을 넘기면 그대로 받아들여짐
+  - 정수 버전과 포인터 버전이 모두 있는 함수에서는 어느 쪽을 부를지 헷갈림
+- `nullptr`: 정수가 아닌, 진짜 널 포인터 값. 정수를 받는 함수에는 넘길 수 없음
+- 결론: 널 포인터는 항상 `nullptr`로 적을 것
+
+<RunCode client:load code={nullptrCode} />
+
+- 해 볼 것: 주석 처리된 마지막 줄의 `//`를 지우고 실행
+  - 결과: 컴파일 오류 `call of overloaded 'show(NULL)' is ambiguous`
+
+## 새 코드에서는
+
+- 여기서 배운 것을 직접 쓰는 대신 쓸 것
+
+| 하려는 일 | 대신 쓸 것 |
+| --- | --- |
+| 크기가 바뀌는 배열 | `std::vector` |
+| 자유 저장소에 객체 하나 | 스마트 포인터 (smart pointer). 다 쓰면 알아서 `delete`해 줌. 7장에서 다룸 |
+
+- 포인터 자체가 나쁜 것은 아님. 문제는 "누가 `delete`할 책임을 지는가"가 얽힐 때
+  - `delete`할 책임이 없는, 가리키기만 하는 포인터는 새 코드에서도 씀
+- C 언어의 `malloc()`과 `free()`는 쓰지 말 것. C++에서는 `new` / `delete`, 더 나아가 위의 도구들을 씀
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| 포인터, `new`, `delete`, `->` | C++11 이전 | 그대로 사용 |
+| `nullptr` | C++11 | 그대로 사용 |
+| `new int{ 5 }`, `new int[size]{}` (중괄호 초기화) | C++11 | 그대로 사용 |
+
+- C++98 / C++03: `nullptr`이 없음. `NULL` 또는 `0`으로 적음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={pointersCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `p = 8;`과 `*p = 8;`
+  - `*p = 8;`: `p`가 가리키는 곳에 8을 넣음
+  - `p = 8;`: 포인터에 주소 8을 넣으려는 것. 컴파일 오류
+- `int* a, b;`에서 `b`는 포인터가 아님
+  - 별표는 바로 뒤의 이름에만 붙음. `a`는 `int*`, `b`는 `int`
+  - 변수는 한 줄에 하나씩 선언하면 헷갈릴 일이 없음
+- `delete`는 포인터를 지우는 것이 아님
+  - 포인터가 가리키던 메모리를 돌려줄 뿐, 포인터 변수는 그대로 남고 예전 주소도 그대로 들어 있음
+- 같은 메모리를 두 번 `delete`하면 정의되지 않은 동작
+  - `delete` 뒤에 `nullptr`을 넣어 두면 안전. `nullptr`을 `delete`하는 것은 아무 일도 하지 않음
+- 스택 변수의 주소를 `delete`하면 안 됨
+  - `delete`는 `new`로 만든 것에만 씀
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| 스택 | 함수 안의 변수가 놓이는 곳. 자동으로 정리됨 | |
+| 자유 저장소 | `new`로 만든 것이 놓이는 곳. 직접 돌려줘야 함 | |
+| `int* p` | `int`의 주소를 담는 포인터 | |
+| `&변수` / `*포인터` | 주소 얻기 / 가리키는 곳의 값 | |
+| `nullptr` | 아무것도 가리키지 않음. 포인터는 항상 초기화 | C++11 |
+| `new` / `delete` | 하나 만들기 / 돌려주기 | |
+| `new[]` / `delete[]` | 배열 만들기 / 돌려주기 | |
+| `포인터->필드` | `(*포인터).필드`와 같음 | |
+| 메모리 누수, 매달린 포인터 | 돌려주지 않음 / 돌려준 곳을 계속 가리킴 | |
+
+## 복습 질문
+
+<details>
+<summary>`int value{ 3 }; int* p{ &value }; *p = 7;`을 실행한 뒤 `value`의 값은?</summary>
+
+- 7
+- `p`가 `value`를 가리키므로 `*p`에 넣은 값은 `value`에 들어감
+
+</details>
+
+<details>
+<summary>스택의 변수와 자유 저장소의 메모리는 사라지는 때가 어떻게 다른가요?</summary>
+
+- 스택의 변수: 그 변수가 속한 블록이나 함수가 끝나면 자동으로 사라짐
+- 자유 저장소의 메모리: `delete`로 직접 돌려줄 때까지 남아 있음
+
+</details>
+
+<details>
+<summary>`delete p;` 다음에 `p = nullptr;`을 적는 이유는?</summary>
+
+- `delete`는 메모리만 돌려주고, `p`에 든 주소는 그대로 둠
+- 그대로 두면 `p`는 매달린 포인터. `nullptr`로 바꿔 두면 실수로 다시 쓰는 것을 막고, 널 검사로 걸러 낼 수 있음
+
+</details>
+
+<details>
+<summary>`int* data{ new int[10] };`은 어떻게 돌려줘야 하나요?</summary>
+
+- `delete[] data;`
+- `new[]`로 만든 것은 `delete[]`로 돌려줌
+
+</details>
+
+<details>
+<summary>`item`이 널 포인터일 수도 있을 때 `item->price`를 안전하게 검사하는 식은?</summary>
+
+- `item != nullptr && item->price > 0`
+- `item`이 널 포인터면 `&&`의 단락 평가 때문에 뒤쪽 `item->price`는 실행되지 않음
+
+</details>
+
+<details>
+<summary>`NULL` 대신 `nullptr`을 쓰는 이유는?</summary>
+
+- `NULL`은 정수 0과 같아서 정수를 받는 함수에도 넘어감
+- `nullptr`은 포인터로만 취급되므로 컴파일러가 뜻을 정확히 구별함
+
+</details>

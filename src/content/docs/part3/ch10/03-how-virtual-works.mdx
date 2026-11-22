@@ -1,0 +1,180 @@
+---
+title: virtual의 실제
+description: 가상 함수가 vtable로 구현되는 방식, 정적 바인딩과 동적 바인딩, virtual의 비용, 소멸자를 virtual로 만들어야 하는 이유, final로 재정의 막기를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import vtableViz from '../../../../data/ch10/vtable.js';
+import virtualDtorCode from '../../../../examples/ch10/virtual-dtor.cpp?raw';
+import finalMemberCode from '../../../../examples/ch10/final-member.cpp?raw';
+import virtualDtorCpp11Code from '../../../../examples/ch10/virtual-dtor-cpp11.cpp?raw';
+
+- 다루는 것: 컴파일러가 가상 함수를 어떻게 구현하는지, 그 비용, 그리고 가상 소멸자가 중요한 이유
+- 이 글에서 배우는 요소: 정적 바인딩과 동적 바인딩, vtable, `virtual`의 비용, 가상 소멸자, `final` 멤버 함수
+
+## virtual은 어떻게 구현되는가
+
+- C++ 클래스를 컴파일하면 그 클래스의 모든 멤버 함수를 담은 바이너리가 만들어짐
+- 비`virtual` 멤버 함수
+  - 어느 함수로 갈지가 **컴파일 시점의 타입**으로 정해져, 부르는 자리에 직접 박힘
+  - **정적 바인딩** (static binding) 또는 **이른 바인딩** (early binding)
+- `virtual` 멤버 함수
+  - **vtable** (가상 함수 테이블, virtual table)이라는 특별한 메모리 영역을 거쳐 올바른 구현을 부름
+  - 가상 멤버 함수가 하나 이상 있는 클래스마다 vtable이 하나 있음. 그 클래스의 객체는 모두 자기 클래스의 vtable을 가리키는 포인터(흔히 vptr)를 가짐
+  - vtable에는 가상 멤버 함수 구현들의 주소가 들어 있음
+  - 포인터나 참조로 멤버 함수를 부르면, 객체의 vtable 포인터를 따라가 **실행 시점에 객체의 실제 타입에 맞는** 판을 실행함
+  - **동적 바인딩** (dynamic binding) 또는 **늦은 바인딩** (late binding)
+- 동적 바인딩은 **포인터나 참조로** 부를 때만 일어남. 객체에 대고 직접 가상 함수를 부르면 컴파일 시점에 정해지는 정적 바인딩
+
+<StepViz client:load data={vtableViz} />
+
+- 정리
+  - 각 클래스의 vtable에는 가상 함수마다 칸이 하나씩 있음
+  - 파생 클래스가 재정의한 함수의 칸은 파생 클래스의 구현을, 재정의하지 않은 칸은 기반 클래스의 구현을 가리킴
+  - `kind()` 같은 비`virtual` 함수는 vtable에 칸이 없음
+- 실제 메모리 배치와 vtable 구성은 컴파일러가 정함. 위 그림은 원리를 보이려고 단순화한 것
+
+## virtual을 쓰는 이유와 비용
+
+- Java 같은 언어는 모든 멤버 함수가 저절로 `virtual`. C++은 그렇지 않음
+- `virtual` 키워드가 따로 있는 이유: vtable의 비용
+  - 가상 함수를 부르려면 실행할 코드를 가리키는 포인터를 한 번 더 따라가야 함
+  - 대부분 아주 작은 비용이지만, C++ 설계자들은 (적어도 당시에는) 그 비용을 치를지 프로그래머가 정하게 하는 편이 낫다고 봄
+  - 재정의할 일이 없는 함수라면 `virtual`로 만들어 비용을 치를 이유가 없음
+- 오늘날 CPU에서 그 비용은 1나노초의 작은 일부. 대부분의 프로그램에서는 측정할 수 있는 차이가 없음
+- 그래도 비용이 문제인 경우가 있음
+  - 예: 가상 멤버 함수를 가진 `Point` 클래스의 객체를 수백만~수십억 개 담은 자료 구조. 점마다 가상 함수를 부르면 무시할 수 없는 부담
+  - 메모리도: 객체마다 vtable 포인터가 하나씩 더 필요함. 수십억 개라면 상당함
+  - 이런 경우는 `Point`에 가상 함수를 두지 않는 편이 현명함
+
+## 가상 소멸자가 필요한 이유
+
+- 소멸자는 거의 언제나 `virtual`이어야 함
+  - 비`virtual` 소멸자는 객체를 지워도 메모리가 풀리지 않는 상황을 쉽게 만듦
+  - `final` 클래스라면 비`virtual` 소멸자여도 됨
+- 문제가 되는 모양: 기반 클래스 포인터로 파생 객체를 `delete`
+
+```cpp
+Sensor* p{ new Logger{} };   // Logger는 Sensor의 파생 클래스
+delete p;                    // Sensor의 소멸자가 virtual이 아니면?
+```
+
+- 표준상 **정의되지 않은 동작**. 대부분의 컴파일러는 기반 클래스의 소멸자만 부르고 파생 클래스의 소멸자는 건너뜀
+  - 파생 클래스가 생성자에서 잡은 메모리를 소멸자에서 지운다면, 그 메모리는 영영 풀리지 않음
+  - 파생 클래스가 `std::unique_ptr` 같은, 소멸할 때 저절로 정리되는 멤버를 가졌어도 마찬가지. 소멸자가 안 불리면 그 멤버도 소멸하지 않음
+- 해법: 기반 클래스의 소멸자를 `virtual`로. 할 일이 없으면 `= default`로 둠
+
+```cpp
+class Sensor
+{
+public:
+    virtual ~Sensor() = default;
+};
+```
+
+<RunCode client:load code={virtualDtorCode} />
+
+- 볼 것
+  - 비가상 소멸자: `~Logger`가 불리지 않아 버퍼가 반납되지 않음
+  - 가상 소멸자: 파생 클래스의 소멸자부터 불리고, 그다음 기반 클래스의 소멸자
+- 참고: 소멸자를 직접 선언하면 C++11부터 컴파일러가 복사 연산을 만들어 주는 것은 폐기 예정이 됨(9장). 다섯의 규칙에 따라 복사·이동 연산도 선언(필요하면 `= default`)해야 함. 이 장의 예들은 간결하게 하려고 생략함
+
+:::caution
+특별한 이유가 없거나 `final` 클래스가 아니라면 소멸자는 `virtual`로 만든다. 생성자는 `virtual`일 수 없고 그럴 필요도 없다. 객체를 만들 때는 언제나 정확한 클래스를 지정하기 때문이다.
+:::
+
+- 재정의하는 멤버 함수처럼 소멸자에도 `override`를 붙일 수 있음
+  - 기반 클래스의 소멸자가 `virtual`이 아니면 컴파일 오류: `'D::~D()' marked 'override', but does not override`
+  - `virtual`, `override`, `= default`를 함께 써도 됨: `virtual ~Logger() override = default;`
+
+## 재정의 막기
+
+- 클래스 전체를 `final`로 하는 것(1편) 말고, 멤버 함수 하나를 `final`로 만들 수도 있음 <Badge text="C++11" /> <CppRef path="cpp/language/final" />
+- 그 함수는 더 아래 파생 클래스에서 재정의할 수 없음
+
+```cpp
+class Thermometer : public Sensor
+{
+public:
+    std::string unit() const override final;
+};
+```
+
+- 재정의하려 하면 오류: `virtual function '...KitchenThermometer::unit() const' overriding final function`
+
+<RunCode client:load code={finalMemberCode} />
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `final` 멤버 함수, `override` | C++11 | 없음 |
+| `= default` 소멸자 | C++11 | 빈 본문 `virtual ~Sensor() {}` |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T(...))` |
+
+- `virtual`, vtable에 의한 구현, 가상 소멸자는 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={virtualDtorCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 가상 함수는 객체에 대고 불러도 동적 바인딩이다?
+  - 포인터나 참조로 부를 때만. 객체에 직접 부르면 컴파일 시점에 정해짐
+- 비가상 함수도 vtable에 있다?
+  - vtable에는 가상 함수만. 비가상 함수는 부르는 자리에 직접 연결됨
+- `virtual`은 느려서 피해야 한다?
+  - 대부분 측정할 수 없을 만큼 작음. 수십억 개의 작은 객체처럼 특별한 경우만 따짐
+- 소멸자가 하는 일이 없으면 `virtual`이 필요 없다?
+  - 파생 클래스의 소멸자가 불리려면 기반 클래스 소멸자가 `virtual`이어야 함. `virtual ~Base() = default;`
+- 생성자도 `virtual`로 만들 수 있다?
+  - 불가. 만들 때는 정확한 클래스를 지정함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 정적 바인딩 | 비`virtual` 함수, 또는 객체에 직접 부르기. 컴파일 시점의 타입으로 결정 |
+| 동적 바인딩 | 포인터·참조로 `virtual` 함수. 실행 시점의 실제 타입으로 결정 |
+| vtable | 가상 함수가 있는 클래스마다 하나. 객체는 vptr로 가리킴 |
+| 비용 | 포인터 한 번 더 따라가기, 객체마다 포인터 하나. 대개 무시할 수준 |
+| 가상 소멸자 | 기반 포인터로 `delete`할 때 파생 소멸자가 불리게. 거의 늘 필요 |
+| `final` 멤버 함수 | 더 아래에서 재정의 불가 |
+
+## 복습 질문
+
+<details>
+<summary>`Thermometer t; t.describe();`는 vtable을 거치는가?</summary>
+
+- 거치지 않아도 됨. 객체에 직접 부르면 타입이 확정되어 있으므로 정적 바인딩
+
+</details>
+
+<details>
+<summary>파생 클래스가 `std::vector` 멤버를 가졌는데 기반 클래스 소멸자가 비`virtual`이면, 기반 포인터로 `delete`할 때 무슨 일이 생기는가?</summary>
+
+- 정의되지 않은 동작. 보통 파생 클래스의 소멸자가 불리지 않아 `vector` 멤버도 소멸하지 않고 메모리가 샘
+
+</details>
+
+<details>
+<summary>파생 클래스 소멸자에 `override`를 붙이는 이점은?</summary>
+
+- 기반 클래스의 소멸자가 `virtual`이 아니면 컴파일 오류로 알려 줌
+
+</details>
+
+<details>
+<summary>가상 함수가 있는 `Point` 객체 10억 개를 다룰 때 무엇이 부담인가?</summary>
+
+- 호출마다 vtable을 거치는 비용과, 객체마다 붙는 vtable 포인터의 메모리
+
+</details>

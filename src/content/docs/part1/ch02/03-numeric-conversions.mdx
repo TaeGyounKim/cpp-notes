@@ -1,0 +1,229 @@
+---
+title: 숫자와 문자열 변환
+description: 숫자를 문자열로, 문자열을 숫자로 바꾸는 두 가지 수준의 함수, 즉 쓰기 쉬운 to_string·stoi 계열과 빠르고 정확한 to_chars·from_chars를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import toStringCode from '../../../../examples/ch02/to-string.cpp?raw';
+import stoiErrorsCode from '../../../../examples/ch02/stoi-errors.cpp?raw';
+import charconvCode from '../../../../examples/ch02/charconv.cpp?raw';
+import roundTripCode from '../../../../examples/ch02/round-trip.cpp?raw';
+import convertCpp11Code from '../../../../examples/ch02/convert-cpp11.cpp?raw';
+
+- 다루는 것: 숫자 `42`와 문자열 `"42"` 사이를 오가는 방법
+- 배우는 요소: `std::to_string`, `std::stoi` 계열, `std::to_chars`, `std::from_chars`
+- 표준 라이브러리는 두 가지 수준의 변환 함수를 제공함
+
+| | 고수준 | 저수준 |
+| --- | --- | --- |
+| 함수 | `std::to_string`, `std::stoi` 등 | `std::to_chars`, `std::from_chars` |
+| 헤더 | `<string>` | `<charconv>` |
+| 다루는 것 | `std::string` | 부르는 쪽이 준비한 문자 버퍼 |
+| 메모리 | 알아서 마련 | 마련하지 않음 |
+| 실패를 알리는 방법 | 예외 | 반환값 |
+| 특징 | 쓰기 쉬움 | 매우 빠름. 변환했다가 되돌려도 값이 정확히 같음 |
+
+## 고수준 변환
+
+### 숫자를 문자열로 <Badge text="C++11" />
+
+- `std::to_string(값)`: 숫자를 `std::string`으로 바꿔 돌려줌 <CppRef path="cpp/string/basic_string/to_string" />
+- 받을 수 있는 타입: `int`, `long`, `long long`과 그 부호 없는 타입, `float`, `double`, `long double`
+- 부동소수점은 항상 소수점 아래 6자리로 나옴. `std::to_string(3.14)` → `"3.140000"`
+  - 자릿수를 조절하려면 `std::format`을 씀. 이 장의 뒤쪽에서 다룸
+
+### 문자열을 숫자로 <Badge text="C++11" />
+
+| 함수 | 결과 타입 |
+| --- | --- |
+| `std::stoi` | `int` |
+| `std::stol` / `std::stoll` | `long` / `long long` |
+| `std::stoul` / `std::stoull` | `unsigned long` / `unsigned long long` |
+| `std::stof` / `std::stod` / `std::stold` | `float` / `double` / `long double` |
+
+- 이름 읽는 법: s(string) to i(int). 정수용 <CppRef path="cpp/string/basic_string/stol" />, 부동소수점용 <CppRef path="cpp/string/basic_string/stof" />
+- 매개변수: `std::stoi(문자열, 위치, 진법)`
+
+| 매개변수 | 뜻 | 생략하면 |
+| --- | --- | --- |
+| 문자열 | 변환할 문자열 | 생략 불가 |
+| 위치 | `std::size_t` 변수의 주소. 변환하지 못한 첫 글자의 위치를 여기에 적어 줌 | `nullptr`. 알려 주지 않음 |
+| 진법 | 문자열이 몇 진법으로 적혀 있는지. 정수용 함수에만 있음 | 10 |
+
+- 동작 규칙
+  - 앞쪽의 공백은 건너뜀
+  - 숫자로 읽을 수 있는 데까지만 읽고 멈춤. `"123USD"` → 123
+- 진법에 0을 주면 접두어를 보고 스스로 판단함
+
+| 문자열의 시작 | 판단 |
+| --- | --- |
+| `0x` 또는 `0X` | 16진수 |
+| `0` | 8진수 |
+| 그 밖 | 10진수 |
+
+<RunCode client:load code={toStringCode} />
+
+### 실패하면 예외
+
+| 상황 | 던져지는 예외 |
+| --- | --- |
+| 숫자로 읽을 수 있는 부분이 전혀 없음 | `std::invalid_argument` |
+| 값이 결과 타입의 범위를 벗어남 | `std::out_of_range` |
+
+- 둘 다 `<stdexcept>` 헤더
+- 사용자 입력처럼 믿을 수 없는 문자열을 변환할 때는 `try` / `catch`로 감쌀 것
+
+<RunCode client:load code={stoiErrorsCode} />
+
+- 볼 것: `"12abc"`는 예외가 아님. 12까지 읽고 멈춤
+  - 문자열 전체가 숫자인지 확인하려면: 위치 매개변수로 받은 값이 문자열의 길이와 같은지 봄
+
+## 저수준 변환 <Badge text="C++17" />
+
+- `<charconv>` 헤더의 함수들 <CppRef path="cpp/header/charconv" />
+- 고수준 함수와 다른 점
+  - 메모리를 마련하지 않음. 부르는 쪽이 준 버퍼에 씀
+  - `std::string`을 직접 다루지 않고 문자의 범위(시작 포인터, 끝 포인터)를 받음
+  - 예외를 던지지 않음. 성공 여부를 반환값으로 알림
+  - 로케일의 영향을 받지 않음. 어느 나라 설정에서 실행해도 결과가 같음 (로케일은 21장에서 다룸)
+  - 그 결과 훨씬 빠름. 경우에 따라 수십 배 이상
+- **완벽한 왕복** (perfect round-tripping): 숫자를 문자로 바꿨다가 다시 숫자로 바꾸면 원래 값과 정확히 같음
+- 쓸 곳: 숫자 데이터를 JSON, XML 같은 사람이 읽을 수 있는 형식으로 저장하고 다시 읽을 때
+
+### 숫자를 문자로: to_chars
+
+- `std::to_chars(시작, 끝, 값)`: 값을 문자로 바꿔 `시작`부터 씀. `끝`을 넘어서 쓰지 않음 <CppRef path="cpp/utility/to_chars" />
+- 반환값: 멤버가 둘인 구조체
+
+| 멤버 | 뜻 |
+| --- | --- |
+| `ptr` | 성공하면 마지막으로 쓴 글자의 바로 다음 위치. 실패하면 `끝` |
+| `ec` | 오류 코드. 성공하면 `std::errc{}`, 공간이 모자라면 `std::errc::value_too_large` |
+
+- 구조적 바인딩으로 받으면 편함: `auto [end, error]{ std::to_chars(...) };`
+- 널 문자를 붙여 주지 않음. 어디까지 썼는지는 `ptr`로 알아냄
+- 정수용 추가 인수: 진법. `std::to_chars(시작, 끝, 255, 16)` → `ff`
+- 부동소수점용 추가 인수: 형식과 정밀도
+
+| `std::chars_format` | 모양 |
+| --- | --- |
+| `scientific` | `1.5e+03` 같은 지수 표기 |
+| `fixed` | `1500` 같은 고정 소수점 표기. 지수를 쓰지 않음 |
+| `hex` | 16진 표기. `0x` 접두어는 붙지 않음 |
+| `general` | 기본값. 위 둘 가운데 더 짧은 쪽 |
+
+- 형식과 정밀도를 주지 않으면: 그 값을 정확히 되살릴 수 있는 가장 짧은 표현으로 씀
+
+### 문자를 숫자로: from_chars
+
+- `std::from_chars(시작, 끝, 변수)`: `시작`부터 `끝` 사이의 문자를 숫자로 바꿔 `변수`에 넣음 <CppRef path="cpp/utility/from_chars" />
+- 반환값
+
+| 멤버 | 뜻 |
+| --- | --- |
+| `ptr` | 변환하지 못한 첫 글자의 위치. 전부 변환했으면 `끝`. 하나도 못 했으면 `시작` |
+| `ec` | 성공하면 `std::errc{}`, 숫자가 아니면 `std::errc::invalid_argument`, 범위를 벗어나면 `std::errc::result_out_of_range` |
+
+- `std::stoi`와 다른 점: 앞쪽의 공백을 건너뛰지 **않음**. `" 42"`는 실패
+
+<RunCode client:load code={charconvCode} />
+
+- 첫 줄 출력에서 `12345` 뒤에 공백이 길게 이어짐: 버퍼의 앞 5칸에만 쓰고 나머지 15칸은 처음 넣어 둔 공백 그대로
+- `std::string buffer(20, ' ');`의 소괄호: "공백 20개"라는 뜻. 중괄호로 쓰면 원소 두 개(값이 20인 문자와 공백)로 읽힘
+- 정수용 `to_chars`와 `from_chars`는 컴파일할 때 계산될 수도 있음(`constexpr`) <Badge text="C++23" />. `constexpr`은 9장에서 다룸
+
+### 왕복 비교
+
+<RunCode client:load code={roundTripCode} />
+
+- 볼 것
+  - `to_chars`: `0.30000000000000004`로 적음. 되돌리면 원래 값과 정확히 같음
+  - `to_string`: 소수점 아래 6자리에서 잘라 `0.300000`. 되돌리면 원래 값과 다름
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| `std::to_string`, `std::stoi` 계열 | C++11 | 그대로 사용 |
+| `std::to_chars`, `std::from_chars` | C++17 | 문자열 스트림(`std::ostringstream`, `std::istringstream`) 또는 C의 `snprintf`, `strtol` |
+| 구조적 바인딩으로 결과 받기 | C++17 | 결과를 변수에 받고 `.ptr`, `.ec`로 읽음 |
+
+- 컴파일러 지원에 관한 주의: 부동소수점용 `to_chars` / `from_chars`는 표준에 들어온 뒤에도 컴파일러가 구현하는 데 오래 걸렸음. 오래된 컴파일러에서는 정수용만 될 수 있음
+- C++98 / C++03: `std::to_string`과 `std::stoi`도 없음. 문자열 스트림이나 C 함수를 씀
+- 문자열 스트림 <CppRef path="cpp/io/basic_ostringstream" />: `std::cout`처럼 `<<`와 `>>`를 쓰되, 화면 대신 문자열에 쓰고 읽음. `<sstream>` 헤더. 13장에서 다룸
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={convertCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::stoi("12abc")`는 실패가 아님
+  - 12를 돌려줌. 뒤에 남은 글자가 있는지는 위치 매개변수로 확인해야 함
+- `std::to_string`으로 만든 부동소수점 문자열은 정확하지 않을 수 있음
+  - 항상 소수점 아래 6자리. 아주 작은 값은 `0.000000`이 되어 버림
+- `to_chars`가 쓴 결과는 C 스타일 문자열이 아님
+  - 널 문자가 없음. 반환된 `ptr`까지만 읽을 것
+- 어느 것을 쓸까
+  - 간단한 변환, 사람에게 보여 줄 문자열: `std::to_string` 또는 `std::format`
+  - 사용자 입력 해석: `std::stoi` 계열 + 예외 처리
+  - 성능이 중요하거나 값을 정확히 저장하고 복원해야 함: `std::to_chars` / `std::from_chars`
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| `std::to_string(값)` | 숫자 → `std::string`. 부동소수점은 6자리 고정 | C++11 |
+| `std::stoi(문자열, &위치, 진법)` | 문자열 → 정수. 실패하면 예외 | C++11 |
+| `std::stod(문자열, &위치)` | 문자열 → `double` | C++11 |
+| `std::to_chars(시작, 끝, 값)` | 버퍼에 직접 씀. `ptr`와 `ec`를 돌려줌 | C++17 |
+| `std::from_chars(시작, 끝, 변수)` | 버퍼에서 읽음. 공백을 건너뛰지 않음 | C++17 |
+| 완벽한 왕복 | `to_chars` → `from_chars`는 원래 값을 정확히 되살림 | C++17 |
+
+## 복습 질문
+
+<details>
+<summary>`std::stoi("abc")`와 `std::stoi("12abc")`는 각각 어떻게 되나요?</summary>
+
+- `std::stoi("abc")`: 읽을 수 있는 숫자가 없으므로 `std::invalid_argument` 예외
+- `std::stoi("12abc")`: 12를 돌려줌. 읽을 수 있는 데까지만 읽고 멈춤
+
+</details>
+
+<details>
+<summary>`std::stoi("0x1F", nullptr, 0)`의 값은?</summary>
+
+- 31
+- 진법을 0으로 주면 접두어 `0x`를 보고 16진수로 읽음
+
+</details>
+
+<details>
+<summary>`std::to_chars`가 `std::to_string`보다 빠른 이유를 두 가지 들어 보세요.</summary>
+
+- 메모리를 새로 마련하지 않음. 받은 버퍼에 바로 씀
+- 로케일을 따지지 않고, 예외도 쓰지 않음
+
+</details>
+
+<details>
+<summary>`std::to_chars`의 결과에서 변환이 성공했는지 어떻게 확인하나요?</summary>
+
+- 반환값의 `ec`가 `std::errc{}`와 같은지 봄
+- 공간이 모자랐다면 `std::errc::value_too_large`
+
+</details>
+
+<details>
+<summary>`double` 값을 파일에 문자로 저장했다가 다시 읽어 정확히 같은 값을 얻어야 합니다. 어떤 함수를 쓰나요?</summary>
+
+- `std::to_chars`로 쓰고 `std::from_chars`로 읽음
+- `std::to_string`은 소수점 아래 6자리에서 잘라 내므로 값이 달라질 수 있음
+
+</details>

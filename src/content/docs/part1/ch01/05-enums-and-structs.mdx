@@ -1,0 +1,327 @@
+---
+title: 열거형과 구조체
+description: 정해진 몇 가지 값만 갖는 타입인 열거형과, 여러 값을 하나로 묶는 구조체를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import structViz from '../../../../data/ch01/struct.js';
+import enumProblemCode from '../../../../examples/ch01/enum-problem.cpp?raw';
+import enumClassCode from '../../../../examples/ch01/enum-class.cpp?raw';
+import enumUnderlyingCode from '../../../../examples/ch01/enum-underlying.cpp?raw';
+import enumUsingCode from '../../../../examples/ch01/enum-using.cpp?raw';
+import enumOldCode from '../../../../examples/ch01/enum-old.cpp?raw';
+import enumOldConflictCode from '../../../../examples/ch01/enum-old-conflict.cpp?raw';
+import enumCpp11Code from '../../../../examples/ch01/enum-cpp11.cpp?raw';
+import structCode from '../../../../examples/ch01/struct.cpp?raw';
+import structCpp11Code from '../../../../examples/ch01/struct-cpp11.cpp?raw';
+
+- 다루는 것: 기본 타입만으로 부족할 때 직접 만드는 타입 두 가지
+- 배우는 요소: 강타입 열거형(`enum class`), 옛 방식 열거형(`enum`), 구조체(`struct`)
+- 지금까지는 `int`, `double`처럼 이미 있는 타입만 썼음. 여기서 처음으로 타입을 직접 만듦
+
+## 열거형이 필요한 이유
+
+- 문제 상황
+  - 컵 크기처럼 "정해진 몇 가지 가운데 하나"인 값을 다뤄야 함
+  - 가장 쉬운 방법: 정수로 나타내고, 각 정수에 이름을 붙임 (0은 Small, 1은 Medium, 2는 Large)
+- 이 방법의 문제
+  - 크기는 그냥 `int`이므로 뜻이 없는 계산을 막을 수 없음. "크기에 5를 더한다"가 컴파일됨
+  - 어느 크기도 아닌 값(-1, 100)을 넣는 것도 막을 수 없음
+
+<RunCode client:load code={enumProblemCode} />
+
+- 두 줄 모두 경고 없이 컴파일되고 실행됨. 컴파일러는 `size`가 "크기"라는 것을 모름
+
+## 강타입 열거형 <Badge text="C++11" />
+
+- **열거형** (enumeration): 가질 수 있는 값을 직접 나열해서 만드는 타입 <CppRef path="cpp/language/enum" />
+- **열거자** (enumerator): 열거형에 나열한 값 하나하나. 아래 코드의 `Small`, `Medium`, `Large`
+- **강타입 열거형** (strongly typed enumeration): `enum class`로 만드는 열거형. 범위 있는 열거형(scoped enumeration)이라고도 함 <CppRef path="cpp/language/enum#Scoped_enumerations" />
+
+```cpp
+enum class CupSize { Small, Medium, Large };
+
+CupSize size{ CupSize::Medium };
+```
+
+- 읽는 법
+  - 첫 줄: `CupSize`라는 새 타입을 만듦. 이 타입의 값은 세 가지뿐
+  - 둘째 줄: `CupSize` 타입의 변수 `size`를 만들고 `Medium`으로 초기화
+  - 열거자를 쓸 때는 `CupSize::Medium`처럼 열거형 이름과 `::`를 앞에 붙임
+- 앞의 문제가 풀리는 방식
+  - `size + 5`: 컴파일 오류. 열거형은 정수처럼 계산할 수 없음
+  - `size = -1`: 컴파일 오류. 정수를 넣을 수 없음
+
+### 열거자의 내부 값
+
+- 열거자는 내부적으로 정수 값을 가짐
+- 값을 정하는 규칙
+  - 첫 열거자: 직접 정하지 않으면 0
+  - 그 뒤의 열거자: 직접 정하지 않으면 바로 앞 열거자의 값 + 1
+  - `= 값`으로 직접 정할 수 있음
+
+```cpp
+enum class HttpStatus
+{
+    Ok = 200,
+    Created,            // 201
+    NotFound = 404,
+    MethodNotAllowed    // 405
+};
+```
+
+- 내부 값이 정수라도 정수로 **자동 변환되지 않음**
+  - `int n{ size };` → 컴파일 오류
+- 내부 값을 꺼내는 방법: `std::to_underlying(값)`. `<utility>` 헤더 <Badge text="C++23" /> <CppRef path="cpp/utility/to_underlying" />
+- `std::println`으로 열거형 값을 바로 출력할 수도 없음. 내부 값을 꺼내서 출력
+
+<RunCode client:load code={enumClassCode} />
+
+- 해 볼 것: 주석 처리된 세 줄의 `//`를 하나씩 지우고 실행해 오류 메시지 확인
+
+### 기반 타입 바꾸기
+
+- **기반 타입** (underlying type): 열거자의 내부 값을 담는 정수 타입
+  - 정하지 않으면 `int`
+  - 열거형 이름 뒤에 `: 타입`을 적어 바꿀 수 있음
+- 쓰는 경우: 메모리를 아끼고 싶을 때, 정해진 크기에 맞춰야 할 때
+
+<RunCode client:load code={enumUnderlyingCode} />
+
+### 열거자 이름의 범위
+
+- `enum class`의 열거자 이름은 그 열거형 **안**에만 있음. 바깥으로 나오지 않음
+- 좋은 점
+  - 바깥에 있는 다른 이름과 충돌하지 않음
+  - 서로 다른 열거형이 같은 이름의 열거자를 가질 수 있음 → `UnknownDoor`, `UnknownNetwork` 대신 짧게 `Unknown`
+- 대가: 쓸 때마다 `Door::Unknown`처럼 열거형 이름을 붙여야 함
+- 접두어를 줄이는 방법 두 가지 <Badge text="C++20" />
+
+| 문법 | 이름 | 뜻 |
+| --- | --- | --- |
+| `using enum Door;` | using enum 선언 <CppRef path="cpp/language/enum#using_enum_declaration" /> | `Door`의 **모든** 열거자를 접두어 없이 쓸 수 있음 |
+| `using Network::Connected;` | using 선언 | `Connected` **하나만** 접두어 없이 쓸 수 있음 |
+
+<RunCode client:load code={enumUsingCode} />
+
+- 주의: `using`의 범위는 가능한 한 좁게 둘 것
+  - 범위가 넓으면 애써 피한 이름 충돌이 다시 생김
+  - 위 코드처럼 블록(`{ }`) 안에 두면 그 블록이 끝날 때 효력도 끝남
+  - 잘 맞는 자리: `switch` 문 안. 이 장의 뒤쪽 "조건문과 비교" 글에서 다룸
+- 해 볼 것: 첫 번째 블록의 `using enum Door;` 바로 아래에 `using enum Network;`를 추가하고 실행
+  - 결과: 추가한 줄에서 컴파일 오류. `Unknown`이 양쪽 열거형에 모두 있어 충돌함
+
+## 옛 방식 열거형
+
+- **범위 없는 열거형** (unscoped enumeration): `class` 없이 `enum`만 써서 만드는 열거형. C++11 이전부터 있던 방식 <CppRef path="cpp/language/enum#Unscoped_enumerations" />
+- 새 코드에서는 쓰지 않음. 오래된 코드를 읽을 때 만나게 되므로 알아 둠
+
+```cpp
+enum Fruit { Apple, Banana };
+
+Fruit fruit{ Banana };   // Fruit:: 없이 쓴다.
+```
+
+- 강타입 열거형과 다른 점 두 가지
+
+| | `enum class` | `enum` |
+| --- | --- | --- |
+| 열거자 이름 | 열거형 안에만 있음 | 바깥 범위로 나옴 |
+| 정수로 변환 | 직접 요청해야 함 | 자동으로 됨 |
+
+### 문제 1: 이름이 바깥으로 나옴
+
+- 열거자 이름이 바깥 범위에 그대로 놓임 → 같은 범위의 다른 이름과 충돌
+
+<RunCode client:load code={enumOldConflictCode} />
+
+- 실행 결과: `'red' redeclared as different kind of entity`
+- 옛 코드의 대처법: 열거자 이름을 길게 지어 겹치지 않게 함 (`SignalRed`, `SignalYellow`)
+
+### 문제 2: 정수로 자동 변환됨
+
+- 옛 방식 열거형의 값은 언제든 정수로 바뀜 → 타입이 지켜 주는 것이 없음
+  - 전혀 다른 열거형의 열거자끼리 비교할 수 있음
+  - 다른 열거형의 값을 엉뚱한 곳에 넘겨도 걸러지지 않음
+
+<RunCode client:load code={enumOldCode} />
+
+- 마지막 줄: 과일(`Banana`, 값 1)과 동물(`Dog`, 값 1)을 비교해 `true`가 나옴
+  - 컴파일러가 경고는 하지만 컴파일은 됨
+  - `enum class`였다면 컴파일 오류
+- 결론: 항상 `enum class`를 쓸 것
+
+## 구조체
+
+- **구조체** (struct): 이미 있는 타입 여러 개를 묶어서 만드는 새 타입 <CppRef path="cpp/language/class" />
+  - 예: 상품 하나의 등급, 번호, 가격을 한 덩어리로 다루고 싶을 때
+- **필드** (field): 구조체에 묶인 값 하나하나. 데이터 멤버(data member)라고도 함 <CppRef path="cpp/language/data_members" />
+
+```cpp
+struct Product
+{
+    char grade;
+    int id;
+    int price;
+};
+```
+
+- 읽는 법
+  - `Product`라는 새 타입을 만듦
+  - `Product` 타입의 변수 하나에는 `grade`, `id`, `price` 세 필드가 들어 있음
+  - 닫는 중괄호 뒤의 세미콜론(`;`)을 빠뜨리지 말 것
+- 필드에 접근: 변수 이름 뒤에 점(`.`)과 필드 이름 <CppRef path="cpp/language/operator_member_access" />
+  - `item.price = 4500;`
+
+<StepViz client:load data={structViz} />
+
+- 볼 것
+  - 변수는 하나지만 필드마다 칸이 따로 있음
+  - 초기화하지 않으면 필드도 알 수 없는 값. `Product item{};`으로 만들면 모든 필드가 0
+  - 구조체 변수를 다른 구조체 변수로 초기화하면 필드 전체가 복사됨. 복사본을 바꿔도 원본은 그대로
+
+<RunCode client:load code={structCode} />
+
+- 필드마다 첫 값을 한 번에 주는 방법: 이 장의 뒤쪽 "클래스 첫걸음과 유니폼 초기화" 글에서 다룸
+
+### 구조체를 다른 파일에 두기
+
+- 실제 프로그램에서는 구조체 정의를 별도 파일에 두고, 쓰는 쪽에서 가져옴
+- 이 사이트의 실행 예제는 파일 하나만 쓸 수 있어 한 파일에 적음. 아래 코드는 읽기용
+- 방법 1: 모듈 <Badge text="C++20" /> <CppRef path="cpp/language/modules" />
+
+```cpp
+// product.cppm (모듈 인터페이스 파일)
+export module product;   // 이 파일이 product라는 모듈임을 선언
+
+export struct Product    // export를 붙인 것만 바깥에서 보인다.
+{
+    char grade;
+    int id;
+    int price;
+};
+```
+
+```cpp
+// main.cpp
+import product;          // 직접 만든 모듈은 꺾쇠괄호 없이 가져온다.
+
+int main()
+{
+    Product item{};
+    item.price = 4500;
+}
+```
+
+- 모듈에 대해 알아 둘 것
+  - 모듈 인터페이스 파일의 확장자는 보통 `.cppm`
+  - `export`를 붙이지 않은 것은 그 모듈을 가져와도 보이지 않음
+- 방법 2: 헤더 파일. C++11 ~ C++17에서는 이 방법뿐
+
+```cpp
+// product.h
+#pragma once   // 이 파일이 여러 번 포함되어도 한 번만 처리하게 함
+
+struct Product
+{
+    char grade;
+    int id;
+    int price;
+};
+```
+
+```cpp
+// main.cpp
+#include "product.h"   // 직접 만든 헤더는 큰따옴표로 가져온다.
+```
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| `enum class`, 기반 타입 지정 | C++11 | 그대로 사용 |
+| `std::to_underlying(값)` | C++23 | `static_cast<int>(값)` |
+| `using enum`, 열거자에 대한 `using` 선언 | C++20 | 없음. 항상 `열거형::열거자`로 적음 |
+| 모듈 | C++20 | 헤더 파일과 `#include` |
+
+- C++98 / C++03: `enum class`가 없음. 옛 방식 `enum`만 쓸 수 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={enumCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+<RunCode client:load code={structCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `static_cast<int>(값)`과 `std::to_underlying(값)`의 차이
+  - `static_cast<int>`: 기반 타입이 무엇이든 `int`로 바꿈. 기반 타입이 `int`보다 크면 값을 잃을 수 있음
+  - `std::to_underlying`: 기반 타입 그대로 돌려줌. 타입을 직접 적지 않으므로 틀릴 일이 없음
+- 열거형 변수에 정수를 넣고 싶을 때
+  - 자동으로는 안 됨. `static_cast<CupSize>(1)`처럼 직접 형변환해야 함
+  - 열거자에 없는 값도 들어갈 수 있으므로 꼭 필요할 때만 쓸 것
+- `struct`와 `class`
+  - 둘 다 타입을 만드는 문법이고 하는 일이 거의 같음
+  - 차이: 이 장의 뒤쪽 "클래스 첫걸음과 유니폼 초기화" 글에서 다룸
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| `enum class` | 정해진 값만 갖는 타입. 정수로 자동 변환되지 않음 | C++11 |
+| 열거자의 내부 값 | 0부터, 앞의 값 + 1. `= 값`으로 직접 지정 | |
+| `std::to_underlying` | 열거자의 내부 값 꺼내기 | C++23 |
+| 기반 타입 | `enum class 이름 : 타입`. 기본은 `int` | C++11 |
+| `using enum` | 접두어 생략. 범위는 좁게 | C++20 |
+| `enum` (옛 방식) | 이름이 바깥으로 나오고 정수로 자동 변환됨. 쓰지 말 것 | |
+| `struct` | 여러 값을 묶은 타입. `.`으로 필드에 접근 | |
+| 모듈로 내보내기 | `export module 이름;`, `export struct ...` | C++20 |
+
+## 복습 질문
+
+<details>
+<summary>`enum class Level { Low = 5, Mid, High = 20, Max };`에서 `Mid`와 `Max`의 내부 값은?</summary>
+
+- `Mid`는 6, `Max`는 21
+- 값을 정하지 않은 열거자는 바로 앞 열거자의 값 + 1
+
+</details>
+
+<details>
+<summary>`enum class`가 정수 상수보다 안전한 이유 두 가지는?</summary>
+
+- 정수처럼 계산할 수 없음. 뜻 없는 `size + 5` 같은 코드가 컴파일되지 않음
+- 정수를 넣을 수 없음. 열거자에 없는 값이 들어가는 것을 막음
+
+</details>
+
+<details>
+<summary>`CupSize size{ CupSize::Large };`의 내부 값을 출력하려면? C++23과 C++11 각각 답해 보세요.</summary>
+
+- C++23: `std::println("{}", std::to_underlying(size));`
+- C++11: `std::cout << static_cast<int>(size) << '\n';`
+
+</details>
+
+<details>
+<summary>옛 방식 `enum`을 쓰지 말아야 하는 이유는?</summary>
+
+- 열거자 이름이 바깥 범위로 나와 다른 이름과 충돌함
+- 정수로 자동 변환되어, 서로 다른 열거형의 값을 섞어 써도 컴파일됨
+
+</details>
+
+<details>
+<summary>`Product a{}; a.price = 100; Product b{ a }; b.price = 200;`을 실행한 뒤 `a.price`는?</summary>
+
+- 100
+- `b`는 `a`의 복사본. 필드 칸이 따로 있으므로 `b`를 바꿔도 `a`는 그대로
+
+</details>

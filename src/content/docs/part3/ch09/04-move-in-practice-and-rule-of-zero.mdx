@@ -1,0 +1,279 @@
+---
+title: 이동 연산 다듬기와 영의 규칙
+description: 객체 멤버를 옮기는 법, swap으로 이동 연산 구현하기, vector에서 이동이 쓰이는 모습, 이동으로 만든 swap, return 문에서 std::move를 쓰지 않는 이유, 값으로 받는 매개변수, 영의 규칙을 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import moveAndSwapCode from '../../../../examples/ch09/move-and-swap.cpp?raw';
+import swapByMoveCode from '../../../../examples/ch09/swap-by-move.cpp?raw';
+import returnMoveCode from '../../../../examples/ch09/return-move.cpp?raw';
+import sinkParamCode from '../../../../examples/ch09/sink-param.cpp?raw';
+import ruleOfZeroCode from '../../../../examples/ch09/rule-of-zero.cpp?raw';
+import ruleOfZeroCpp11Code from '../../../../examples/ch09/rule-of-zero-cpp11.cpp?raw';
+
+- 다루는 것: 앞 글의 이동 연산을 실제로 쓰고 다듬는 법, 그리고 특별 멤버 함수를 아예 쓰지 않는 설계
+- 이 글에서 배우는 요소: 객체 멤버 옮기기, `swap`으로 이동 연산 구현, `vector`와 이동, 이동으로 만든 `swap`, `return` 문과 `std::move`, 값으로 받는 매개변수, 영의 규칙
+
+## 객체 멤버 옮기기
+
+- 앞 글의 `moveFrom()`은 멤버가 모두 기본 타입이라 직접 대입했음
+- 멤버 가운데 객체가 있으면 `std::move()`로 옮겨야 함. 그냥 대입하면 복사가 됨
+
+```cpp
+void Grid::moveFrom(Grid& src) noexcept
+{
+    m_name = std::move(src.m_name);                  // 객체 멤버: 옮김
+    m_width = std::exchange(src.m_width, 0);         // 기본 타입
+    m_height = std::exchange(src.m_height, 0);
+    m_cells = std::exchange(src.m_cells, nullptr);
+}
+```
+
+## swap으로 이동 연산 구현하기
+
+- 앞 글의 방식은 멤버를 옮기는 코드가 `swap()`과 `moveFrom()` 두 곳에 있음
+  - 멤버를 하나 추가하면 두 곳을 다 고쳐야 함. 하나를 빠뜨리면 버그
+- 이동 연산도 `swap()`으로 구현하면 고칠 곳이 `swap()` 하나로 줄어듦
+  - `cleanup()`, `moveFrom()`이 필요 없어짐. 정리 코드는 소멸자로 옮김
+
+```cpp
+Grid::Grid(Grid&& src) noexcept
+{
+    swap(src);                       // 기본값으로 만들어진 *this와 맞바꿈
+}
+
+Grid& Grid::operator=(Grid&& rhs) noexcept
+{
+    auto moved{ std::move(rhs) };    // rhs를 moved로 옮김(noexcept)
+    swap(moved);                     // 예외 없는 연산으로 확정
+    return *this;
+}                                    // moved가 원래 내용을 정리
+```
+
+- 이동 생성자: 멤버의 클래스 안 초기화로 빈 상태가 된 `*this`와 원본을 맞바꿈. 원본은 빈 상태가 됨
+- 이동 대입: **이동 후 교환** (move-and-swap) 관용구. 복사 후 교환과 같은 모양
+- 더 짧게 `swap(rhs); return *this;`로 쓸 수도 있음. 하지만 그러면 `*this`의 원래 내용이 바로 정리되지 않음
+  - 원래 내용이 `rhs`를 통해 부른 쪽으로 빠져나가, 예상보다 오래 살아 있을 수 있음
+
+## 이동이 쓰이는 모습: vector
+
+- `std::vector`는 크기가 커지면 더 큰 메모리를 새로 잡고, 원래 원소들을 새 자리로 복사하거나 옮김
+- 원소 타입에 **`noexcept` 이동 생성자**가 있으면 옮김. 깊은 복사가 필요 없으니 훨씬 효율적
+- 모든 생성자와 대입 연산자에 출력을 넣고 실행해 봄
+
+<RunCode client:load code={moveAndSwapCode} />
+
+- 출력 읽기
+  - 반복 0: 임시 `Grid`를 만들고(일반 생성자), `vector`에 옮겨 넣음(이동 생성자)
+  - 반복 1: 새 임시 `Grid`를 만듦. `vector`가 원소 하나를 담을 공간뿐이라 더 큰 공간을 잡고, 원래 원소를 옮긴 뒤(이동 생성자), 새 원소를 옮겨 넣음(이동 생성자)
+    - GCC는 원래 원소 옮기기와 새 원소 넣기의 순서가 이 설명과 다를 수 있음. 표준은 `vector`의 처음 용량도 늘리는 방식도 정하지 않으므로 컴파일러마다 출력이 다를 수 있음
+  - `s = makeGrid();`: 함수가 돌려준 임시 객체는 대입 뒤 사라지므로 **이동 대입**이 골라짐. 이동 후 교환이라 이동 생성자가 한 번 더 불림
+  - `s2 = s;`: 오른쪽이 이름 있는 객체라 **복사 대입**. 복사 후 교환이 임시 사본을 만들면서 복사 생성자가 불리고, 복사 생성자는 일반 생성자에 위임함
+- 이동이 없었다면 위의 이동은 모두 복사였음. 원소마다 10,000칸짜리 배열을 새로 잡고 복사해야 함. 이동은 메모리를 하나도 잡지 않음
+
+## 이동으로 swap 만들기
+
+- 두 객체를 맞바꾸는 함수를 복사로 쓰면
+
+```cpp
+void swapCopy(Heavy& a, Heavy& b)
+{
+    Heavy temp{ a };   // 복사
+    a = b;             // 복사
+    b = temp;          // 복사
+}
+```
+
+- 복사가 비싼 타입이면 성능이 나빠짐. 이동으로 쓰면 복사가 하나도 없음
+
+```cpp
+void swapMove(Heavy& a, Heavy& b)
+{
+    Heavy temp{ std::move(a) };
+    a = std::move(b);
+    b = std::move(temp);
+}
+```
+
+- 표준 라이브러리의 `std::swap()`이 바로 이렇게 구현되어 있음
+
+<RunCode client:load code={swapByMoveCode} />
+
+## return 문에서 std::move를 쓰지 않는다
+
+- `return 이름없는_임시객체;` 꼴: C++17부터 복사와 이동을 하지 않는 것이 **보장됨**(1장의 복사 생략). 값으로 돌려줘도 비용이 없음
+- `return 지역변수;` 꼴(매개변수가 아닌 지역 변수): 복사·이동 생략이 **허용됨**. **NRVO** (named return value optimization)라고 부름
+  - 표준이 보장하지는 않음. 디버그 빌드에서는 하지 않는 컴파일러도 있음
+  - 생략되더라도 복사·이동 생성자는 접근 가능해야 함. 아니면 표준상 잘못된 프로그램
+  - 생략되지 않으면 이동이 쓰임(이동이 없으면 복사)
+- `return std::move(지역변수);`라고 쓰면
+  - `return 객체;` 꼴이 아니므로 어떤 생략도 할 수 없음
+  - 그 결과 이동(이동이 없는 타입이면 복사)이 일어남. NRVO보다 손해
+  - GCC 경고: `moving a local object in a return statement prevents copy elision [-Wpessimizing-move]`
+
+:::caution
+함수에서 지역 변수나 이름 없는 임시 객체를 돌려줄 때는 `return 객체;`라고만 쓰고 `std::move()`를 쓰지 않는다.
+:::
+
+- 예외: 클래스의 **데이터 멤버**를 멤버 함수에서 옮겨 내보내려면 `std::move()`가 필요함. 그냥 쓰면 복사
+- 조건 연산자도 조심
+  - `return cond ? a : b;`는 `return 객체;` 꼴이 아니라 생략이 안 됨. 게다가 이 식은 좌측값이라 **복사**가 일어남
+  - `return cond ? std::move(a) : std::move(b);`나 `return std::move(cond ? a : b);`로 쓰면 적어도 이동은 됨
+  - 가장 깔끔한 것은 `if`로 나눠 `return a;`, `return b;`로 쓰는 것. 컴파일러가 알아서 이동을 씀
+
+<RunCode client:load code={returnMoveCode} />
+
+- 볼 것
+  - `return local;`: 아무 메시지도 없음. 생략됨
+  - `return std::move(local);`: 컴파일러 경고와 함께 이동 생성자가 불림
+  - `return cond ? a : b;`: 복사 생성자
+  - `if`로 나눈 것: 이동 생성자
+
+## 함수에 인수를 넘기는 가장 좋은 방법
+
+- 지금까지의 권고: 기본 타입이 아닌 매개변수는 `const` 참조로 받아 복사를 피함
+- 우측값을 알고 나면 조금 달라짐. 함수가 **어차피 복사해 둘** 매개변수가 그 대상
+  - 흔한 예: 값을 받아 데이터 멤버에 저장하는 멤버 함수
+
+```cpp
+class DataHolder
+{
+public:
+    void setData(const std::vector<int>& data) { m_data = data; }
+private:
+    std::vector<int> m_data;
+};
+```
+
+- 임시 값이 넘어올 때도 복사함. 우측값 참조 오버로드를 추가하면 해결되지만 함수가 둘이 됨
+
+```cpp
+void setData(const std::vector<int>& data) { m_data = data; }
+void setData(std::vector<int>&& data) { m_data = std::move(data); }
+```
+
+- 더 좋은 방법: **값으로 받고 멤버로 옮김**. 함수 하나로 두 경우가 모두 최적
+
+```cpp
+void setData(std::vector<int> data) { m_data = std::move(data); }
+```
+
+| 넘기는 것 | 일어나는 일 |
+| --- | --- |
+| 좌측값 | 매개변수로 한 번 복사(`const` 참조판과 같음), 멤버로 이동 |
+| 우측값 | 매개변수로 이동(또는 생략), 멤버로 이동. 복사 없음 |
+
+<RunCode client:load code={sinkParamCode} />
+
+- 볼 것: 우측값을 넘기면 복사가 한 번도 없음. 이 예에서는 임시 객체로 매개변수를 바로 만들어 매개변수의 이동까지 생략됨
+
+:::note
+함수가 어차피 복사해 둘 매개변수는 값으로 받는 편을 택한다. 단 그 타입이 이동을 지원하고, 그 매개변수에 다형적 동작이 필요 없을 때만이다. 그 밖에는 `const` 참조로 받는다. 다형적 타입을 값으로 넘기면 슬라이싱이 생길 수 있다(10장).
+:::
+
+- 복사해 두지 않는 매개변수(읽기만 하는 매개변수)는 여전히 `const` 참조가 정답
+
+## 영의 규칙
+
+- 앞 글의 다섯의 규칙: 특별 멤버 함수 다섯 가운데 하나를 선언하면 모두 선언함
+  - 컴파일러가 이들을 자동으로 만들지 말지 정하는 규칙이 복잡하기 때문. 다 선언해 두면 컴파일러에게 맡기는 것이 없어 의도가 분명함
+- 지금까지는 이 다섯을 **쓰는 법**을 설명했음. 그러나 현대 C++에서 따를 것은 **영의 규칙** (rule of zero)
+  - 다섯 특별 멤버 함수가 **하나도 필요 없도록** 클래스를 설계함
+  - 방법: 옛 방식의 동적 메모리나 자원을 직접 다루지 않고, 표준 컨테이너와 스마트 포인터에 맡김
+  - 예: `Grid`의 `double*` 대신 `std::vector<double>`. `vector`가 메모리를 알아서 관리하므로 소멸자도, 복사·이동 연산도 쓸 필요가 없음
+  - 다형적이지 않은 타입에 해당함. 다형적 타입은 10장에서 보듯 다섯의 규칙을 따라야 함
+
+<RunCode client:load code={ruleOfZeroCode} />
+
+- 볼 것
+  - 특별 멤버 함수를 하나도 쓰지 않았는데 깊은 복사와 이동이 모두 올바르게 됨
+  - 옮겨진 `a`의 너비가 여전히 3. 컴파일러가 만든 이동 생성자는 기본 타입 멤버를 그냥 복사하기 때문. 옮겨진 객체는 "올바르지만 정해지지 않은 상태"라는 것을 보여 줌. 그래서 옮겨진 객체는 쓰지 않음
+  - `vector::at()`은 범위를 검사해 범위 밖이면 `std::out_of_range`를 던짐 <CppRef path="cpp/container/vector/at" />
+
+:::caution
+현대 C++에서는 영의 규칙을 따른다.
+:::
+
+- 다섯의 규칙은 직접 만드는 **RAII 클래스**에만 쓰는 것으로 제한함
+  - **RAII** (resource acquisition is initialization): 자원의 소유권을 맡아, 알맞은 때에 해제까지 책임지는 클래스. `vector`와 `unique_ptr`가 이렇게 만들어져 있음
+  - 자세한 설계 기법은 32장
+  - 다형적 타입도 다섯의 규칙을 따라야 함(10장)
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 이동 연산, `std::move` | C++11 | 없음 |
+| 보장된 복사 생략 | C++17 | 대부분의 컴파일러가 생략하지만 보장은 아님 |
+| `return` 지역 변수의 자동 이동 | C++11 | 복사 |
+| `std::exchange` | C++14 | 직접 대입 |
+
+- 영의 규칙은 C++11에서도 그대로 쓸 수 있음. `vector`와 `string`이 이동을 지원하기 때문
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={ruleOfZeroCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 이동 연산 안에서 객체 멤버는 대입만 하면 옮겨진다?
+  - `m_name = src.m_name;`은 복사. `std::move(src.m_name)`으로 옮김
+- 지역 변수를 돌려줄 때 `std::move`를 쓰면 더 빠르다?
+  - 복사 생략을 막아 오히려 손해. `return local;`
+- `return cond ? a : b;`도 이동된다?
+  - 좌측값 식이라 복사됨. `if`로 나눠 돌려줌
+- 이제 모든 매개변수를 값으로 받아야 한다?
+  - 함수가 어차피 복사해 둘 매개변수만. 읽기만 하는 매개변수는 `const` 참조
+- 영의 규칙은 특별 멤버 함수를 쓰지 말라는 금지다?
+  - 쓸 필요가 없게 설계하라는 것. 자원을 직접 다루는 RAII 클래스와 다형적 타입은 다섯의 규칙을 따름
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 객체 멤버 옮기기 | `m_x = std::move(src.m_x);` |
+| `swap`으로 이동 | 이동 생성자는 `swap(src)`, 이동 대입은 이동 후 교환. 고칠 곳이 `swap` 하나 |
+| `vector`와 이동 | `noexcept` 이동 생성자가 있으면 원소를 옮김 |
+| 이동으로 만든 `swap` | `temp{ move(a) }; a = move(b); b = move(temp);` |
+| `return` | `return 객체;`. `std::move`는 쓰지 않음(데이터 멤버는 예외) |
+| 값으로 받는 매개변수 | 어차피 복사해 둘 것만. 받은 뒤 `std::move`로 멤버에 |
+| 영의 규칙 | 특별 멤버 함수가 필요 없게. 컨테이너·스마트 포인터에 맡김 |
+
+## 복습 질문
+
+<details>
+<summary>이동 생성자를 `swap(src);` 한 줄로 쓸 수 있는 이유는?</summary>
+
+- 이동 생성자가 실행될 때 `*this`는 멤버의 클래스 안 초기화로 빈 상태
+- 빈 `*this`와 원본을 맞바꾸면 `*this`는 원본의 내용을, 원본은 빈 상태를 가짐
+
+</details>
+
+<details>
+<summary>`Tracer make() { Tracer t; return std::move(t); }`가 `return t;`보다 나쁜 이유는?</summary>
+
+- `return std::move(t);`는 `return 객체;` 꼴이 아니라 복사 생략(NRVO)을 할 수 없음. 반드시 이동이 일어남
+- `return t;`는 생략될 수 있고, 생략되지 않아도 이동됨
+
+</details>
+
+<details>
+<summary>`void setName(std::string name) { m_name = std::move(name); }`에 좌측값과 우측값을 넘길 때 각각 복사는 몇 번인가?</summary>
+
+- 좌측값: 매개변수로 한 번 복사, 멤버로는 이동
+- 우측값: 복사 없음(이동만)
+
+</details>
+
+<details>
+<summary>`double*` 멤버를 `std::vector<double>`로 바꾸면 무엇을 지울 수 있는가?</summary>
+
+- 소멸자, 복사 생성자, 복사 대입 연산자, 이동 생성자, 이동 대입 연산자 모두
+- 컴파일러가 만든 것들이 `vector`의 복사·이동·소멸을 불러 올바르게 동작함(영의 규칙)
+
+</details>

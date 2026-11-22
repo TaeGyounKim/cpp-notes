@@ -1,0 +1,199 @@
+---
+title: 실행 시간 타입 정보, 비공개 상속, 가상 기반 클래스
+description: 실행 중에 객체의 타입을 알아내는 RTTI와 typeid, protected·private 상속, 다이아몬드 계층에서 공통 부모를 하나로 합치는 가상 기반 클래스와 그 생성자 규칙을 익힙니다.
+sidebar:
+  order: 10
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import rttiCode from '../../../../examples/ch10/rtti.cpp?raw';
+import virtualBaseCode from '../../../../examples/ch10/virtual-base.cpp?raw';
+import rttiCpp11Code from '../../../../examples/ch10/rtti-cpp11.cpp?raw';
+
+- 다루는 것: 상속의 세부 사항 가운데 남은 세 가지
+- 이 글에서 배우는 요소: RTTI, `typeid`, `std::type_info`, `protected`·`private` 상속, 가상 기반 클래스
+
+## 실행 시간 타입 정보
+
+- 다른 객체 지향 언어에 비해 C++은 매우 **컴파일 시점** 중심
+  - 멤버 함수 재정의가 동작하는 것도 객체가 자기 클래스를 알아서가 아니라, 멤버 함수와 구현 사이에 한 단계 간접 참조(vtable)가 있어서
+- 그래도 객체를 실행 시점에 들여다보는 기능이 있음. 묶어서 **실행 시간 타입 정보** (run-time type information, RTTI)라고 부름 <CppRef path="cpp/language/typeid" />
+- RTTI 기능 하나: `dynamic_cast`(5편). 객체 지향 계층 안에서 안전하게 타입을 바꿈
+  - vtable이 없는(가상 멤버 함수가 없는) 클래스에 쓰면 컴파일 오류: `cannot 'dynamic_cast' 'p' (of type 'struct B*') to type 'struct D*' (source type is not polymorphic)`
+
+### typeid
+
+- 다른 RTTI 기능: **`typeid` 연산자**. 실행 중에 타입을 물어봄
+- 결과는 `<typeinfo>`에 정의된 `std::type_info` 객체의 참조 <CppRef path="cpp/types/type_info" />
+  - `name()` 멤버 함수가 타입의 이름을 돌려줌. 이름의 모양은 컴파일러마다 다름
+- 동작
+  - `typeid(타입)`: 그 타입을 나타내는 `type_info`
+  - `typeid(식)`: 식의 타입이 다형적이면 식을 계산하고, **동적 타입**(실제 객체의 타입)을 나타내는 `type_info`. 다형적이 아니면 식을 계산하지 않고 **정적 타입**을 나타내는 `type_info`
+
+:::caution
+`typeid`는 클래스에 가상 멤버 함수가 하나 이상 있을 때(vtable이 있을 때)만 제대로 동작한다. 또 `typeid`는 인수에서 참조와 `const`를 떼어 낸다.
+:::
+
+### typeid를 쓰지 말아야 할 곳
+
+- 대부분은 `typeid`가 필요 없음. 객체 타입에 따라 다른 코드를 실행하는 일은 가상 멤버 함수가 더 잘 처리함
+
+```cpp
+void report(const Device& device)
+{
+    if (typeid(device) == typeid(Thermometer)) {
+        std::println("온도 보고");
+    } else if (typeid(device) == typeid(Camera)) {
+        std::println("사진 보고");
+    }
+}
+```
+
+- 이런 코드를 보면 곧바로 가상 멤버 함수로 바꿀 것을 생각해야 함
+  - `Device`에 가상 함수 `report()`를 두고, `Thermometer`와 `Camera`가 각자 재정의
+  - 객체와 관련된 기능은 그 객체에게 맡기는 것이 객체 지향 프로그래밍에 맞음
+
+### typeid의 쓸모: 기록과 디버깅
+
+- 기록을 남길 때 어느 객체가 남긴 줄인지 함께 적을 수 있음
+
+```cpp
+void logObject(const Loggable& object)
+{
+    std::println("{}: {}", typeid(object).name(), object.logMessage());
+}
+```
+
+<RunCode client:load code={rttiCode} />
+
+- 볼 것
+  - GCC는 `name()`으로 `11Thermometer`처럼 이름 앞에 글자 수가 붙은 꼴을 돌려줌. MSVC라면 `class Thermometer`. 컴파일러에 따라 다름
+  - 참조를 통해서도 실제 타입(`Thermometer`)이 나옴. `Loggable`에 가상 함수가 있기 때문
+
+:::note
+`typeid`를 기록이나 디버깅 말고 다른 목적으로 쓰고 있다면, 가상 멤버 함수를 쓰는 등 설계를 바꾸는 것을 생각해 본다.
+:::
+
+## 비공개 상속
+
+- 지금까지 기반 클래스는 늘 `public`으로 나열했음. `protected`나 `private`으로도 할 수 있음. 둘 다 `public`만큼 흔하지는 않음 <CppRef path="cpp/language/derived_class" />
+- 접근 지정자를 생략하면: `class`는 `private` 상속, `struct`는 `public` 상속
+  - `class D : B {};`로 쓰고 `D` 객체로 `B`의 `public` 함수를 부르면 오류: `'void B::f()' is inaccessible within this context`
+
+| 상속 | 기반 클래스의 `public` 멤버는 파생 클래스에서 | 기반 클래스의 `protected` 멤버는 |
+| --- | --- | --- |
+| `public` | `public` | `protected` |
+| `protected` | `protected` | `protected` |
+| `private` | `private` | `private` |
+
+- 부모의 접근 수준을 이렇게 일괄로 낮출 이유가 몇 가지 있지만, 대부분은 계층 설계에 결함이 있다는 뜻
+- 이 기능을 다중 상속과 함께 남용해 클래스의 "구성 요소"를 구현하는 사람들도 있음
+  - 엔진과 동체를 데이터 멤버로 가지는 `Airplane` 대신, `protected` 엔진이면서 `protected` 동체인 `Airplane`을 만듦
+  - 사용하는 쪽에는 엔진이나 동체로 보이지 않지만(모두 `protected`라서) 안에서는 그 기능을 다 쓸 수 있음
+
+:::note
+비공개 상속은 드물다. 대부분의 프로그래머가 익숙하지 않다는 이유만으로도 조심해서 쓰는 것이 좋다.
+:::
+
+## 가상 기반 클래스
+
+- 7편의 다이아몬드 계층: 두 부모가 같은 부모를 가지면 모호함이 생김
+  - 그때 권한 해법은 공통 부모가 자기 기능을 갖지 않게(순수 가상 함수만) 하는 것
+- 공통 부모가 **자기 기능을 가져야** 한다면? C++의 다른 수단: **가상 기반 클래스** (virtual base class) <CppRef path="cpp/language/derived_class" />
+  - 공통 부모를 가상 기반 클래스로 상속하면 모호함이 없음
+
+```cpp
+class Camera : public virtual Device { /* ... */ };
+class Player : public virtual Device { /* ... */ };
+class Phone : public Camera, public Player { /* ... */ };
+```
+
+- 가상 기반 클래스가 아니라면 `Phone`에는 `Device` 하위 객체가 둘(`Camera`를 거친 것, `Player`를 거친 것) 있어 `phone.sleep()`이 모호함
+- 가상으로 상속하면 `Phone`에는 `Device` 하위 객체가 **하나만** 있으므로 모호함이 없음
+
+### 가상 기반 클래스의 생성자
+
+- 이런 계층에서는 생성자를 조심해야 함
+- `Camera`와 `Player`가 각자 `Device{ watts }`로 기반 클래스를 초기화하고, `Phone`은 `Camera`와 `Player`의 생성자만 부른다면?
+  - `Device` 하위 객체는 하나뿐이라 두 번 만들 수 없음
+  - 그래서 컴파일러는 가장 아래 클래스(`Phone`)를 만들 때 `Camera`와 `Player` 생성자 안의 `Device` 생성자 호출을 **무시**하고, 대신 `Device`의 **기본 생성자**를 부름
+  - 결과: 넘긴 전력 값이 사라지고 0이 됨. (그래서 이 예에서는 `Device`에 `protected` 기본 생성자를 둬야 컴파일됨)
+- 결론: **가장 아래 파생 클래스가** 공유 기반 클래스의 생성자를 직접 불러야 함
+
+```cpp
+class Phone : public Camera, public Player
+{
+public:
+    Phone(double watts)
+        : Device{ watts }, Camera{ "광각" }, Player{ 5 } {}
+};
+```
+
+- `Camera`와 `Player`에는 `Device`를 초기화하지 않는 `protected` 생성자를 둠. 파생 클래스만 쓰라고 `protected`. 사용하는 쪽은 여전히 `Device`까지 초기화하는 `public` 생성자로만 `Camera`, `Player`를 만듦
+
+<RunCode client:load code={virtualBaseCode} />
+
+- 볼 것
+  - `Phone`: 4.5W. 가장 아래 클래스가 `Device`를 직접 만들었기 때문
+  - `WrongPhone`: 0W. `Camera`, `Player` 쪽의 `Device` 생성자 호출이 무시되고 기본 생성자가 쓰임
+
+:::note
+가상 기반 클래스는 클래스 계층의 모호함을 피하는 좋은 방법이다. 단점은 이 개념에 익숙하지 않은 C++ 프로그래머가 많다는 것뿐이다.
+:::
+
+## 이전 표준에서는
+
+- RTTI(`typeid`, `dynamic_cast`), 비공개 상속, 가상 기반 클래스는 모두 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={rttiCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `typeid(ref)`는 늘 실제 객체의 타입을 알려 준다?
+  - 가상 함수가 있는(다형적인) 클래스일 때만. 아니면 선언된 타입
+- `typeid(...).name()`의 결과로 코드를 분기해도 된다?
+  - 이름은 컴파일러마다 다름. 분기는 가상 함수로, `typeid`는 기록과 디버깅에
+- `class D : B {}`도 `public` 상속이다?
+  - `class`의 기본은 `private` 상속. `struct`라면 `public`
+- 가상 기반 클래스에서도 중간 클래스의 생성자가 공통 부모를 초기화한다?
+  - 가장 아래 클래스를 만들 때는 무시됨. 가장 아래 클래스가 직접 초기화해야 함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| RTTI | 실행 중 타입 정보. `dynamic_cast`, `typeid`. 다형적 클래스에서만 제대로 |
+| `typeid` | `std::type_info` 참조. `name()`은 컴파일러마다 다름. 기록·디버깅용 |
+| 비공개 상속 | `protected`/`private` 상속은 부모의 접근 수준을 낮춤. 드묾 |
+| 기본 상속 | `class`는 `private`, `struct`는 `public` |
+| 가상 기반 클래스 | `public virtual Base`. 다이아몬드에서 공통 부모를 하나로 |
+| 가상 기반의 생성자 | 가장 아래 클래스가 직접 초기화. 중간 클래스의 호출은 무시 |
+
+## 복습 질문
+
+<details>
+<summary>가상 함수가 하나도 없는 `Base`에 대해 `Base& b{ derived }; typeid(b) == typeid(Derived)`의 결과는?</summary>
+
+- `false`. 다형적이지 않으므로 `typeid`가 정적 타입(`Base`)을 돌려줌
+
+</details>
+
+<details>
+<summary>`typeid`로 객체 타입을 비교해 동작을 나누는 코드를 어떻게 바꾸는 것이 좋은가?</summary>
+
+- 기반 클래스에 가상 함수를 두고 각 파생 클래스가 재정의하게 함. 객체의 기능은 객체에게 맡김
+
+</details>
+
+<details>
+<summary>가상 기반 클래스 `Device`를 가진 `Phone`의 생성자가 `Camera{ 4.5, "광각" }`만 부르면 `Device`는 어떻게 만들어지는가?</summary>
+
+- `Camera` 생성자 안의 `Device{ 4.5 }` 호출은 무시되고 `Device`의 기본 생성자가 쓰임
+- `Phone`의 초기화 목록에서 `Device{ 4.5 }`를 직접 불러야 함
+
+</details>

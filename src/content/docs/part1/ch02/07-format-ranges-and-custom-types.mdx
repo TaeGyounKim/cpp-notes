@@ -1,0 +1,229 @@
+---
+title: 이스케이프, 범위, 직접 만든 타입의 형식 지정
+description: 문자열을 리터럴 모양으로 출력하는 이스케이프 형식, 컨테이너를 통째로 출력하는 범위 형식, 직접 만든 타입을 std::format으로 출력하게 하는 formatter를 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import escapedCode from '../../../../examples/ch02/format-escaped.cpp?raw';
+import rangesCode from '../../../../examples/ch02/format-ranges.cpp?raw';
+import customCode from '../../../../examples/ch02/format-custom.cpp?raw';
+import customReuseCode from '../../../../examples/ch02/format-custom-reuse.cpp?raw';
+import customCpp11Code from '../../../../examples/ch02/format-custom-cpp11.cpp?raw';
+
+- 다루는 것: 형식 지정의 나머지 세 가지 주제
+- 배우는 요소: 이스케이프 형식 `?`, 범위 형식, `std::formatter` 특수화
+- 앞의 두 가지는 C++23에서 들어온 편의 기능. 마지막은 형식화 기능을 직접 만든 타입으로 넓히는 방법
+
+## 이스케이프해서 출력하기 <Badge text="C++23" />
+
+- 타입 글자 `?`: 문자열이나 문자를 **코드에 리터럴로 적을 때의 모양**으로 출력
+  - 문자열은 큰따옴표로, 문자는 작은따옴표로 감쌈
+  - 탭, 줄바꿈 같은 특수 문자를 이스케이프 시퀀스로 바꿔서 보여 줌
+
+| 문자 | `?`로 출력한 모양 |
+| --- | --- |
+| 탭 | `\t` |
+| 줄바꿈 | `\n` |
+| 캐리지 리턴 | `\r` |
+| 역슬래시 | `\\` |
+| 큰따옴표 (문자열 안에서) | `\"` |
+| 작은따옴표 (문자로 출력할 때) | `\'` |
+| 화면에 보이지 않는 그 밖의 문자 | `\u{16진 코드}` |
+
+- 쓸 곳: 로그를 남기거나 디버깅할 때. 문자열 끝에 붙은 공백이나 줄바꿈, 눈에 보이지 않는 문자를 확인할 수 있음
+
+<RunCode client:load code={escapedCode} />
+
+- 볼 것
+  - 첫 출력은 탭과 줄바꿈이 실제로 적용되어 두 줄로 나옴. 둘째 출력은 `\t`, `\n`이 글자로 보임
+  - 마지막 줄: 입력 끝에 공백과 `\r`이 붙어 있다는 것이 드러남
+
+## 범위를 통째로 출력하기 <Badge text="C++23" />
+
+- **범위** (range): 원소들이 줄지어 있는 것. `std::vector`, `std::array` 같은 컨테이너가 대표적. 17장에서 자세히 다룸
+- 컨테이너를 `{}`에 그대로 넘기면 원소 전체가 출력됨 <CppRef path="cpp/utility/format/range_formatter" />
+- 기본 모양
+
+| 넘긴 것 | 기본 출력 |
+| --- | --- |
+| `std::vector`, `std::array` 등 | 대괄호로 감싸고 쉼표로 구분. `[11, 22, 33]` |
+| 원소가 문자열이나 문자 | 원소가 이스케이프되어 나옴. `["Hello", "World"]` |
+| `std::pair`, 원소 둘인 `std::tuple` | 소괄호로 감쌈. `(11, 22)` <CppRef path="cpp/utility/format/tuple_formatter" /> |
+
+### 범위용 형식 지정자
+
+```text
+{:[채움][정렬][너비][n][범위 타입][:원소의 형식 지정자]}
+```
+
+| 부분 | 뜻 |
+| --- | --- |
+| 채움, 정렬, 너비 | 범위 **전체**를 하나의 덩어리로 보고 적용 |
+| `n` | 바깥 괄호를 뺌 |
+| 범위 타입 `m` | `pair`와 원소 둘인 `tuple` 전용. 괄호 없이 `키: 값` 모양 |
+| 범위 타입 `s` | 문자의 범위를 문자열 하나로 출력 |
+| 범위 타입 `?s` | 문자의 범위를 이스케이프한 문자열 하나로 출력 |
+| 둘째 콜론 뒤 | 원소 **하나하나**에 적용할 형식 지정자 |
+
+- 핵심: 콜론이 두 번 나옴
+  - 첫째 콜론 뒤: 범위 전체의 모양
+  - 둘째 콜론 뒤: 원소의 모양
+  - `{::04}`: 범위에는 아무 지정 없음, 원소는 `04`
+- 원소가 다시 범위면 콜론을 이어서 더 안쪽의 모양을 정함. `{:n:n:02}`
+- 다른 괄호로 감싸고 싶으면: `n`으로 괄호를 빼고 원하는 글자를 직접 적음. 중괄호는 `{{`, `}}`
+
+<RunCode client:load code={rangesCode} />
+
+- 볼 것
+  - `{}`와 `{::}`의 차이: 문자열 원소가 앞에서는 `"Tab\there"`처럼 이스케이프되어, 뒤에서는 그대로 나옴
+  - `{:n:n}`: 바깥 범위와 안쪽 범위의 괄호를 모두 빼서 숫자만 죽 이어짐
+
+## 직접 만든 타입을 형식화하기
+
+- 문제 상황: 직접 만든 구조체나 클래스는 `{}`에 넘길 수 없음. 어떻게 출력할지 표준 라이브러리가 모르기 때문
+- 해결: 그 타입을 위한 `std::formatter`를 만들어 알려 줌 <Badge text="C++20" /> <CppRef path="cpp/utility/format/formatter" />
+- 미리 알아 둘 것: 아래 코드에는 아직 배우지 않은 문법이 여럿 나옴. 지금은 "이런 식으로 넓힐 수 있다"는 것만 보고, 뒤에서 해당 문법을 배운 뒤 다시 돌아오면 됨
+
+| 쓰인 문법 | 다루는 곳 |
+| --- | --- |
+| `constexpr` 함수 | 9장 |
+| 템플릿 특수화(`template <>`), `auto` 매개변수 | 12장 |
+| 예외 | 14장 |
+| 반복자 | 17장 |
+
+### formatter의 두 멤버 함수
+
+| 멤버 함수 | 하는 일 | 돌려주는 것 |
+| --- | --- | --- |
+| `parse(context)` | 형식 지정자를 해석해서 결과를 데이터 멤버에 기억해 둠 | 해석이 끝난 위치 |
+| `format(값, context)` | 기억해 둔 내용에 따라 값을 출력 | 출력이 끝난 위치 |
+
+- `parse`가 받는 것: 콜론 뒤부터 닫는 중괄호 앞까지의 글자들. `{:h}`라면 `h`
+- `format`에서 쓰는 `std::format_to(출력 위치, 형식 문자열, 인수...)`: `std::format`과 같되, 문자열을 돌려주는 대신 지정한 위치에 씀 <CppRef path="cpp/utility/format/format_to" />
+- 형식 지정자가 틀렸을 때: `std::format_error`를 던짐
+  - `std::println`처럼 컴파일할 때 검사하는 함수에서는 이것이 컴파일 오류가 됨
+  - `std::vformat`처럼 실행 중에 검사하는 함수에서는 예외로 던져짐
+
+<RunCode client:load code={customCode} />
+
+- 읽는 법
+  - `template <> class std::formatter<Color>`: "`Color` 타입을 위한 `std::formatter`는 이렇게 생겼다"고 알리는 선언
+  - `parse`: 글자가 `h`면 16진 표기, `d`거나 없으면 기본 표기, 그 밖이면 오류
+  - `format`: `m_hex`의 값에 따라 두 가지 모양 가운데 하나로 출력
+- 해 볼 것: `main`에 `std::println("{:z}", orange);`를 추가하고 실행
+  - 결과: 컴파일 오류. 잘못된 형식 지정자를 컴파일러가 잡아냄
+
+### 쉬운 길: 있는 formatter 물려받기
+
+- 너비나 정렬 같은 기본 형식 지정자를 그대로 쓰고 싶을 때: `std::formatter<std::string>`을 물려받음
+  - `parse`는 물려받은 것을 그대로 씀. 직접 쓸 필요가 없음
+  - `format`에서는 값을 문자열로 바꾼 뒤, 물려받은 `format`에 넘김
+- 상속(물려받기): 10장에서 다룸
+
+<RunCode client:load code={customReuseCode} />
+
+- 볼 것: `{:>10}`, `{:*^10}` 같은 문자열용 형식 지정자가 `Version`에도 그대로 동작함
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::formatter` 특수화 | C++20 | `operator<<`를 만들어 스트림에 출력 |
+| 이스케이프 형식 `?` | C++23 | 없음. 직접 글자를 바꿔 출력 |
+| 범위 형식 | C++23 | 반복문으로 원소를 하나씩 출력 |
+
+- `operator<<`를 직접 만드는 방법(연산자 오버로딩): 15장에서 다룸. 아래 코드는 맛보기
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={customCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `{:04}`와 `{::04}`
+  - 범위에 `{:04}`: 범위 **전체**의 너비를 4로. 원소에는 적용되지 않음
+  - 범위에 `{::04}`: **원소 하나하나**를 4칸에 0으로 채움
+- 문자열의 벡터를 출력하면 따옴표가 붙음
+  - 범위 안의 문자열과 문자는 기본이 이스케이프 형식. 따옴표 없이 출력하려면 `{::}`
+- `std::formatter`를 만들지 않은 타입을 `{}`에 넘기면
+  - 컴파일 오류. 오류 메시지가 길고 알아보기 어려운 편이니, 직접 만든 타입을 넘겼는지부터 확인할 것
+- `formatter`의 `format`은 `const` 멤버 함수여야 함
+  - `const`를 빠뜨리면 컴파일 오류. 오류 메시지가 `const`를 직접 언급하지 않아 원인을 찾기 어려움
+
+## 2장을 마치며
+
+- 2장에서 다룬 것
+  - C 스타일 문자열과 그 함정
+  - `std::string`: 문자열을 다루는 기본 수단
+  - 숫자와 문자열 사이의 변환
+  - `std::string_view`: 읽기만 할 문자열을 넘길 때
+  - `std::format`과 `std::print`: 형식을 갖춰 출력하기
+- 고르는 기준 요약
+
+| 하려는 일 | 쓸 것 |
+| --- | --- |
+| 문자열을 갖고 있기 | `std::string` |
+| 문자열을 읽기만 하는 함수의 매개변수 | `std::string_view` |
+| C 함수에 문자열 넘기기 | `std::string`의 `c_str()` |
+| 값을 끼워 넣은 문자열 만들기 | `std::format` |
+| 콘솔에 출력하기 | `std::print`, `std::println` |
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| `{:?}` | 리터럴 모양으로 출력. 특수 문자가 보임 | C++23 |
+| `{}`에 컨테이너 | `[1, 2, 3]` | C++23 |
+| `{:n}` | 바깥 괄호 빼기 | C++23 |
+| `{::형식}` | 원소 하나하나의 형식 | C++23 |
+| `{:m}` | `pair`를 `키: 값`으로 | C++23 |
+| `{:s}` | 문자의 범위를 문자열로 | C++23 |
+| `std::formatter<타입>` | `parse`와 `format`을 만들어 직접 만든 타입을 지원 | C++20 |
+| `std::format_to` | 지정한 위치에 형식화해 씀 | C++20 |
+
+## 복습 질문
+
+<details>
+<summary>문자열 변수의 끝에 줄바꿈이 붙어 있는지 출력으로 확인하려면?</summary>
+
+- `std::println("{:?}", text);`
+- 이스케이프 형식으로 출력하면 줄바꿈이 `\n`이라는 글자로 보임
+
+</details>
+
+<details>
+<summary>`std::vector v{ 1, 2, 3 };`을 `1, 2, 3`으로(괄호 없이) 출력하려면?</summary>
+
+- `std::println("{:n}", v);`
+
+</details>
+
+<details>
+<summary>같은 벡터를 `[001, 002, 003]`으로 출력하려면?</summary>
+
+- `std::println("{::03}", v);`
+- 둘째 콜론 뒤가 원소 하나하나의 형식 지정자
+
+</details>
+
+<details>
+<summary>직접 만든 타입용 `std::formatter`에 필요한 멤버 함수 두 개와 각각의 역할은?</summary>
+
+- `parse`: 형식 지정자를 해석해 기억해 둠
+- `format`: 기억해 둔 내용에 따라 값을 출력
+
+</details>
+
+<details>
+<summary>C++11 환경에서 직접 만든 타입을 `std::cout`으로 출력할 수 있게 하려면?</summary>
+
+- 그 타입을 받는 `operator<<`를 만듦
+- `std::ostream& operator<<(std::ostream& out, const 타입& 값)`
+
+</details>

@@ -1,0 +1,257 @@
+---
+title: 상속의 세부 사항 2
+description: 재정의할 때 조심할 특수한 경우들(static 멤버 함수, 오버로드된 함수, private 멤버 함수와 템플릿 메서드, 기본 인수, 접근 지정자 바꾸기)과 파생 클래스의 복사 생성자·대입 연산자를 익힙니다.
+sidebar:
+  order: 9
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import staticOverloadCode from '../../../../examples/ch10/special-static-overload.cpp?raw';
+import templateMethodCode from '../../../../examples/ch10/template-method.cpp?raw';
+import defaultArgAccessCode from '../../../../examples/ch10/default-arg-access.cpp?raw';
+import derivedCopyCode from '../../../../examples/ch10/derived-copy.cpp?raw';
+import specialCpp11Code from '../../../../examples/ch10/special-cpp11.cpp?raw';
+
+- 다루는 것: 멤버 함수를 재정의할 때 조심해야 하는 특수한 경우들, 그리고 파생 클래스의 복사
+- 이 글에서 배우는 요소: `static` 멤버 함수, 오버로드된 함수 재정의, `private` 함수 재정의와 템플릿 메서드, 기본 인수, 접근 지정자 바꾸기, 파생 클래스의 복사 생성자와 대입 연산자
+
+## 기반 클래스의 멤버 함수가 static일 때
+
+- `static` 멤버 함수는 재정의할 수 **없음**. 대부분은 이것만 알면 됨
+- 몇 가지 따름 정리
+  - 멤버 함수는 `static`이면서 `virtual`일 수 없음: `member 'f' cannot be declared both 'virtual' and 'static'`
+  - 파생 클래스에 기반 클래스와 같은 이름의 `static` 멤버 함수를 두면, 그저 **서로 다른 두 함수**
+- 클래스 이름으로 부르면 각자 자기 것이 불림: `Device::info()`, `Sensor::info()`
+- 객체로 부를 때 헷갈림
+  - `static` 멤버 함수도 객체로 부를 수 있음. 그러나 `this`가 없고 객체에 접근하지 않으므로 클래스 이름으로 부르는 것과 같음
+  - 그래서 어느 함수가 불릴지는 객체의 실제 타입이 아니라 **컴파일 시점의 타입**으로 정해짐
+  - `Device& ref{ sensor }; ref.info();`는 `Device::info()`
+
+:::note
+`static` 멤버 함수는 정의된 클래스의 이름으로 범위가 정해지지만, 특정 객체에 적용되는 함수가 아니다. 부르면 보통의 이름 찾기로 정해진 판이 불린다. 객체를 통해 부르더라도 객체는 컴파일 시점의 타입을 정하는 데만 쓰이고 호출 자체에는 관여하지 않는다.
+:::
+
+## 기반 클래스의 멤버 함수가 오버로드되어 있을 때
+
+- 이름과 매개변수로 멤버 함수 하나를 재정의하면, 컴파일러는 기반 클래스의 **같은 이름의 다른 오버로드를 모두 감춤**
+  - 취지: 한 이름의 함수 하나를 재정의했다면 그 이름의 함수를 모두 재정의하려다 깜빡했을 가능성이 크니 오류로 다룸
+  - 생각해 보면 납득됨. 오버로드 몇 개만 바꾸고 나머지는 그대로 둘 이유가 드묾
+- 예: `Device`에 `reset()`과 `reset(int)`가 있는데 `Sensor`가 `reset()`만 재정의하면, `sensor.reset(3)`은 오류: `no matching function for call to 'Sensor::reset(int)'`
+- 그래도 기반 클래스 참조나 포인터로는 부를 수 있음: `Device& ref{ sensor }; ref.reset(7);`
+  - 감추기는 겉모습뿐. 기반 클래스로 캐스트하기만 하면 다시 보임
+- 하나만 바꾸고 싶을 때 나머지를 모두 재정의하는 수고를 덜려면 `using` 선언(앞 글)
+
+```cpp
+class Sensor : public Device
+{
+public:
+    using Device::reset;
+    void reset() override;
+};
+```
+
+- `using` 선언의 위험: 나중에 `Device`에 `Sensor`가 재정의했어야 할 세 번째 `reset()`이 추가되어도 오류로 드러나지 않음
+  - `using` 선언으로 "부모의 다른 오버로드는 모두 받아들이겠다"고 명시했기 때문
+
+:::caution
+기반 클래스의 멤버 함수를 재정의할 때는 알기 어려운 버그를 피하려면 그 함수의 오버로드도 모두 재정의한다.
+:::
+
+<RunCode client:load code={staticOverloadCode} />
+
+## 기반 클래스의 멤버 함수가 private일 때
+
+- `private` 멤버 함수를 재정의하는 데는 아무 문제가 없음
+  - 접근 지정자는 **누가 부를 수 있는가**를 정할 뿐. 파생 클래스가 부모의 `private` 함수를 부를 수 없다고 해서 재정의할 수 없는 것은 아님
+  - 참고로 Java와 C#은 `public`·`protected` 함수만 재정의할 수 있음
+- 이것을 쓰는 흔한 패턴: **템플릿 메서드** (template method) 패턴
+  - 기반 클래스의 템플릿 메서드가 알고리즘의 뼈대를 정하고, 그 안에서 가상 함수를 불러 필요한 정보를 얻음. 템플릿 메서드 자체는 보통 비`virtual`
+  - 파생 클래스는 그 가상 함수만 재정의해 알고리즘의 일부를 바꿈. 기반 클래스의 알고리즘은 고치지 않음
+  - (템플릿 메서드는 C++의 템플릿과 관계없는 설계 패턴의 이름)
+- 예: 배터리 잔량으로 남은 사용 시간을 추정함
+
+```cpp
+class BatteryEstimator
+{
+public:
+    // 템플릿 메서드
+    int hoursLeft() const { return m_percent * hoursPerPercent() / 10; }
+    void setPercent(int percent);
+private:
+    int m_percent{ 0 };
+    virtual int hoursPerPercent() const { return 2; }
+};
+
+class LowPowerEstimator : public BatteryEstimator
+{
+private:
+    int hoursPerPercent() const override { return 5; }
+};
+```
+
+- `private` 함수 하나를 재정의했을 뿐인데, 고치지 않은 기반 클래스의 `public` 함수 `hoursLeft()`의 동작이 완전히 바뀜
+
+<RunCode client:load code={templateMethodCode} />
+
+:::note
+`private`·`protected` 멤버 함수를 재정의하는 것은 클래스를 크게 뜯어고치지 않고 일부 기능을 바꾸는 좋은 방법이다.
+:::
+
+## 기반 클래스의 멤버 함수에 기본 인수가 있을 때
+
+- 재정의하는 함수는 기반 클래스와 **다른 기본 인수**를 가질 수 있음
+- 어느 기본 인수가 쓰일지는 실제 객체가 아니라 **변수의 선언된 타입**으로 정해짐
+  - `Sensor` 객체로 부르면: `Sensor`판, `Sensor`의 기본값
+  - `Device` 객체로 부르면: `Device`판, `Device`의 기본값
+  - **`Sensor`를 가리키는 `Device` 참조로 부르면: `Sensor`판인데 `Device`의 기본값** (이상한 경우)
+- 이유: C++은 기본 인수를 실행 시점이 아니라 식의 **컴파일 시점 타입**으로 결정함. 기본 인수는 "물려받지" 않음
+  - 파생 클래스가 기본 인수를 주지 않으면 파생 클래스 객체로는 인수 없이 부를 수 없음
+
+:::note
+기본 인수가 있는 멤버 함수를 재정의할 때는 기본 인수도 주고, 웬만하면 같은 값으로 한다. 기본값을 이름 있는 상수로 두면 파생 클래스에서도 같은 상수를 쓸 수 있다.
+:::
+
+## 접근 지정자를 바꾸고 싶을 때
+
+- 더 엄격하게도, 더 느슨하게도 바꿀 수 있음. 둘 다 C++에서 그다지 말이 되지 않지만, 정당한 이유가 몇 가지 있음
+
+### 더 엄격하게
+
+- 방법 두 가지: 기반 클래스 전체의 접근 지정을 바꾸기(다음 글의 비공개 상속), 또는 파생 클래스에서 그 함수의 접근 지정을 다시 정하기
+- 예: 기반 클래스의 `public` 함수를 파생 클래스에서 `protected`로 재정의함
+  - 재정의는 제대로 됨. 파생 클래스 객체로 부르면 오류
+  - 그러나 완전히 막히지 않음. 기반 클래스 참조나 포인터로는 부를 수 있고, 파생 클래스의 판이 불림
+
+:::note
+기반 클래스의 `public` 멤버 함수에 대한 접근을 제한할 합리적인 방법(또는 좋은 이유)은 없다.
+:::
+
+### 더 느슨하게
+
+- 훨씬 쉽고 말이 됨
+- 가장 간단한 방법: 파생 클래스에 기반 클래스의 `protected` 함수를 부르는 `public` 함수를 둠. 실제로 접근 지정을 바꾸는 것은 아니고 `public` 통로를 만드는 것
+- 파생 클래스에서 `public`으로 재정의해 새 동작을 줄 수도 있음
+- 구현은 그대로 두고 접근 지정만 바꾸려면 `using` 선언
+
+```cpp
+class Sensor : public Device
+{
+public:
+    using Device::secret;   // protected였던 secret()을 public으로
+};
+```
+
+- 어느 경우든 기반 클래스의 `protected` 함수는 여전히 `protected`. `Device` 참조나 포인터로 `secret()`을 부르면 오류: `'virtual void Device::secret()' is protected within this context`
+
+:::note
+멤버 함수의 접근 지정을 바꾸는 유일하게 쓸모 있는 방법은 `protected` 멤버 함수에 덜 엄격한 접근 통로를 주는 것이다.
+:::
+
+<RunCode client:load code={defaultArgAccessCode} />
+
+- 볼 것
+  - `ref.beep()`: `Sensor`판이 불리지만 기본값은 `Device`의 1
+  - `sensor.secret()`은 되지만 `ref.secret()`은 컴파일 오류
+
+## 파생 클래스의 복사 생성자와 대입 연산자
+
+- 9장: 클래스가 동적 메모리를 가지면 복사 생성자와 대입 연산자를 직접 써야 함. 파생 클래스에서는 여기에 주의가 더 필요함
+- 파생 클래스에 특별한 데이터(대개 포인터)가 없으면 직접 쓸 필요가 없음. 기반 클래스가 직접 썼는지와 관계없음
+  - 파생 클래스가 생략하면, 파생 클래스의 데이터 멤버에는 기본 복사 생성자·대입 연산자가, 기반 클래스 부분에는 **기반 클래스의** 복사 생성자·대입 연산자가 쓰임
+- 파생 클래스에 복사 생성자를 직접 쓴다면 **부모의 복사 생성자를 직접 불러야** 함
+  - 부르지 않으면 부모 부분에는 복사 생성자가 아니라 **기본 생성자**가 쓰임
+
+```cpp
+Sensor::Sensor(const Sensor& src)
+    : Device{ src }, m_channel{ src.m_channel }
+{
+}
+```
+
+- 대입 연산자도 마찬가지. 파생 클래스가 재정의하면 거의 언제나 부모의 대입 연산자도 불러야 함
+  - 부르지 않는 경우는, 대입할 때 객체의 일부만 대입하고 싶은 이상한 이유가 있을 때뿐
+
+```cpp
+Sensor& Sensor::operator=(const Sensor& rhs)
+{
+    if (this == &rhs) { return *this; }
+    Device::operator=(rhs);   // 부모의 대입 연산자
+    m_channel = rhs.m_channel;
+    return *this;
+}
+```
+
+<RunCode client:load code={derivedCopyCode} />
+
+:::caution
+파생 클래스가 복사 생성자나 대입 연산자를 직접 쓰지 않으면 기반 클래스의 기능이 그대로 동작한다. 그러나 파생 클래스가 직접 쓴다면 기반 클래스의 판을 명시적으로 불러야 한다.
+:::
+
+- 상속 계층에서 복사가 필요할 때, 표준 복사 생성자와 대입 연산자만으로는 부족한 경우가 많음. 그래서 숙련된 개발자들은 다형적인 `clone()` 멤버 함수를 흔히 씀(12장)
+
+## 이전 표준에서는
+
+- 이 글의 규칙은 모두 처음 표준(C++98)부터 있음. `override`만 C++11
+- 아래 코드는 C++11 옵션으로 컴파일됨. 기본 인수가 컴파일 시점 타입을 따르는 것을 확인
+
+<RunCode client:load code={specialCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `static` 멤버 함수도 `virtual`처럼 실제 타입을 따른다?
+  - 컴파일 시점의 타입을 따름. `static`이면서 `virtual`일 수도 없음
+- 오버로드 하나만 재정의해도 나머지는 그대로 쓸 수 있다?
+  - 파생 클래스 타입으로는 감춰짐. `using`으로 들여오거나 모두 재정의
+- `private` 함수는 재정의할 수 없다?
+  - 재정의할 수 있음. 템플릿 메서드 패턴의 바탕
+- 기반 클래스 참조로 불러도 파생 클래스의 기본 인수가 쓰인다?
+  - 함수는 파생 클래스의 판이 불리지만, 기본 인수는 기반 클래스의 값
+- 파생 클래스의 복사 생성자는 기반 부분을 저절로 복사한다?
+  - 직접 쓴 복사 생성자는 기반 클래스의 복사 생성자를 직접 불러야 함. 안 부르면 기본 생성자가 쓰임
+
+## 정리
+
+| 경우 | 핵심 |
+| --- | --- |
+| `static` 함수 | 재정의 불가. 같은 이름이면 별개의 함수. 컴파일 시점 타입을 따름 |
+| 오버로드 | 하나를 재정의하면 나머지가 감춰짐. `using`으로 들여옴(위험도 있음) |
+| `private` 함수 | 재정의 가능. 템플릿 메서드 패턴 |
+| 기본 인수 | 컴파일 시점 타입을 따름. 같은 값을 주는 것이 좋음 |
+| 접근 지정 | 엄격하게 바꾸는 것은 무의미. 느슨하게는 `using` 등으로 |
+| 파생 클래스의 복사 | 직접 쓰면 `Base{ src }`, `Base::operator=(rhs)`를 직접 부름 |
+
+## 복습 질문
+
+<details>
+<summary>`Base`와 `Derived`가 둘 다 `static void f()`를 가질 때 `Base& b{ derived }; b.f();`는 어느 판인가?</summary>
+
+- `Base::f()`. `static` 함수는 컴파일 시점의 타입(`Base&`)을 따름
+
+</details>
+
+<details>
+<summary>기반 클래스의 `virtual void go(int n = 2)`를 파생 클래스에서 `void go(int n = 7) override`로 재정의했다. `Base& b{ derived }; b.go();`의 결과는?</summary>
+
+- 파생 클래스의 `go`가 불리지만 `n`은 2. 기본 인수는 컴파일 시점의 타입을 따름
+
+</details>
+
+<details>
+<summary>파생 클래스의 복사 생성자를 `Derived(const Derived& src) : m_x{ src.m_x } {}`로 쓰면 기반 클래스 부분은 어떻게 만들어지는가?</summary>
+
+- 기반 클래스의 복사 생성자가 아니라 기본 생성자로 만들어짐. 원본의 기반 부분이 복사되지 않음
+- `: Base{ src }, m_x{ src.m_x }`로 고침
+
+</details>
+
+<details>
+<summary>템플릿 메서드 패턴에서 파생 클래스가 재정의하는 함수를 `private`으로 두는 이유는?</summary>
+
+- 그 함수는 기반 클래스의 알고리즘(템플릿 메서드)이 부르는 부품일 뿐, 사용하는 쪽이 직접 부를 이유가 없기 때문
+- `private`이어도 재정의는 가능함
+
+</details>

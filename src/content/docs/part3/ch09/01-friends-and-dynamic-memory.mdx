@@ -1,0 +1,217 @@
+---
+title: friend와 객체 안의 동적 메모리
+description: 다른 클래스나 함수에 private 멤버를 열어 주는 friend, 실행 중에 크기가 정해지는 메모리를 가진 클래스, 소멸자로 메모리 돌려주기, 컴파일러가 만든 복사와 대입이 일으키는 얕은 복사 문제를 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import friendCode from '../../../../examples/ch09/friend.cpp?raw';
+import gridCode from '../../../../examples/ch09/grid.cpp?raw';
+import gridCpp11Code from '../../../../examples/ch09/grid-cpp11.cpp?raw';
+import shallowCopyCode from '../../../../examples/ch09/shallow-copy.cpp?raw';
+import shallowCopyViz from '../../../../data/ch09/shallow-copy.js';
+import shallowAssignViz from '../../../../data/ch09/shallow-assign.js';
+
+- 9장에서는 8장에서 시작한 클래스와 객체를 더 깊이 다룸. 안전하고 효율적인 클래스를 쓰는 데 필요한 세부 기능들
+  - 여기서 배우는 개념 상당수가 표준 라이브러리 곳곳에 쓰임
+- 이 글에서 배우는 요소: `friend`, 동적 메모리를 가진 클래스, 소멸자로 메모리 돌려주기, 얕은 복사의 문제
+
+## friend
+
+- 클래스는 다른 클래스, 다른 클래스의 멤버 함수, 독립 함수를 **friend**로 선언할 수 있음 <CppRef path="cpp/language/friend" />
+  - friend는 그 클래스의 `private`, `protected` 멤버에 접근할 수 있음
+- 세 가지 모양
+
+```cpp
+class Thermometer
+{
+    friend class Technician;                          // 클래스 전체
+    friend void Inspector::check(const Thermometer&); // 다른 클래스의 멤버 함수 하나
+    friend void printReport(const Thermometer& t);    // 독립 함수
+    // ...
+};
+```
+
+- 클래스 전체를 friend로 하면 그 클래스의 모든 멤버 함수가 접근할 수 있음
+- 독립 함수를 friend로 하는 예
+  - 객체의 모든 데이터를 출력하는 함수. 출력은 클래스의 핵심 기능이 아니라서 클래스 밖에 두고 싶지만, 내부 데이터는 봐야 함
+  - 클래스 안의 friend 선언이 그 함수의 원형 역할도 함. 원형을 따로 써도 해는 없음
+  - 함수 정의는 보통 함수처럼 클래스 밖에 씀. 정의에는 `friend`를 다시 적지 않음
+- friend는 **주는 쪽**이 정함
+  - 클래스가 "누가 내 friend인가"를 선언함. 다른 클래스나 함수가 스스로 friend라고 선언해서 접근권을 얻을 수는 없음
+
+<RunCode client:load code={friendCode} />
+
+- 볼 것: `Technician`, `Inspector::check`, `printReport`만 `m_offset`에 접근함. `main`에서 접근하면 컴파일 오류
+
+:::caution
+friend는 남용하기 쉽다. 클래스 내부를 다른 코드에 드러내 캡슐화 원칙을 깨기 때문이다. 꼭 필요한 곳에만 쓴다. 이 장의 뒤쪽 글에서 쓸 만한 경우를 몇 가지 본다.
+:::
+
+## 객체 안의 동적 메모리
+
+- 실행해 보기 전에는 메모리가 얼마나 필요한지 모를 때가 있음. 7장의 해법은 실행 중에 필요한 만큼 동적으로 잡는 것
+- 클래스도 마찬가지. 클래스를 쓸 때는 객체 하나가 얼마나 필요할지 모르면, 객체가 메모리를 동적으로 잡아야 함
+- 그러면 세 가지가 어려워짐: 메모리 돌려주기, 객체 복사, 객체 대입
+
+### Grid 클래스
+
+- 이 장 내내 쓸 예: 너비와 높이를 실행 중에 정하는 **온도 격자** `Grid`
+  - 이 장을 지나며 조금씩 고쳐 나감. 그래서 중간 단계의 코드가 늘 가장 좋은 방법은 아님
+- 데이터 멤버: 너비, 높이, 그리고 `width * height`개의 `double`을 담을 배열을 가리키는 포인터 `m_cells`
+  - 객체마다 크기가 다를 수 있으므로 고정 크기 배열을 멤버로 둘 수 없음. 생성자가 필요한 크기만큼 동적으로 잡음
+  - 2차원 격자를 1차원 배열 하나에 담고, `(x, y)`를 `y * width + x` 칸으로 바꿔 씀
+
+```cpp
+Grid(std::size_t width, std::size_t height)
+    : m_width{ width }, m_height{ height },
+      m_cells{ new double[width * height]{} }
+{
+}
+```
+
+:::note
+이 장의 `Grid`는 맨 포인터로 배열을 다룬다. 클래스가 동적 메모리 같은 자원을 가질 때 무슨 일이 생기고 어떻게 다뤄야 하는지 보이려는 것이다. 실제 코드라면 `std::vector` 같은 표준 컨테이너를 써서 훨씬 간단하게 만든다. 현대 C++에서는 소유권을 가진 맨 포인터를 쓰지 않지만, 기존 코드에서 만날 수 있으니 다루는 법을 알아야 한다.
+:::
+
+### 좌표 검사를 한 곳에
+
+- `set()`과 `get()`은 둘 다 좌표가 범위 안인지 검사해야 함. 범위 밖 칸에 접근하면 프로그램이 오동작함
+- 같은 검사를 두 번 쓰면 코드 중복(6장). `private` 멤버 함수 `verifyCoordinate()` 하나에 모음
+  - 좌표가 틀리면 예외 `std::out_of_range`를 던짐. 예외는 1장에서 소개했고 14장에서 자세히 다룸
+
+### 소멸자로 메모리 돌려주기
+
+- 동적으로 잡은 메모리는 다 쓰면 돌려줘야 함
+- 객체 안에서 잡은 메모리를 돌려줄 자리는 **소멸자**. 객체가 사라질 때 소멸자가 불린다는 것을 컴파일러가 보장함
+
+```cpp
+Grid::~Grid()
+{
+    delete[] m_cells;
+    m_cells = nullptr;
+}
+```
+
+- 소멸자는 인수가 없고 하나만 있을 수 있음(8장)
+- 소멸자는 예외를 던지면 안 됨. 이유는 14장
+- 소멸자에 무엇을 쓸지 정한 규칙은 없지만, 메모리를 비롯한 자원을 정리하는 데만 쓰는 것이 좋음
+
+<RunCode client:load code={gridCode} />
+
+- 볼 것: 범위 밖 좌표는 예외로 처리되고, `main`이 끝나며 소멸자가 메모리를 돌려줌
+
+## 복사와 대입의 문제
+
+- 8장: 복사 생성자와 대입 연산자를 직접 쓰지 않으면 컴파일러가 만들어 줌
+  - 객체 멤버에 대해서는 그 객체의 복사 생성자나 대입 연산자를 부름
+  - `int`, `double`, **포인터** 같은 기본 타입은 값을 그대로 복사함: **얕은 복사** (shallow copy). 비트 단위 복사라고도 함
+- 포인터를 그대로 복사하면 주소만 복사될 뿐, 가리키는 데이터는 복사되지 않음
+
+### 얕은 복사: 두 객체가 한 배열을 나눠 가짐
+
+- `Grid`를 값으로 받는 함수에 넘기면 매개변수가 복사로 만들어짐
+
+<StepViz client:load data={shallowCopyViz} />
+
+- 정리
+  - 복사본과 원본이 같은 배열을 가리킴. 복사본으로 값을 바꾸면 원본에도 보임
+  - 더 나쁜 것: 함수가 끝나며 복사본의 소멸자가 배열을 지움. 원본의 포인터는 지워진 메모리를 가리키게 됨: **댕글링 포인터** (dangling pointer, 7장)
+  - 원본이 나중에 소멸하면 같은 배열을 또 지우려 함(이중 해제)
+- 실제로 실행하면 어떻게 되는지 AddressSanitizer로 확인. 출력은 표준 오류로 보냄(프로그램이 중단되기 전에 출력되도록)
+
+<RunCode client:load code={shallowCopyCode} flags="-std=c++23 -Wall -Wextra -fsanitize=address -g" />
+
+- 볼 것: `show 안: 21.5`까지는 정상. 그다음 `heap-use-after-free`: 이미 지운 메모리를 `main`의 `room.get(0)`이 읽음
+
+### 얕은 대입: 메모리가 새고, 한 배열을 나눠 가짐
+
+- 대입은 더 나쁨. 대입받는 객체에는 **이미 자기 배열이 있기** 때문
+
+<StepViz client:load data={shallowAssignViz} />
+
+- 정리
+  - 원래 배열을 가리키던 포인터가 덮어써져 그 배열을 지울 방법이 사라짐: **메모리 누수**
+  - 두 객체가 같은 배열을 가리킴. 복사에서 본 문제가 그대로 따라옴
+- 해법: 복사 생성자와 대입 연산자가 포인터만이 아니라 **가리키는 데이터까지** 복사해야 함: **깊은 복사** (deep copy). 다음 글
+
+:::caution
+클래스가 동적으로 잡은 자원을 가진다면, 메모리를 깊게 복사하는 복사 생성자와 복사 대입 연산자를 직접 써야 한다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `new double[n]{}` (중괄호로 0 초기화) | C++11 | `new double[n]()` |
+| `std::format` | C++20 | 문자열을 이어 붙이거나 `std::ostringstream` |
+| `std::println` | C++23 | `std::cout <<` |
+
+- `friend`, 소멸자, 동적 배열은 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={gridCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 함수가 스스로 어떤 클래스의 friend라고 선언할 수 있다?
+  - 없음. 접근을 허락하는 클래스 쪽이 선언함
+- friend 함수는 그 클래스의 멤버 함수다?
+  - 아님. 멤버에 접근할 권한만 받은 독립 함수. `this`가 없고, 객체를 매개변수로 받아야 함
+- 컴파일러가 만든 복사 생성자는 포인터가 가리키는 것도 복사한다?
+  - 포인터 값(주소)만 복사함. 가리키는 데이터는 공유됨
+- 얕은 복사는 값이 같으니 문제없다?
+  - 한쪽이 지우면 다른 쪽이 댕글링 포인터가 되고, 결국 같은 메모리를 두 번 지움
+- 대입은 복사와 같은 문제만 있다?
+  - 원래 가지고 있던 메모리가 새는 문제가 더해짐
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `friend` | 클래스가 다른 클래스·멤버 함수·함수에 `private` 접근을 허락. 남용 금지 |
+| 동적 메모리를 가진 클래스 | 생성자에서 잡고 소멸자에서 돌려줌 |
+| 얕은 복사 | 포인터 값만 복사. 컴파일러가 만든 복사·대입의 동작 |
+| 얕은 복사의 결과 | 공유, 댕글링 포인터, 이중 해제 |
+| 얕은 대입의 결과 | 위의 것 + 원래 메모리 누수 |
+| 깊은 복사 | 가리키는 데이터까지 복사. 직접 써야 함(다음 글) |
+
+## 복습 질문
+
+<details>
+<summary>`class A { int m_secret; };`의 `m_secret`을 독립 함수 `void dump(const A&)`가 읽게 하려면?</summary>
+
+- `A` 안에 `friend void dump(const A& a);`를 선언함
+- `dump`의 정의는 클래스 밖에 보통 함수처럼 쓰고 `friend`는 다시 적지 않음
+
+</details>
+
+<details>
+<summary>동적 메모리를 가진 클래스에서 소멸자를 쓰지 않으면?</summary>
+
+- 컴파일러가 만든 소멸자는 포인터 멤버를 그냥 없앨 뿐, 가리키는 메모리를 돌려주지 않음
+- 객체가 사라질 때마다 메모리가 샘
+
+</details>
+
+<details>
+<summary>`Grid a{ 2, 2 }; { Grid b{ a }; }` 다음에 `a.get(0, 0)`이 위험한 이유는?</summary>
+
+- 컴파일러가 만든 복사 생성자가 포인터만 복사해 `a`와 `b`가 같은 배열을 가리킴
+- 블록이 끝나며 `b`의 소멸자가 그 배열을 지움. `a`의 포인터는 댕글링 포인터가 됨
+
+</details>
+
+<details>
+<summary>얕은 대입 `a = b;`가 얕은 복사보다 문제가 하나 더 많은 이유는?</summary>
+
+- 대입받는 `a`는 이미 자기 배열을 가지고 있음
+- 그 주소가 덮어써지면 원래 배열을 지울 방법이 사라져 메모리가 샘
+
+</details>

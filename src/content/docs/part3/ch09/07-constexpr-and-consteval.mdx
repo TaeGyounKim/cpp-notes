@@ -1,0 +1,224 @@
+---
+title: constexpr와 consteval
+description: 컴파일 중에 계산할 수 있는 constexpr 함수, 반드시 컴파일 중에 계산되는 consteval 즉시 함수, C++23의 if consteval, 상수 식으로 쓸 수 있는 constexpr 클래스를 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import constexprBasicsCode from '../../../../examples/ch09/constexpr-basics.cpp?raw';
+import constevalCode from '../../../../examples/ch09/consteval.cpp?raw';
+import constexprClassCode from '../../../../examples/ch09/constexpr-class.cpp?raw';
+import constexprCpp11Code from '../../../../examples/ch09/constexpr-cpp11.cpp?raw';
+
+- 다루는 것: 계산을 실행 중이 아니라 **컴파일 중에** 하는 법. 그만큼 실행 성능이 좋아짐
+- 이 글에서 배우는 요소: 상수 식, `constexpr` 함수, `consteval` 즉시 함수, `if consteval`, `constexpr` 클래스
+
+## 상수 식과 constexpr
+
+- **상수 식** (constant expression): 컴파일 중에 값이 정해지는 식. C++에 처음부터 있던 개념 <CppRef path="cpp/language/constant_expression" />
+- 상수 식이 꼭 필요한 곳이 있음. 예: 배열의 크기, `std::array`의 크기
+- 그래서 보통 함수의 결과는 크기로 쓸 수 없음
+
+```cpp
+const int arraySize() { return 32; }
+std::array<int, arraySize()> values;   // 오류: 상수 식이 아님
+```
+
+- 오류: `call to non-'constexpr' function 'const int arraySize()'`
+  - 반환 타입의 `const`는 상수 식과 관계없음
+  - GCC는 `int values[arraySize()];` 같은 C 배열은 자체 확장(가변 길이 배열)으로 받아들이기도 함. 표준 C++에서는 오류이므로 `std::array`로 확인하는 것이 확실함
+- **`constexpr`** <Badge text="C++11" />을 붙이면 상수 식 안에서 부를 수 있는 함수가 됨 <CppRef path="cpp/language/constexpr" />
+
+```cpp
+constexpr int arraySize() { return 32; }
+std::array<int, arraySize()> values;       // 됨
+std::array<int, arraySize() + 1> more;     // 됨
+```
+
+- 상수 식에 쓸 수 있는 것: `constexpr`인 것들과 정수·불리언·문자·열거형 상수
+
+### constexpr 함수의 제약
+
+- 컴파일러가 컴파일 중에 계산할 수 있어야 하므로 제약이 있음
+  - 부수 효과가 없어야 함
+  - 예외가 함수 밖으로 빠져나가면 안 됨. 함수 안에서 던지고 `try`로 잡는 것은 됨
+  - 다른 `constexpr` 함수는 조건 없이 부를 수 있음
+  - `constexpr`가 아닌 함수도 부를 수 있지만, **실행 중에 계산될 때만** 거치는 길이어야 함
+
+```cpp
+constexpr int threshold(bool verbose)
+{
+    if (verbose) {
+        log("자세한 모드");   // constexpr가 아닌 함수
+        return 30;
+    }
+    return 35;
+}
+```
+
+| 호출 | 받는 변수 | 결과 |
+| --- | --- | --- |
+| `threshold(false)` | `constexpr int` | 됨. `log()`를 거치지 않으므로 컴파일 중에 계산 |
+| `threshold(true)` | `constexpr int` | 오류: `call to non-'constexpr' function 'void log(std::string_view)'` |
+| `threshold(true)` | `const int` | 됨. 실행 중에 계산 |
+
+<RunCode client:load code={constexprBasicsCode} />
+
+- C++23은 제약을 조금 풀었음 <Badge text="C++23" />: `goto`, (`case`가 아닌) 레이블, `static`·`static constexpr` 지역 변수를 `constexpr` 함수 안에 쓸 수 있음
+- C++11의 `constexpr` 함수는 훨씬 엄격했음: 본문이 사실상 `return` 문 하나여야 함. C++14부터 지역 변수, `if`, 반복문을 쓸 수 있게 됨(아래 "이전 표준에서는")
+
+## consteval
+
+- `constexpr`는 컴파일 중에 계산될 **수 있다**는 뜻일 뿐, **보장하지는 않음**
+
+```cpp
+constexpr double toFahrenheit(double c) { return c * 9.0 / 5.0 + 32.0; }
+
+constexpr double boiling{ 100.0 };
+constexpr double f1{ toFahrenheit(boiling) };   // 컴파일 중
+double measured{ 36.5 };
+double f2{ toFahrenheit(measured) };            // 실행 중!
+```
+
+- 늘 컴파일 중에 계산된다는 보장이 필요하면 **`consteval`** <Badge text="C++20" />로 **즉시 함수** (immediate function)를 만듦 <CppRef path="cpp/language/consteval" />
+
+```cpp
+consteval double toKelvin(double c) { return c + 273.15; }
+```
+
+- 상수 인수로 부르면 컴파일 중에 계산됨
+- 실행 중에 정해지는 값으로 부르면 컴파일 오류: `call to consteval function 'toKelvin(measured)' is not a constant expression`
+- 즉시 함수는 **상수 평가 중에만** 부를 수 있음
+
+### if consteval
+
+- `constexpr` 함수 안에서 즉시 함수를 부르려면, 그 `constexpr` 함수가 상수 평가 중일 때만이어야 함
+- **`if consteval`** <Badge text="C++23" />: 지금 상수 평가 중인지 검사함 <CppRef path="cpp/language/if" />
+
+```cpp
+constexpr double describe(double c)
+{
+    if consteval {
+        return toKelvin(c);   // 상수 평가 중: 즉시 함수를 부를 수 있음
+    } else {
+        return -1.0;          // 실행 중: 즉시 함수를 부를 수 없음
+    }
+}
+```
+
+- 중괄호가 반드시 있어야 함. 조건식을 쓰지 않음
+
+<RunCode client:load code={constevalCode} />
+
+- 볼 것: `describe(0.0)`을 `constexpr` 변수에 넣으면 상수 평가라 273.15, 실행 중 값으로 부르면 -1
+
+## constexpr와 consteval 클래스
+
+- 생성자를 `constexpr`나 `consteval`로 만들면, 직접 만든 타입으로 **상수 식 변수**를 만들 수 있음
+  - `constexpr` 생성자: 컴파일 중에 계산될 수도, 아닐 수도 있음
+  - `consteval` 생성자: 반드시 컴파일 중에 계산됨
+
+```cpp
+class GridSize
+{
+public:
+    GridSize() = default;   // 저절로 constexpr
+    constexpr GridSize(unsigned width, unsigned height)
+        : m_width{ width }, m_height{ height } {}
+    constexpr unsigned cells() const { return m_width * m_height; }
+private:
+    unsigned m_width{ 0 };
+    unsigned m_height{ 0 };
+};
+
+constexpr GridSize room{ 8, 2 };
+std::array<double, room.cells()> cells{};   // 16칸
+```
+
+<RunCode client:load code={constexprClassCode} />
+
+- 컴파일러가 만든 멤버 함수(기본 생성자, 소멸자, 대입 연산자 등)는 저절로 `constexpr`. 직접 `= default`로 요청한 것도 마찬가지
+  - 단, 데이터 멤버 쪽의 해당 함수가 `constexpr`가 아니면 그렇게 되지 않음
+- `constexpr`·`consteval` 멤버 함수의 정의는 컴파일러가 볼 수 있어야 함
+  - 클래스를 모듈(11장)에 정의했다면 모듈 구현 파일이 아니라 모듈 인터페이스 파일에 정의해야 함
+
+:::note
+표준 라이브러리의 여러 클래스가 `constexpr`를 지원해, 다른 `constexpr` 함수나 클래스 안에서 쓸 수 있다. 예: `std::vector`, `std::optional`, `std::string`(C++20), `std::unique_ptr`(C++23), `std::bitset`, `std::variant`.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `constexpr` 함수·생성자 | C++11 | 상수가 필요하면 매크로나 `enum` 값, 템플릿 메타프로그래밍 |
+| `constexpr` 함수 안의 지역 변수, `if`, 반복문 | C++14 | `return` 문 하나. 조건은 `?:`, 반복은 재귀 |
+| `consteval` | C++20 | 결과를 `constexpr` 변수에 넣어 컴파일 중 계산을 강제 |
+| `if consteval` | C++23 | `if (std::is_constant_evaluated())`(C++20) |
+| `constexpr` 함수 안의 `static` 지역 변수, `goto` | C++23 | 쓸 수 없음 |
+
+- C++11에서 여러 문장을 쓰면 오류: `body of 'constexpr' function 'constexpr int f(int)' not a return-statement`
+- 아래 코드는 C++11 옵션으로 컴파일됨. 조건은 `?:`로, 반복은 재귀로 썼음
+
+<RunCode client:load code={constexprCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `const` 함수나 `const` 반환값이면 상수 식이 된다?
+  - `const`와 상수 식은 별개. 상수 식에 쓰려면 `constexpr`
+- `constexpr` 함수는 늘 컴파일 중에 계산된다?
+  - 그럴 수 있을 뿐. 실행 중 값으로 부르면 실행 중에 계산됨. 보장하려면 `consteval`
+- `constexpr` 함수 안에서는 보통 함수를 절대 부를 수 없다?
+  - 실행 중에만 거치는 길에서는 부를 수 있음
+- `if consteval`에 조건을 쓴다?
+  - `if consteval { ... } else { ... }` 모양. 괄호 조건이 없고 중괄호가 필수
+- `consteval` 함수를 실행 중 값으로 부르면 실행 중에 계산된다?
+  - 컴파일 오류
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 상수 식 | 컴파일 중에 값이 정해지는 식. 배열·`std::array` 크기 등에 필요 |
+| `constexpr` 함수 | 상수 식에서 부를 수 있음. 컴파일 중 계산은 가능할 뿐 보장 아님 |
+| 제약 | 부수 효과 없음, 예외가 밖으로 나가면 안 됨. 비`constexpr` 함수는 실행 중 길에서만 |
+| `consteval` | 즉시 함수. 늘 컴파일 중에 계산 |
+| `if consteval` | 상수 평가 중인지 검사. 즉시 함수는 그 안에서만 |
+| `constexpr` 클래스 | `constexpr` 생성자로 상수 식 객체를 만듦 |
+
+## 복습 질문
+
+<details>
+<summary>`constexpr int square(int x) { return x * x; }`를 `int n; std::cin >> n; int s{ square(n) };`처럼 부르면?</summary>
+
+- 정상적으로 동작함. `n`이 실행 중 값이므로 실행 중에 계산됨
+- `constexpr`는 컴파일 중 계산을 가능하게 할 뿐, 실행 중 호출을 막지 않음
+
+</details>
+
+<details>
+<summary>위 함수를 `consteval`로 바꾸면 같은 코드는?</summary>
+
+- 컴파일 오류. 즉시 함수는 상수 평가 중에만 부를 수 있는데 `n`은 실행 중 값
+
+</details>
+
+<details>
+<summary>`constexpr` 함수에서 `std::println`을 부를 수 있는가?</summary>
+
+- 실행 중에만 거치는 길이라면 부를 수 있음
+- 상수 평가 중에 그 길을 지나면 컴파일 오류
+
+</details>
+
+<details>
+<summary>`std::array<int, size.cells()> a;`가 컴파일되려면 `size`와 `cells()`는 어떠해야 하는가?</summary>
+
+- `size`가 `constexpr` 객체이고(`constexpr` 생성자로 만듦), `cells()`가 `constexpr` 멤버 함수여야 함
+
+</details>

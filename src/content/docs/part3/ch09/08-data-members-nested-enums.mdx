@@ -1,0 +1,307 @@
+---
+title: 여러 가지 데이터 멤버, 중첩 클래스, 클래스 안의 열거형
+description: 모든 객체가 함께 쓰는 static 데이터 멤버와 inline 변수, const 멤버, 클래스 상수인 static constexpr 멤버, 참조 데이터 멤버, 클래스 안에 정의하는 중첩 클래스와 열거형을 익힙니다.
+sidebar:
+  order: 8
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import dataMembersCode from '../../../../examples/ch09/data-members.cpp?raw';
+import dataMembersCpp11Code from '../../../../examples/ch09/data-members-cpp11.cpp?raw';
+import nestedCode from '../../../../examples/ch09/nested.cpp?raw';
+
+- 다루는 것: 평범한 데이터 멤버 말고 클래스에 둘 수 있는 여러 종류의 멤버, 그리고 클래스 안에 두는 타입
+- 이 글에서 배우는 요소: `static` 데이터 멤버, `inline` 변수, `const` 데이터 멤버, `static constexpr` 클래스 상수, 참조 데이터 멤버, 중첩 클래스, 클래스 안의 열거형
+
+## static 데이터 멤버
+
+- 객체마다 변수를 하나씩 주는 것이 지나치거나, 그래서는 안 될 때가 있음
+- 예: `Grid`마다 고유 번호를 붙이고 싶음
+  - 0부터 세는 카운터가 있어서, 새 객체가 거기서 번호를 받아 가면 됨
+  - 이 카운터는 `Grid` 클래스에 속하지만, 객체마다 하나씩 있으면 안 됨. 서로 맞춰 둘 방법이 없음
+- **`static` 데이터 멤버** <CppRef path="cpp/language/static" />: 객체가 아니라 **클래스에 연결된** 데이터 멤버. 클래스 전용 전역 변수라고 생각해도 됨
+
+```cpp
+class Grid
+{
+    // ...
+private:
+    static std::size_t ms_counter;
+};
+```
+
+- 클래스 정의에 적는 것은 선언일 뿐. 공간은 소스 파일(보통 멤버 함수 정의가 있는 파일)에서 따로 잡아야 함
+
+```cpp
+std::size_t Grid::ms_counter;        // 공간을 잡음. 기본값 0
+std::size_t Grid::ms_counter{ 0 };   // 이렇게 명시해도 됨
+```
+
+- 보통 변수와 달리 `static` 데이터 멤버는 **기본적으로 0으로 초기화됨**. 포인터면 `nullptr`
+- 함수 밖에 쓰는 것이 전역 변수 선언과 비슷하지만, `Grid::`가 붙어 클래스의 일부임을 밝힘
+- 접근 제어도 똑같이 적용됨
+  - `public`으로 둘 수 있지만 권하지 않음(아래의 `static constexpr` 클래스 상수는 예외)
+  - 밖에서 써야 한다면 `public static` 게터·세터를 둠
+
+### inline 변수
+
+- `static` 데이터 멤버를 `inline`으로 선언하면 <Badge text="C++17" /> 소스 파일에서 공간을 따로 잡지 않아도 됨 <CppRef path="cpp/language/inline" />
+
+```cpp
+class Grid
+{
+private:
+    static inline std::size_t ms_counter{ 0 };
+};
+```
+
+### 멤버 함수 안에서 쓰기
+
+- 클래스의 멤버 함수 안에서는 `static` 데이터 멤버를 보통 멤버처럼 씀
+- 예: 생성자가 카운터에서 번호를 받아 `m_id`에 넣음
+
+```cpp
+Grid::Grid(std::size_t width, std::size_t height)
+    : m_id{ ms_counter++ }, m_width{ width }, m_height{ height }
+{
+}
+```
+
+- 복사 생성자가 보통 생성자에 위임한다면 복사본도 새 번호를 받음
+- 번호는 한번 정하면 바뀌지 않아야 함. 대입 연산자에서 번호를 복사하면 안 됨
+  - 그래서 `m_id`를 **`const` 데이터 멤버**로 만드는 것이 좋음
+
+### const 데이터 멤버
+
+- 만든 뒤에는 바꿀 수 없으므로 생성자 본문에서 초기화할 수 없음
+  - 클래스 정의 안에서 바로 초기화하거나, 생성자 초기화 목록에서 초기화해야 함(8장)
+- 대입 연산자에서도 새 값을 넣을 수 없음
+  - 그래서 컴파일러가 만드는 대입 연산자가 **지워짐**: `'Grid& Grid::operator=(const Grid&)' is implicitly deleted ... non-static const member 'const std::size_t Grid::m_id', cannot use default assignment operator`
+  - 번호에는 문제가 아님. 쓰임새에 따라 클래스가 대입할 수 없는 타입이 된다면, 대입 연산자를 명시적으로 `= delete`해 의도를 밝히는 것이 보통
+
+## static constexpr 클래스 상수
+
+- 데이터 멤버를 `const`나 `constexpr`로 선언하면 만든 뒤 바꿀 수 없음
+- 그 클래스에만 해당하는 상수는 전역 상수 대신 **`static constexpr`** 데이터 멤버로 둠: **클래스 상수**
+  - 정수 타입과 열거형의 `static constexpr` 멤버는 `inline` 없이도 클래스 정의 안에서 정의·초기화할 수 있음
+- 예: 격자의 최대 너비와 높이. 더 크게 만들려 하면 최댓값으로 자름
+
+```cpp
+class Grid
+{
+public:
+    static constexpr std::size_t MaxWidth{ 100 };
+    static constexpr std::size_t MaxHeight{ 100 };
+    // ...
+};
+
+Grid::Grid(std::size_t width, std::size_t height)
+    : m_id{ ms_counter++ },
+      m_width{ std::min(width, MaxWidth) },     // std::min은 <algorithm>
+      m_height{ std::min(height, MaxHeight) }
+{
+}
+```
+
+:::note
+최댓값으로 자르는 대신 예외를 던지게 할 수도 있다. 다만 생성자에서 예외를 던지면 그 객체의 소멸자가 불리지 않으니 조심해야 한다. 14장에서 자세히 다룬다.
+:::
+
+- 이런 상수는 기본 인수로도 쓸 수 있음(기본값은 오른쪽부터 연속으로)
+
+```cpp
+explicit Grid(std::size_t width = MaxWidth, std::size_t height = MaxHeight);
+```
+
+### 클래스 밖에서 쓰기
+
+- 접근 제어가 적용됨. `MaxWidth`는 `public`이므로 밖에서 클래스 이름과 `::`로 씀
+
+```cpp
+std::println("최대 너비: {}", Grid::MaxWidth);
+```
+
+## 참조 데이터 멤버
+
+- 예: 각 `Grid`가 자기가 속한 관측소 `Station`을 참조로 가짐
+
+```cpp
+class Grid
+{
+public:
+    Grid(const Station& station, std::size_t width, std::size_t height);
+private:
+    const Station& m_station;
+};
+```
+
+- 포인터보다 참조가 나은 이유: 격자는 **늘** 어떤 관측소를 가리켜야 함. 포인터는 그것을 보장하지 못함(`nullptr`일 수 있음)
+- 이것은 참조 멤버를 보이려는 예. 두 클래스를 이렇게 직접 엮는 것보다 4장의 MVC 같은 구조가 더 좋은 설계
+- 참조는 무언가를 가리키지 않고는 존재할 수 없으므로 **생성자 초기화 목록에서** 값을 줘야 함
+  - 복사 생성자도 마찬가지. 보통 생성자에 위임하면 저절로 해결됨
+- 참조는 한번 초기화하면 다른 대상을 가리키게 바꿀 수 없음
+  - 대입 연산자에서 참조 멤버에 대입할 수 없음. 쓰임새에 따라 대입 연산자를 `= delete`로 지움
+- 참조 멤버도 `const`로 만들 수 있음: `const Station&`. 관측소를 읽기만 할 때
+
+<RunCode client:load code={dataMembersCode} />
+
+- 볼 것
+  - 격자마다 번호가 0, 1, 2로 붙음. 카운터는 클래스에 하나
+  - `500`을 넘긴 너비는 `MaxWidth`인 100으로 잘림
+  - `Grid c{ seoul }`: 기본 인수로 100x100
+  - 마지막 줄의 대입은 `const` 멤버와 참조 멤버 때문에 컴파일되지 않음
+
+## 중첩 클래스
+
+- 클래스 정의 안에는 멤버 함수와 데이터 멤버 말고도 **중첩 클래스**(와 구조체), 타입 별칭, 열거형을 둘 수 있음 <CppRef path="cpp/language/nested_types" />
+  - 클래스 안에서 선언한 것은 그 클래스의 범위에 속함
+  - `public`이면 밖에서 `클래스이름::`으로 접근함
+- 예: 격자의 칸 `Cell`은 사실 `Grid`의 일부. 그렇다면 `Grid` 안에 둠
+
+```cpp
+class Grid
+{
+public:
+    class Cell
+    {
+    public:
+        Cell() = default;
+        void set(double value);
+        // ...
+    };
+    // ...
+};
+```
+
+- 밖에서 `Cell`을 가리킬 때는 늘 `Grid::Cell`이라고 씀. 멤버 함수 정의도 마찬가지
+
+```cpp
+void Grid::Cell::set(double value) { /* ... */ }
+```
+
+- `Grid`의 멤버 함수를 정의할 때 **반환 타입**에도 `Grid::`를 붙여야 함. 매개변수 목록에서는 필요 없음
+
+```cpp
+Grid::Cell& Grid::at(std::size_t x, std::size_t y) { /* ... */ }
+```
+
+- `Cell`을 `Grid` 안에 통째로 정의하면 `Grid`의 정의가 길어짐. 앞쪽 선언만 두고 밖에서 정의할 수 있음
+
+```cpp
+class Grid
+{
+public:
+    class Cell;   // 앞쪽 선언
+    // ...
+};
+
+class Grid::Cell
+{
+    // ...
+};
+```
+
+- 접근 제어
+  - `private`·`protected` 중첩 클래스는 바깥 클래스 안에서만 쓸 수 있음
+  - 중첩 클래스는 바깥 클래스의 `private`·`protected` 멤버 모두에 접근할 수 있음
+  - 바깥 클래스는 중첩 클래스의 `public` 멤버에만 접근할 수 있음
+
+## 클래스 안의 열거형
+
+- 열거형도 클래스 안에 둘 수 있음
+- 예: 값을 넣을 때 섭씨인지 화씨인지 알려 주는 `Unit`
+
+```cpp
+class Grid
+{
+public:
+    enum class Unit { Celsius, Fahrenheit };
+    // ...
+};
+
+grid.at(1, 1).set(212.0, Grid::Unit::Fahrenheit);
+```
+
+- 클래스 안에서는 `Unit::Celsius`, 밖에서는 `Grid::Unit::Celsius`
+- 중첩 클래스 `Cell` 안에서도 바깥 클래스의 `Unit`을 그냥 씀. 중첩 클래스는 바깥 클래스의 범위 안에 있기 때문
+
+<RunCode client:load code={nestedCode} />
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `static inline` 데이터 멤버 | C++17 | 소스 파일에서 `T C::m{ 0 };`으로 정의 |
+| `static constexpr` 데이터 멤버 | C++11 | `static const` 정수 멤버 |
+| 클래스 안 멤버 초기화 | C++11 | 생성자 초기화 목록 |
+| `enum class` | C++11 | 범위 없는 `enum` |
+
+- C++17 이전에는 `static constexpr` 데이터 멤버를 **참조로 넘기거나 주소를 쓰면**(ODR 사용) 클래스 밖에도 정의를 둬야 했음
+  - 예: `std::min(width, MaxWidth)`는 `MaxWidth`를 `const` 참조로 받음
+  - 정의가 없으면 링크 오류: `undefined reference to 'Grid::MaxWidth'`
+  - C++17부터 `static constexpr` 데이터 멤버는 저절로 `inline`이라 필요 없음
+- 아래 코드는 C++11 옵션으로 컴파일됨. `static` 멤버와 상수를 클래스 밖에서 정의함
+
+<RunCode client:load code={dataMembersCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `static` 데이터 멤버는 객체마다 하나씩 있다?
+  - 클래스에 하나. 모든 객체가 함께 씀
+- 클래스 안에 `static int count;`만 쓰면 끝이다?
+  - 선언일 뿐. 소스 파일에서 정의하거나(C++17 이전), `static inline`으로 선언함
+- `static` 데이터 멤버는 초기화하지 않으면 쓰레기 값이다?
+  - 기본으로 0(포인터면 `nullptr`)
+- `const` 데이터 멤버가 있어도 대입은 된다?
+  - 컴파일러가 만드는 대입 연산자가 지워짐. 참조 멤버도 같음
+- 멤버 함수 정의의 반환 타입에서는 중첩 클래스 이름만 써도 된다?
+  - 반환 타입은 클래스 범위 밖에서 해석되므로 `Grid::Cell`이라고 써야 함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `static` 데이터 멤버 | 클래스에 하나. 기본 0. 밖에서 정의하거나 `static inline` |
+| `const` 데이터 멤버 | 초기화 목록이나 클래스 안에서만 값. 대입 연산자가 지워짐 |
+| `static constexpr` | 클래스 상수. 밖에서는 `Grid::MaxWidth` |
+| 참조 데이터 멤버 | 늘 대상을 가리킴. 초기화 목록에서 값. 대입 불가 |
+| 중첩 클래스 | `Grid::Cell`. 바깥의 `private`에 접근 가능 |
+| 클래스 안 열거형 | `Grid::Unit::Celsius` |
+
+## 복습 질문
+
+<details>
+<summary>객체마다 고유 번호를 주려면 어떤 멤버들이 필요한가?</summary>
+
+- 다음에 줄 번호를 세는 `static` 데이터 멤버(예: `static inline std::size_t ms_counter{ 0 };`)
+- 객체의 번호를 담는 `const` 데이터 멤버. 생성자 초기화 목록에서 `m_id{ ms_counter++ }`
+
+</details>
+
+<details>
+<summary>참조 데이터 멤버를 가진 클래스에 컴파일러가 대입 연산자를 만들어 주지 않는 이유는?</summary>
+
+- 참조는 한번 초기화하면 다른 대상을 가리키게 바꿀 수 없어 대입을 표현할 수 없음
+
+</details>
+
+<details>
+<summary>`Cell& Grid::at(std::size_t x, std::size_t y)`가 클래스 밖 정의에서 오류인 이유는?</summary>
+
+- 반환 타입 `Cell`은 아직 `Grid::` 범위 밖에서 해석되므로 찾을 수 없음
+- `Grid::Cell& Grid::at(...)`로 씀
+
+</details>
+
+<details>
+<summary>C++11에서 `static constexpr int Max = 10;`을 `std::max(x, Max)`에 넘겼더니 링크 오류가 났다. 해결책은?</summary>
+
+- `std::max`가 참조로 받아 `Max`가 ODR 사용되므로 클래스 밖 정의가 필요함
+- 소스 파일에 `constexpr int Grid::Max;`를 추가함(C++17부터는 불필요)
+
+</details>

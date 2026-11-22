@@ -1,0 +1,353 @@
+---
+title: 연산자 오버로딩 기초
+description: 직접 만든 클래스에 +, += 같은 산술 연산자와 비교 연산자를 정의하는 법, 멤버와 전역 함수의 차이, 암시적 변환, C++20의 ==와 <=>로 여섯 비교 연산자를 한 번에 얻는 법을 익힙니다.
+sidebar:
+  order: 9
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import operatorPlusCode from '../../../../examples/ch09/operator-plus.cpp?raw';
+import comparisonCpp20Code from '../../../../examples/ch09/comparison-cpp20.cpp?raw';
+import comparisonCpp11Code from '../../../../examples/ch09/comparison-cpp11.cpp?raw';
+
+- 다루는 것: 객체를 더하고, 비교하고, 파일로 내보내는 일을 연산자로 할 수 있게 하는 법
+- 이 글에서 배우는 요소: `operator+`, 멤버 연산자와 전역 연산자, 암시적 변환, 산술 연산자와 복합 대입 연산자, 비교 연산자(C++20 이전과 이후), 기본 정의된 비교 연산자
+
+## 연산자 오버로딩이란
+
+- **연산자 오버로딩** (operator overloading): 직접 만든 클래스에 `+`, `==` 같은 연산자의 의미를 정의하는 것 <CppRef path="cpp/language/operators" />
+- 처음엔 문법이 낯설고 헷갈림. 그런데 목적은 **쓰는 사람**을 편하게 하는 것
+  - 클래스를 쓰는 사람이 `add()`인지 `sum()`인지 외우는 것보다 `+`로 더하는 것이 쉬움
+  - 목표: 새 클래스를 `int`, `double` 같은 기본 타입과 최대한 비슷하게 쓰게 만드는 것
+
+:::note
+연산자 오버로딩은 클래스를 쓰는 사람을 위한 서비스로 제공한다.
+:::
+
+- 거의 모든 연산자를 오버로딩할 수 있음. 이 글은 기초만 다룸
+  - 대입 연산자는 8장과 이 장 앞 글에서 다뤘음
+  - 이 글: 기본 산술 연산자, 복합 대입 연산자, 비교 연산자
+  - 나머지 연산자(스트림 입출력 `<<` `>>` 포함)는 15장. 표준 라이브러리는 연산자 오버로딩을 아주 많이 씀(16~24장)
+
+## 예: 측정값 더하기
+
+- 예로 쓸 클래스: 측정값 하나를 담는 `Reading`
+- 두 측정값을 더하면 합을 담은 **세 번째** 측정값이 나옴. 원래 두 값은 바뀌지 않음
+
+### 1단계: add 멤버 함수
+
+```cpp
+class Reading
+{
+public:
+    Reading add(const Reading& other) const;
+    // ...
+};
+
+Reading Reading::add(const Reading& other) const
+{
+    return Reading{ value() + other.value() };
+}
+
+Reading sum{ morning.add(noon) };
+```
+
+- 두 원본을 바꾸지 않으므로 함수는 `const`, 매개변수는 `const` 참조
+- 되기는 하지만 어색함
+
+### 2단계: 멤버 함수 operator+
+
+- `int`나 `double`처럼 `+`로 더하고 싶음: `Reading sum{ morning + noon };`
+- 이름이 `operator+`인 멤버 함수를 씀
+
+```cpp
+Reading Reading::operator+(const Reading& other) const
+{
+    return Reading{ value() + other.value() };
+}
+```
+
+- `operator`와 `+` 사이에 공백을 넣어도 됨(`operator +`). 이 사이트는 붙여 씀
+- 낯선 이름 `operator+`는 `foo`나 `add`와 같은 그냥 이름일 뿐
+- 무슨 일이 일어나는가
+  - 컴파일러가 `+`, `-`, `=`, `<<` 같은 연산자를 만나면 `operator+`, `operator-`, `operator=`, `operator<<`라는 이름에 알맞은 매개변수를 받는 함수나 멤버 함수를 찾음
+  - `morning + noon`은 `Reading`의 `operator+` 멤버를 찾아 `morning.operator+(noon)`으로 바뀜(다음 단계에서 볼 전역 함수 `operator+`일 수도 있음)
+- 매개변수 타입이 꼭 같은 클래스일 필요는 없음. 반환 타입도 자유
+  - 하지만 **최소 놀람의 원칙**을 따를 것: 사용자가 예상하는 타입을 돌려줌
+
+### 암시적 변환
+
+- `operator+`를 하나만 썼는데 `morning + 1.5`, `morning + 4`도 됨
+- 이유: 컴파일러는 딱 맞는 타입의 `operator+`만 찾지 않고, 맞게 만들 **변환**도 찾음
+  - `Reading`에는 `double`을 받는 변환 생성자(8장)가 있음
+  - 그래서 `1.5`로 임시 `Reading`을 만들어 `operator+`에 넘김
+- 임시 객체를 만드는 만큼 비효율적일 수 있음. 피하려면 `double`을 직접 받는 오버로드를 추가함
+
+```cpp
+Reading Reading::operator+(double rhs) const;
+```
+
+### 3단계: 전역 operator+
+
+- 멤버 `operator+`에는 문제가 있음: **교환 법칙**이 성립하지 않음
+
+```cpp
+morning + 1.5;   // 됨
+1.5 + morning;   // 컴파일 오류
+```
+
+- 오류: `no match for 'operator+' (operand types are 'double' and 'Reading')`
+- 이유: 멤버 `operator+`는 `Reading` 객체에 대해 불려야 하고, 그 객체는 `+`의 **왼쪽**에 있어야 함. 언어 규칙이라 멤버로는 해결할 방법이 없음
+- 해법: 멤버 대신 특정 객체에 매이지 않는 **전역 함수** `operator+`를 씀
+
+```cpp
+Reading operator+(const Reading& lhs, const Reading& rhs)
+{
+    return Reading{ lhs.value() + rhs.value() };
+}
+```
+
+- 이제 양쪽 모두 암시적 변환이 되어 `1.5 + morning`도 됨
+  - 모듈(11장)에서 클래스를 내보낸다면 이 함수도 함께 내보내야 함
+- `Reading r; r = 4.5 + 5.5;`는?
+  - 컴파일되지만 직접 쓴 `operator+`는 불리지 않음. `double` 덧셈이 먼저 일어나 `r = 10.0;`이 됨
+  - 오른쪽이 `Reading`이어야 대입되므로, 컴파일러가 변환 생성자로 `10.0`을 임시 `Reading`으로 만든 뒤 대입 연산자를 부름
+
+## 산술 연산자
+
+- `+`를 이해했다면 나머지 기본 산술 연산자 `-`, `*`, `/`도 같은 모양. `%`도 오버로딩할 수 있음
+
+```cpp
+Reading operator-(const Reading& lhs, const Reading& rhs);
+Reading operator*(const Reading& lhs, const Reading& rhs);
+Reading operator/(const Reading& lhs, const Reading& rhs);
+```
+
+- `/`에서는 0으로 나누는지 검사하는 것을 잊지 말 것. 예: `std::invalid_argument` 예외를 던짐
+- 문법상 `operator*`에서 나눗셈을, `operator/`에서 덧셈을 해도 막지 않음. 그러나 극도로 헷갈릴 뿐 이유가 없음. 늘 흔히 쓰는 뜻대로 구현함
+
+:::note
+연산자의 우선순위는 바꿀 수 없다. `*`와 `/`는 늘 `+`와 `-`보다 먼저 계산된다. 직접 정의한 연산자가 할 수 있는 일은 우선순위가 정해진 뒤의 동작뿐이다. 새 연산자 기호를 만들거나 연산자의 인수 개수를 바꿀 수도 없다. 15장에서 자세히 다룬다.
+:::
+
+## 복합 대입 연산자
+
+- `operator+`를 쓴다고 `+=`가 생기지 않음. **복합 대입 연산자** (`+=`, `-=` 등)는 따로 오버로딩해야 함 <CppRef path="cpp/language/operator_assignment" />
+- 기본 산술 연산자와 다른 점
+  - 새 객체를 만드는 대신 **왼쪽 객체를 바꿈**
+  - 대입 연산자처럼 바뀐 객체의 **참조**를 돌려줌
+- 왼쪽에 늘 이 클래스의 객체가 와야 하므로 **멤버 함수**로 씀
+
+```cpp
+Reading& Reading::operator+=(const Reading& rhs)
+{
+    m_value += rhs.m_value;
+    return *this;
+}
+```
+
+- `total += 21.5;`는 됨(오른쪽은 변환). `21.5 += total;`은 안 됨. 그래야 맞음
+  - 오류: `no match for 'operator+=' (operand types are 'double' and 'Reading')`
+
+:::tip
+보통 연산자와 복합 대입 연산자를 둘 다 둔다면, 코드 중복을 피하려고 보통 연산자를 복합 대입 연산자로 구현한다.
+:::
+
+```cpp
+Reading operator+(const Reading& lhs, const Reading& rhs)
+{
+    Reading result{ lhs };   // 사본
+    result += rhs;           // +=에 맡김
+    return result;
+}
+```
+
+<RunCode client:load code={operatorPlusCode} />
+
+## 비교 연산자
+
+- 비교 연산자 `>`, `<`, `<=`, `>=`, `==`, `!=`도 클래스에 정의하면 유용함
+- C++20이 많은 것을 바꿨고, **3방향 비교 연산자** `<=>`(우주선 연산자, 1장)를 추가함 <CppRef path="cpp/language/default_comparisons" />
+- 먼저 C++20 이전의 방법을 보면 무엇이 좋아졌는지 알 수 있음. 컴파일러가 아직 `<=>`를 지원하지 않을 때도 이 방법을 씀
+
+### C++20 이전
+
+- 산술 연산자처럼 **전역 함수**로 씀. 양쪽 인수 모두에 암시적 변환이 되도록
+- 모두 `bool`을 돌려줌. 다른 타입도 문법상 되지만 권하지 않음
+- 여섯 개를 다 써야 함. 다행히 `==`와 `<`만 실제로 비교하고 나머지는 그 둘로 만들 수 있음
+
+```cpp
+bool operator==(const Reading& lhs, const Reading& rhs)
+{
+    return lhs.value() == rhs.value();
+}
+
+bool operator>=(const Reading& lhs, const Reading& rhs)
+{
+    return !(lhs < rhs);
+}
+```
+
+:::note
+이 예는 `double` 값을 그대로 같은지 비교한다. 부동소수점 값을 `==`로 비교하는 것은 대개 좋은 생각이 아니다. 실제로는 아주 작은 오차(엡실론)를 허용하는 비교를 쓴다.
+:::
+
+- 변환 생성자 덕분에 `double`과도 비교됨. 임시 객체가 싫어 `double`판을 직접 쓰려면 연산자마다 세 오버로드가 필요함
+
+```cpp
+bool operator<(const Reading& lhs, const Reading& rhs);
+bool operator<(double lhs, const Reading& rhs);
+bool operator<(const Reading& lhs, double rhs);
+```
+
+- 여섯 연산자 × 세 오버로드. 반복되는 코드가 많음
+
+### C++20부터
+
+- 훨씬 간단해짐 <Badge text="C++20" />
+- 첫째, `operator==`를 **멤버 함수**로 쓰는 것을 권함. 결과를 무시하지 못하게 `[[nodiscard]]`를 붙이는 것이 좋음
+
+```cpp
+[[nodiscard]] bool operator==(const Reading& rhs) const;
+```
+
+- 이 하나로 `r == 10`과 `10 == r`가 모두 됨
+  - 컴파일러가 `10 == r`을 `r == 10`으로 **바꿔 씀**(재작성)
+  - `!=`도 저절로 됨. `a != b`를 `!(a == b)`로 바꿔 씀
+- 둘째, 나머지 네 비교를 위해 `operator<=>` 하나를 더 씀. `==`와 `<=>`가 있으면 여섯 비교 연산자가 모두 됨
+
+```cpp
+[[nodiscard]] std::partial_ordering operator<=>(const Reading& rhs) const
+{
+    return m_value <=> rhs.m_value;
+}
+```
+
+- `double`은 부분 순서만 있으므로(1장) `std::partial_ordering`을 돌려줌. `<compare>`에 있음
+- `a < b`는 `std::is_lt(a <=> b)`와 같은 것으로 바뀜(1장의 이름 있는 비교 함수)
+- `10 < a`는?
+  - 먼저 `is_lt(10 <=> a)`로 바꿔 보지만, `<=>`가 멤버라 왼쪽이 `Reading`이어야 해서 안 됨
+  - 그러면 순서를 바꿔 `is_gt(a <=> 10)`로 바꿔 씀. 이것은 됨
+
+:::note
+컴파일러는 `==`와 `!=`를 `<=>`로 바꿔 쓰지 않는다. 성능 때문이다. `==`를 직접 구현하는 편이 대개 더 빠르다. 예를 들어 `std::string`의 `==`는 길이부터 비교해 다르면 바로 `false`를 돌려줄 수 있지만, `<=>`는 다른 문자를 찾을 때까지 하나하나 비교해야 한다.
+:::
+
+- 임시 객체가 싫다면 `double`판도 멤버로 두 개만 추가하면 됨
+
+```cpp
+[[nodiscard]] bool operator==(double rhs) const;
+[[nodiscard]] std::partial_ordering operator<=>(double rhs) const;
+```
+
+### 컴파일러가 만드는 비교 연산자
+
+- 데이터 멤버를 차례로 비교하기만 하면 되는 경우, C++20에서는 `==`와 `<=>`를 `= default`로 컴파일러에게 맡길 수 있음
+  - 클래스 정의에 선언된 순서대로 멤버를 하나씩 비교함: **멤버별 사전식 비교**
+- `<=>`만 `= default`로 정의하면 `==`도 기본 정의로 함께 생김. 한 줄로 여섯 비교 연산자를 얻음
+
+```cpp
+[[nodiscard]] auto operator<=>(const Sample&) const = default;
+```
+
+- 반환 타입을 `auto`로 쓰면 멤버들의 `<=>` 반환 타입에서 추론함
+- 멤버에 따라 달라지는 것
+  - 접근 가능한 `==`가 없는 멤버가 있으면 기본 `==`는 지워짐
+  - `<=>`가 없는 멤버가 있으면 그 멤버는 `<`와 `==`로 비교함. 이때는 `auto`로 추론할 수 없어 반환 타입(`strong_ordering`, `partial_ordering`, `weak_ordering`)을 직접 적어야 함
+  - `<`와 `==`조차 없으면 기본 `<=>`는 지워짐
+- 주의: `double`판 `operator==`를 직접 선언하면, 컴파일러는 같은 클래스끼리의 `==`를 더 이상 저절로 만들지 않음. 그때는 `==`도 `= default`로 명시함
+
+```cpp
+[[nodiscard]] auto operator<=>(const Reading&) const = default;
+[[nodiscard]] bool operator==(const Reading&) const = default;
+[[nodiscard]] bool operator==(double rhs) const;
+[[nodiscard]] std::partial_ordering operator<=>(double rhs) const;
+```
+
+- `= default`는 매개변수가 그 클래스의 `const` 참조일 때만 쓸 수 있음
+  - `auto operator<=>(double) const = default;`는 오류: `defaulted member ... must have parameter type 'const R&'`
+- 기본 정의가 가능하면 직접 구현하지 말고 맡길 것. 멤버를 추가하거나 바꿔도 비교가 저절로 따라감
+
+<RunCode client:load code={comparisonCpp20Code} />
+
+:::tip
+C++20 이후 클래스에 여섯 비교 연산자를 모두 넣는 법
+
+- 기본 정의된 `operator<=>`로 충분하면, 멤버 함수로 `= default` 한 줄만 쓴다. 경우에 따라 `operator==`도 `= default`로 명시해야 한다.
+- 그렇지 않으면 `operator==`와 `operator<=>`를 멤버 함수로 직접 구현한다.
+- 나머지 비교 연산자는 직접 쓸 필요가 없다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `operator<=>`, 비교 재작성, `= default` 비교 | C++20 | 여섯 비교 연산자를 전역 함수로 직접 씀 |
+| `[[nodiscard]]` | C++17 | 없음 |
+| `std::println` | C++23 | `std::cout <<` |
+
+- 산술·복합 대입·비교 연산자의 오버로딩 자체는 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨. 여섯 비교 연산자를 `==`와 `<`로 만듦
+
+<RunCode client:load code={comparisonCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 멤버 `operator+`만 있으면 `1.5 + r`도 된다?
+  - 멤버는 왼쪽이 그 클래스의 객체여야 함. 전역 함수로 써야 양쪽 변환이 됨
+- `operator+`를 쓰면 `+=`도 생긴다?
+  - 따로 오버로딩해야 함. 보통 `+`를 `+=`로 구현
+- 복합 대입 연산자는 전역 함수가 낫다?
+  - 왼쪽이 늘 이 클래스의 객체이므로 멤버 함수로 씀
+- C++20에서도 여섯 비교 연산자를 모두 써야 한다?
+  - `==`와 `<=>`만. 기본 정의가 되면 `<=>`의 `= default` 한 줄
+- `<=>`만 있으면 `==`도 저절로 바꿔 쓴다?
+  - `==`와 `!=`는 `<=>`로 바꿔 쓰지 않음. `<=>`를 `= default`로 정의했을 때만 `==`도 기본으로 함께 생김
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `operator+` | 연산자를 함수 이름으로. `a + b`는 `operator+(a, b)` 또는 `a.operator+(b)` |
+| 멤버 vs 전역 | 양쪽 변환이 필요한 이항 연산자는 전역. 왼쪽이 늘 객체면 멤버 |
+| 암시적 변환 | 변환 생성자로 임시 객체가 만들어짐. 싫으면 해당 타입 오버로드 |
+| 복합 대입 | 멤버, 왼쪽을 바꾸고 `*this` 참조를 돌려줌. 보통 연산자를 이것으로 구현 |
+| C++20 이전 비교 | 여섯 개 전역 함수. `==`와 `<`로 나머지를 만듦 |
+| C++20 비교 | 멤버 `==`와 `<=>`. 재작성으로 여섯 개 모두 |
+| `= default` 비교 | 멤버별 사전식 비교. `<=>`를 기본으로 하면 `==`도 생김 |
+
+## 복습 질문
+
+<details>
+<summary>멤버 `operator+`만 있는 `Reading`에서 `2.0 + r`이 컴파일되지 않는 이유와 고치는 법은?</summary>
+
+- 멤버 연산자는 왼쪽 피연산자가 `Reading` 객체여야 함. `2.0`은 객체가 아님
+- `operator+`를 전역 함수 `Reading operator+(const Reading&, const Reading&)`로 바꿈
+
+</details>
+
+<details>
+<summary>`operator+=`가 `void`가 아니라 `Reading&`를 돌려주는 이유는?</summary>
+
+- 대입 연산자처럼 결과를 이어 쓸 수 있게(`(a += b) += c` 등) 바뀐 객체의 참조를 돌려줌
+
+</details>
+
+<details>
+<summary>C++20에서 `bool operator==(const Reading&) const;`만 정의하면 `r != 3.0`은 되는가?</summary>
+
+- 됨. `!=`는 `!(r == 3.0)`으로 재작성되고, `3.0`은 변환 생성자로 `Reading`이 됨
+
+</details>
+
+<details>
+<summary>`struct Point { int x; int y; auto operator<=>(const Point&) const = default; };`로 `Point{1, 5} < Point{2, 0}`의 결과는?</summary>
+
+- `true`. 선언 순서대로 `x`부터 비교하는 사전식 비교라 `1 < 2`에서 결정됨
+
+</details>

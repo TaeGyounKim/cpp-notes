@@ -1,0 +1,190 @@
+---
+title: C 스타일 문자열과 문자열 리터럴
+description: 문자 배열로 된 C 스타일 문자열의 구조와 함정, 문자열 리터럴이 놓이는 곳, 적은 그대로 들어가는 로 문자열 리터럴을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import cStringCode from '../../../../examples/ch02/c-string.cpp?raw';
+import sizeofStrlenCode from '../../../../examples/ch02/sizeof-strlen.cpp?raw';
+import stringLiteralCode from '../../../../examples/ch02/string-literal.cpp?raw';
+import rawStringCode from '../../../../examples/ch02/raw-string.cpp?raw';
+import cStringCpp11Code from '../../../../examples/ch02/c-string-cpp11.cpp?raw';
+
+- 다루는 것: `std::string`을 배우기 전에 알아야 할, 그 밑바닥의 문자열
+- 배우는 요소: C 스타일 문자열, 널 문자, `<cstring>` 함수, 문자열 리터럴, 로 문자열 리터럴
+- 2장 전체의 주제는 문자열. 거의 모든 프로그램이 문자열을 다루므로 일찍 자세히 살펴봄
+- 새 코드에서 C 스타일 문자열을 직접 쓸 일은 드묾. 그래도 배우는 이유: C로 만든 라이브러리나 운영체제의 함수를 부를 때 여전히 마주침
+
+## C 스타일 문자열
+
+- **C 스타일 문자열** (C-style string): 문자의 배열로 나타낸 문자열. 끝에 **널 문자**가 붙어 있음 <CppRef path="cpp/string/byte" />
+- **널 문자** (null character): 값이 0인 문자. `'\0'`으로 적음. 문자열이 어디서 끝나는지 알리는 표시
+  - 정식 이름은 NUL (L이 하나). 널 포인터를 뜻하는 `NULL`과는 다른 것
+- 문자열 `"hello"`가 메모리에 놓인 모습: 글자는 5개지만 칸은 6개
+
+| 번호 | 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 값 | `'h'` | `'e'` | `'l'` | `'l'` | `'o'` | `'\0'` |
+
+- 가장 흔한 실수: 널 문자의 자리를 빼먹는 것
+  - 글자 수만큼만 메모리를 마련하면 널 문자가 들어갈 곳이 없음. 남의 메모리에 덮어쓰게 됨
+  - 이런 실수를 버퍼 오버플로(buffer overflow)라고 부르며, 보안 사고의 흔한 원인
+
+### cstring 함수
+
+- C 언어에서 물려받은 문자열 함수들. `<cstring>` 헤더
+
+| 함수 | 하는 일 |
+| --- | --- |
+| `std::strlen(문자열)` | 글자 수를 돌려줌. 널 문자는 세지 않음 <CppRef path="cpp/string/byte/strlen" /> |
+| `std::strcpy(받는 곳, 원본)` | 원본을 받는 곳에 복사 <CppRef path="cpp/string/byte/strcpy" /> |
+| `std::strcat(받는 곳, 덧붙일 것)` | 받는 곳의 문자열 뒤에 이어 붙임. cat은 concatenate(연결)의 줄임 |
+
+- 공통된 위험: 이 함수들은 메모리를 마련해 주지 않고, 받는 곳이 충분히 큰지 검사하지도 않음
+  - `std::strcpy`는 들어갈 자리가 있든 없든 복사함
+- 메모리를 마련할 때의 규칙: **글자 수 + 1**
+  - `new char[std::strlen(text)]`: 한 칸 모자람. 버그
+  - `new char[std::strlen(text) + 1]`: 올바름
+  - 여러 문자열을 이어 붙일 때: 글자 수를 모두 더한 뒤 + 1. 널 문자는 맨 끝에 하나만 있으면 됨
+
+<RunCode client:load code={cStringCode} />
+
+- 해 볼 것: `copyString`의 `+ 1`을 지우고 실행
+  - 결과: 대부분 똑같이 동작하는 것처럼 보임. 그래서 더 위험함
+  - 한 칸 넘쳐 쓴 것이 당장 드러나지 않을 뿐, 정의되지 않은 동작. 다른 데이터가 조용히 망가질 수 있음
+
+### sizeof와 strlen은 다름
+
+- `sizeof`: 타입이나 변수가 차지하는 바이트 수를 알려 주는 연산자 <CppRef path="cpp/language/sizeof" />
+- 문자열의 길이를 `sizeof`로 구하면 안 됨. 문자열을 어떻게 담았는지에 따라 결과가 다름
+
+| 선언 | `sizeof` | `std::strlen` |
+| --- | --- | --- |
+| `char array[]{ "abcdef" };` | 7 (널 문자 포함한 배열 전체) | 6 |
+| `const char* pointer{ "abcdef" };` | 포인터의 크기. 64비트에서는 8, 32비트에서는 4 | 6 |
+
+<RunCode client:load code={sizeofStrlenCode} />
+
+## 문자열 리터럴
+
+- **문자열 리터럴** (string literal): 코드에 큰따옴표로 직접 적은 문자열. `"hello"` <CppRef path="cpp/language/string_literal" />
+- 놓이는 곳: 메모리의 **읽기 전용** 영역
+- **리터럴 풀링** (literal pooling): 내용이 같은 리터럴을 한 곳에 하나만 두고 함께 쓰는 최적화
+  - `"hello"`를 500번 써도 메모리에는 하나만 있을 수 있음
+  - 허용되는 최적화이지 보장은 아님
+- 타입: `const char`의 배열
+- 리터럴을 바꾸려는 것은 정의되지 않은 동작. 프로그램이 죽을 수도, 조용히 무시될 수도 있음
+
+| 코드 | 결과 |
+| --- | --- |
+| `const char* p{ "hello" }; p[1] = 'a';` | 컴파일 오류. 컴파일러가 막아 줌 |
+| `char* p{ "hello" }; p[1] = 'a';` | 오래된 컴파일러는 받아 줌. 실행하면 정의되지 않은 동작 |
+| `char a[]{ "hello" }; a[1] = 'a';` | 문제없음 |
+
+- 규칙: 문자열 리터럴은 항상 `const char*`로 가리킬 것
+- 문자 배열을 리터럴로 초기화하는 경우
+  - 컴파일러가 알맞은 크기의 배열을 만들고 리터럴의 내용을 복사해 넣음
+  - 배열은 읽기 전용 영역이 아니므로 바꿀 수 있음. 풀링도 일어나지 않음
+
+<RunCode client:load code={stringLiteralCode} />
+
+- 마지막 줄 `같은 주소인가: true`: 리터럴 풀링이 일어난 것. 컴파일러와 옵션에 따라 `false`일 수도 있음
+- 해 볼 것: 주석 처리된 `literal[1] = 'a';`의 `//`를 지우고 실행
+  - 결과: 컴파일 오류 `assignment of read-only location`
+
+### 로 문자열 리터럴 <Badge text="C++11" />
+
+- **로 문자열 리터럴** (raw string literal): 적은 그대로 문자열이 되는 리터럴 <CppRef path="cpp/language/string_literal" />
+- 적는 법: `R"(`로 시작하고 `)"`로 끝냄
+- 보통의 리터럴과 다른 점
+
+| | 보통의 리터럴 | 로 문자열 리터럴 |
+| --- | --- | --- |
+| 큰따옴표 넣기 | `"Hello \"World\"!"` | `R"(Hello "World"!)"` |
+| 역슬래시 넣기 | `"C:\\temp"` | `R"(C:\temp)"` |
+| 이스케이프 시퀀스 | `\t`가 탭 문자로 바뀜 | `\t`가 글자 그대로 남음 |
+| 여러 줄 | `\n`을 넣어야 함 | 코드에서 실제로 줄을 바꾸면 됨 |
+
+- 쓰기 좋은 곳: 파일 경로, 정규 표현식, 데이터베이스 질의문처럼 역슬래시나 따옴표가 많은 문자열. 정규 표현식은 21장에서 다룸
+- 문자열 안에 `)"`가 들어가야 할 때: 구분자를 정해서 씀
+  - 형태: `R"구분자(내용)구분자"`
+  - 구분자는 직접 정하는 글자들. 앞뒤가 같아야 하고 16자까지
+  - 예: `R"-(안에 )" 가 들어 있다)-"`. 구분자는 `-`
+
+<RunCode client:load code={rawStringCode} />
+
+- 볼 것: 여러 줄을 적은 리터럴의 둘째 줄은 맨 앞에 붙여 적음. 들여쓰기를 하면 그 공백까지 문자열에 들어감
+
+## 이전 표준에서는
+
+- C 스타일 문자열과 `<cstring>` 함수: C 언어에서 온 것. 모든 표준에서 그대로 씀
+- 로 문자열 리터럴: C++11에서 들어왔으므로 C++11에서도 씀
+- C++98 / C++03: 로 문자열 리터럴이 없음. 큰따옴표와 역슬래시 앞에 일일이 역슬래시를 붙임
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={cStringCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 널 문자, 널 포인터, 숫자 0의 글자
+  - `'\0'`: 널 문자. 값이 0인 `char`
+  - `nullptr`: 널 포인터. 아무것도 가리키지 않는 포인터
+  - `'0'`: 숫자 0을 나타내는 글자. 값은 48
+- Visual C++에서 `strcpy`를 쓰면 경고나 오류가 나옴
+  - 위험한 함수라서 쓰지 말라고 알리는 것
+  - `strcpy_s` 같은 대체 함수도 있지만, 가장 좋은 답은 다음 글의 `std::string`을 쓰는 것
+- C 스타일 문자열은 `==`로 비교할 수 없음
+  - `==`는 내용이 아니라 주소를 비교함. 다음 글에서 다룸
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| C 스타일 문자열 | 문자 배열 + 끝의 널 문자 `'\0'` | |
+| 메모리 크기 | 글자 수 + 1 | |
+| `std::strlen` | 널 문자를 뺀 글자 수 | |
+| `sizeof` | 문자열 길이를 구하는 데 쓰지 말 것 | |
+| 문자열 리터럴 | 읽기 전용. `const char*`로 가리킴 | |
+| 로 문자열 리터럴 | `R"(...)"`. 적은 그대로 | C++11 |
+
+## 복습 질문
+
+<details>
+<summary>문자열 `"study"`를 복사해 담으려면 `char`를 몇 칸 마련해야 하나요?</summary>
+
+- 6칸
+- 글자 5개 + 끝의 널 문자 1개
+
+</details>
+
+<details>
+<summary>`const char* text{ "abc" };`일 때 `sizeof(text)`와 `std::strlen(text)`는 각각 무엇을 알려 주나요?</summary>
+
+- `sizeof(text)`: 포인터의 크기. 64비트 환경에서는 8
+- `std::strlen(text)`: 글자 수 3
+
+</details>
+
+<details>
+<summary>문자열 리터럴을 `char*`가 아니라 `const char*`로 가리켜야 하는 이유는?</summary>
+
+- 리터럴은 읽기 전용 메모리에 놓이므로 바꾸면 정의되지 않은 동작
+- `const char*`로 가리키면 바꾸려는 코드를 컴파일러가 오류로 막아 줌
+
+</details>
+
+<details>
+<summary>`"C:\new\table.txt"`라고 적으면 어떤 문제가 생기고, 어떻게 고치나요?</summary>
+
+- `\n`은 줄바꿈, `\t`는 탭으로 바뀌어 경로가 망가짐
+- 고치는 법 1: 역슬래시를 두 번씩 적음. `"C:\\new\\table.txt"`
+- 고치는 법 2: 로 문자열 리터럴. `R"(C:\new\table.txt)"`
+
+</details>

@@ -21,13 +21,13 @@ pnpm-debug.log*
 .DS_Store
 
 # 참고 자료 (저장소에 넣지 않는다)
-book/
+/book/
 
 # 내부 작업 문서 (이 컴퓨터에만 둔다)
 CLAUDE.md
 DESIGN.md
-docs/
-archive/
+/docs/
+/archive/
 
 # 프로젝트 루트에 떨어진 화면 캡처
 /*.png

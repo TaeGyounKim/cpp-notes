@@ -1,0 +1,162 @@
+---
+title: 다중 상속
+description: 여러 기반 클래스를 한꺼번에 상속하는 문법, 생성·소멸 순서, 두 부모의 이름이 겹칠 때 해결하는 법, 같은 클래스를 두 번 물려받는 다이아몬드 계층, 다중 상속이 쓸모 있는 경우를 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import multipleCode from '../../../../examples/ch10/multiple.cpp?raw';
+import diamondCode from '../../../../examples/ch10/diamond.cpp?raw';
+import multipleCpp11Code from '../../../../examples/ch10/multiple-cpp11.cpp?raw';
+
+- 5장에서 본 것처럼 다중 상속은 복잡하고 필요 없는 기능으로 여겨질 때가 많음. 쓸지 말지는 팀이 판단할 일이고, 이 글은 C++에서 다중 상속이 **어떻게 동작하는지**를 다룸
+- 이 글에서 배우는 요소: 여러 클래스 상속하기, 이름 충돌, 모호한 기반 클래스(다이아몬드), 다중 상속의 쓰임새
+
+## 여러 클래스를 상속하기
+
+- 문법은 간단함. 클래스 이름 뒤에 기반 클래스를 쉼표로 나열함 <CppRef path="cpp/language/derived_class" />
+
+```cpp
+class Phone : public Camera, public Player { /* ... */ };
+```
+
+- `Phone` 객체의 성질
+  - `Camera`와 `Player` 양쪽의 `public` 멤버 함수를 지원하고, 양쪽의 데이터 멤버를 모두 가짐
+  - `Phone`의 멤버 함수는 양쪽의 `protected` 멤버에 접근할 수 있음
+  - `Camera`로도, `Player`로도 업캐스트할 수 있음
+  - 만들 때 `Camera`, `Player`의 기본 생성자가 **나열한 순서대로** 저절로 불림
+  - 지울 때 소멸자가 **나열한 순서의 반대로** 저절로 불림
+- 사용하는 쪽에서는 다중 상속이 아닌 객체를 쓰는 것과 다르지 않음. 부모가 둘이라는 것을 몰라도 됨. 중요한 것은 그 클래스가 지원하는 성질과 동작뿐
+
+## 이름 충돌과 모호한 기반 클래스
+
+- 다중 상속이 무너지는 듯한 상황을 만들기는 어렵지 않음. 몇 가지 경계 사례를 봄
+
+### 이름이 겹칠 때
+
+- `Camera`와 `Player`가 둘 다 `start()`라는 멤버 함수를 가진다면?
+  - 두 클래스는 서로 관계가 없으므로 한쪽이 다른 쪽을 재정의하지 않음. 둘 다 `Phone` 안에 그대로 있음
+- `start()`를 부르지 않는 한 문제없음. 두 판이 있어도 `Phone`은 잘 컴파일됨
+- `Phone` 객체로 `start()`를 부르면 오류: `request for member 'start' is ambiguous`. 어느 판을 부를지 모름
+- 해결하는 방법
+  - 특정 부모의 판을 지정해 부름: `phone.Camera::start();`
+  - 부모로 업캐스트해서 부름: `dynamic_cast<Camera&>(phone).start();`. 원치 않는 판을 컴파일러 눈에서 감추는 셈
+  - 파생 클래스가 `start()`를 직접 정의하고, 그 안에서 어느 부모의 판을 부를지 정함
+  - `using` 선언으로 어느 부모의 판을 물려받을지 밝힘
+
+```cpp
+class Phone : public Camera, public Player
+{
+public:
+    void start() override { Player::start(); }   // 직접 정해 줌
+};
+
+class Phone2 : public Camera, public Player
+{
+public:
+    using Player::start;   // Player판을 물려받겠다고 밝힘
+};
+```
+
+- 두 부모의 `start()`가 시그니처가 같은 가상 함수라면, `Phone`의 `start()` 하나가 **둘 다** 재정의함. 그래서 `Camera&`로 불러도 `Player&`로 불러도 `Phone::start()`가 불림
+
+<RunCode client:load code={multipleCode} />
+
+- 볼 것
+  - 생성은 `Camera` → `Player`, 소멸은 `Player` → `Camera`
+  - `snap()`과 `listen()`이 각각 `Camera&`, `Player&`로 받음. 어느 쪽으로든 업캐스트됨
+
+### 같은 클래스를 두 번 물려받을 때
+
+- 모호함을 일으키는 다른 경우: 같은 클래스를 **두 번** 상속함. 두 부모가 같은 부모를 가질 때 생김
+  - 예: `Camera`와 `Player`가 둘 다 `Device`를 상속
+
+| 클래스 | 상속 |
+| --- | --- |
+| `Device` | (맨 위) |
+| `Camera` | `Device` |
+| `Player` | `Device` |
+| `Phone` | `Camera`, `Player` |
+
+- 그림으로 그리면 마름모 모양이라 **다이아몬드** 계층이라고 부름
+- C++에서 허용되지만 이름 모호함이 생길 수 있음
+  - `Device`에 `public` 멤버 함수 `sleep()`이 있다면, `Phone` 객체로는 부를 수 없음. `Camera`를 거쳐 물려받은 것인지 `Player`를 거쳐 물려받은 것인지 모름
+  - 오류: `request for member 'sleep' is ambiguous`
+- 다이아몬드 계층을 쓰는 가장 좋은 방법: 맨 위 클래스를 **모든 멤버 함수가 순수 가상인 추상 클래스**로 둠
+  - 맨 위 클래스는 멤버 함수를 선언만 하고 정의하지 않으므로, 그 단계에서 부를 함수가 없어 모호함도 없음
+  - 이때 남는 모호함은 같은 클래스를 두 번 물려받아서가 아니라, `Camera`와 `Player`가 같은 함수를 가져서 생기는 것. 앞의 방법으로 해결함
+
+<RunCode client:load code={diamondCode} />
+
+- 다이아몬드 계층의 맨 위 클래스를 다루는 더 정교한 수단인 **가상 기반 클래스**는 이 장 뒤쪽에서 다룸
+
+## 다중 상속의 쓰임새
+
+- 가장 단순한 쓰임새: 무언가 **이면서(is-a)** 동시에 다른 무언가**이기도 한** 객체의 클래스
+  - 5장에서 말했듯 현실에서 이런 패턴을 따르는 대상은 코드로 잘 옮겨지지 않는 경우가 많음
+- 가장 설득력 있고 단순한 쓰임새: **믹스인 클래스**(5장, 32장)
+- 구성 요소 기반 클래스를 만들 때 쓰기도 함
+  - 5장의 비행기 시뮬레이터: `Airplane`에 엔진, 동체, 조종 장치가 있음
+  - 보통은 각 구성 요소를 데이터 멤버로 둠. 다중 상속으로 엔진·동체·조종 장치를 상속해 그 동작과 성질을 얻게 할 수도 있음
+  - **권하지 않음**. 분명한 has-a 관계를 is-a 관계에 쓰는 상속과 섞어 버림
+  - 권하는 방법: `Airplane`이 `Engine`, `Fuselage`, `Controls` 타입의 데이터 멤버를 가짐
+
+## 이전 표준에서는
+
+- 다중 상속, 범위 지정으로 부모의 판 고르기, `using` 선언은 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨(`override`만 C++11)
+
+<RunCode client:load code={multipleCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 두 부모에 같은 이름의 함수가 있으면 컴파일 오류다?
+  - 클래스 정의는 괜찮음. 그 이름을 모호하게 **부를 때** 오류
+- 생성자는 초기화 목록에 적은 순서대로 불린다?
+  - 기반 클래스는 클래스 정의에 **나열한 순서**대로 만들어짐(데이터 멤버의 선언 순서와 같은 원리)
+- 다이아몬드 계층은 금지된다?
+  - 허용됨. 맨 위 클래스의 비가상 멤버를 부를 때 모호함이 생김. 맨 위를 순수 가상 함수만 가진 추상 클래스로 두거나, 가상 기반 클래스를 씀
+- 구성 요소를 다중 상속으로 붙이면 편하다?
+  - has-a 관계는 데이터 멤버로. 상속은 is-a에만
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 문법 | `class C : public A, public B` |
+| 생성·소멸 | 나열한 순서로 생성, 반대로 소멸 |
+| 업캐스트 | 어느 부모로든 가능 |
+| 이름 충돌 | `obj.A::f()`, 업캐스트, 직접 재정의, `using A::f;` |
+| 다이아몬드 | 맨 위의 비가상 멤버가 모호함. 맨 위를 순수 가상 인터페이스로 |
+| 쓰임새 | 믹스인. 구성 요소는 상속 말고 데이터 멤버로 |
+
+## 복습 질문
+
+<details>
+<summary>`class Phone : public Camera, public Player`의 객체가 만들어질 때와 사라질 때 기반 클래스 생성자·소멸자 순서는?</summary>
+
+- 생성: `Camera` → `Player` → `Phone` 본문
+- 소멸: `Phone` 본문 → `Player` → `Camera`
+
+</details>
+
+<details>
+<summary>두 부모에 `start()`가 있을 때 `phone.start();`의 오류를 없애는 방법 세 가지는?</summary>
+
+- `phone.Camera::start();`처럼 부모를 지정해 부름
+- `Phone`이 `start()`를 재정의하고 안에서 원하는 부모의 판을 부름
+- `Phone` 안에 `using Camera::start;`로 물려받을 판을 밝힘
+
+</details>
+
+<details>
+<summary>`Device`가 비가상 함수 `sleep()`을 가진 다이아몬드 계층에서 `phone.sleep()`이 모호한 이유는?</summary>
+
+- `Phone` 안에 `Device` 부분이 두 개(`Camera`를 거친 것, `Player`를 거친 것) 있어 어느 쪽의 `sleep()`인지 정할 수 없음
+
+</details>

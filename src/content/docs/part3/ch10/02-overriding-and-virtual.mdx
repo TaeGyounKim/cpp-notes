@@ -1,0 +1,204 @@
+---
+title: 멤버 함수 재정의와 virtual, override
+description: 파생 클래스에서 기반 클래스의 동작을 바꾸는 재정의, virtual 키워드, 기반 클래스 참조로 불렀을 때의 동작, 슬라이싱, 실수를 막아 주는 override 키워드를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import overrideCode from '../../../../examples/ch10/override.cpp?raw';
+import overrideMistakeCode from '../../../../examples/ch10/override-mistake.cpp?raw';
+import overrideCpp11Code from '../../../../examples/ch10/override-cpp11.cpp?raw';
+
+- 다루는 것: 클래스를 상속하는 주된 이유는 기능을 **더하거나 바꾸는** 것. 앞 글은 더하기였고, 이 글은 바꾸기
+- 이 글에서 배우는 요소: 재정의, `virtual`, 기반 클래스 참조로 부르기, 슬라이싱, `override`
+
+## 재정의와 virtual
+
+- 앞 글의 `Thermometer`는 `measure()`를 더해 기능을 늘림. 물려받은 `id()`는 기반 클래스에서와 똑같이 동작함
+- 클래스의 동작을 바꾸고 싶을 때가 많음: 멤버 함수를 **재정의한다** (override)
+- 기반 클래스의 멤버 함수를 파생 클래스에서 다시 정의하기만 해서는 제대로 재정의되지 않음
+- `virtual`로 선언한 멤버 함수만 파생 클래스에서 제대로 재정의할 수 있음 <CppRef path="cpp/language/virtual" />
+
+```cpp
+class Sensor
+{
+public:
+    virtual std::string describe() const;
+    // ...
+};
+```
+
+- 파생 클래스의 멤버 함수도, 그 아래 파생 클래스에서 재정의하게 하려면 `virtual`로 선언함
+- 멤버 함수 정의(클래스 밖)에는 `virtual`을 다시 적지 않음
+
+:::caution
+`virtual`이 아닌 기반 클래스 멤버 함수를 파생 클래스에서 다시 정의하면, 재정의가 아니라 기반 클래스의 정의를 **감출** 뿐이다. 새 정의는 파생 클래스 타입으로 다룰 때만 쓰인다.
+:::
+
+## 재정의 문법
+
+- 파생 클래스 정의에 기반 클래스에서와 **똑같이** 선언하되, `virtual`을 빼고 `override`를 붙임 <Badge text="C++11" /> <CppRef path="cpp/language/override" />
+
+```cpp
+class Thermometer : public Sensor
+{
+public:
+    std::string describe() const override;   // Sensor의 describe()를 재정의
+};
+
+std::string Thermometer::describe() const   // 정의에는 override를 적지 않음
+{
+    return "온도계";
+}
+```
+
+- 재정의하는 함수 앞에 `virtual`을 붙여도 되지만 불필요함: `virtual std::string describe() const override;`
+- 한번 `virtual`로 선언된 멤버 함수(소멸자 포함)는, 파생 클래스에서 `virtual`을 빼도 모든 파생 클래스에서 계속 `virtual`
+
+## 사용하는 쪽에서 본 재정의
+
+- 부르는 코드는 그대로. 다만 이제 `describe()`의 동작이 **객체의 클래스에 따라** 달라짐
+  - `Sensor` 객체로 부르면 `Sensor`판, `Thermometer` 객체로 부르면 `Thermometer`판
+  - 재정의하지 않은 다른 멤버 함수는 여전히 `Sensor`의 정의를 씀
+- 기반 클래스의 포인터나 참조가 파생 객체를 가리킬 때
+  - 객체 자신은 자기가 실제로 어느 클래스인지 "앎"
+  - 그래서 `virtual`로 선언된 함수라면 **실제 클래스의 판**이 불림
+
+```cpp
+Thermometer kitchen;
+const Sensor& ref{ kitchen };
+ref.describe();   // Thermometer판이 불림
+```
+
+- 기반 클래스에서 `virtual`을 빼면 이렇게 동작하지 않음. `Sensor`판이 불림
+- 그래도 기반 클래스 참조로는 기반 클래스에 없는 멤버를 부를 수 없음(앞 글)
+
+### 슬라이싱
+
+- 포인터나 참조가 아닌 **객체**로 받으면 이야기가 다름
+
+```cpp
+Thermometer kitchen;
+Sensor copy{ kitchen };   // Thermometer를 Sensor 객체로 복사
+copy.describe();          // Sensor판이 불림
+```
+
+- `Thermometer`는 `Sensor`이므로 `Sensor` 객체로 복사하거나 대입할 수 있음. 그러나 그 순간 `Thermometer`에 대한 정보를 모두 잃음
+- 메모리의 상자로 생각하면 쉬움
+  - `Sensor` 객체는 일정 크기의 상자. `Thermometer` 객체는 `Sensor`의 모든 것에 조금을 더한, 약간 더 큰 상자
+  - 포인터나 참조로 가리키면 상자는 그대로이고 접근하는 방법만 새로 생김
+  - `Sensor` 객체로 복사하면 더 작은 상자에 맞추려고 `Thermometer`만의 부분을 모두 버림
+
+:::note
+파생 클래스 객체는 기반 클래스 포인터나 참조로 가리켜도 모든 데이터 멤버와 멤버 함수를 그대로 가진다. 기반 클래스 **객체**로 변환하면 파생 클래스만의 것을 잃는다. 이것을 **슬라이싱** (slicing)이라고 한다.
+:::
+
+<RunCode client:load code={overrideCode} />
+
+- 볼 것
+  - `Sensor` 참조로 `Thermometer`를 넘기면 `describe()`는 온도계, `kind()`는 Sensor. `virtual`인 것만 실제 타입을 따름
+  - `kind()`는 `Thermometer`에서 다시 정의했지만 `virtual`이 아니라 감추기일 뿐
+  - 슬라이싱된 `copy`는 `describe()`도 일반 센서
+- `virtual ~Sensor() = default;`는 다음 글에서 설명함
+
+## override 키워드
+
+- `override`는 선택이지만 **강력히 권함**
+- 없으면 기반 클래스의 멤버 함수를 재정의하는 대신, 실수로 새 (가상) 멤버 함수를 만들 수 있음. 결과적으로 기반 클래스의 것을 감춤
+- 예: 기반 클래스의 `calibrate(double)`을 재정의하려다 매개변수를 `int`로 적음
+
+```cpp
+class Sensor
+{
+public:
+    virtual void calibrate(double offset);
+};
+
+class Thermometer : public Sensor
+{
+public:
+    virtual void calibrate(int offset);   // 재정의가 아님!
+};
+```
+
+- 이것은 `Sensor`의 함수를 재정의하지 않고 새 가상 함수를 만듦
+- `Sensor` 참조로 `calibrate(-0.4)`를 부르면 `Sensor`판이 불림
+
+<RunCode client:load code={overrideMistakeCode} />
+
+- 이런 실수가 생기는 흔한 경로
+  - 처음엔 기반 클래스의 함수가 `int`를 받았고, 파생 클래스도 `int`로 재정의했음
+  - 나중에 기반 클래스만 `double`로 바꾸고 파생 클래스 고치는 것을 잊음
+  - 기반 클래스의 함수 이름을 바꾸고 파생 클래스의 이름을 그대로 둔 경우도 마찬가지
+- `override`를 붙이면 컴파일러가 잡아 줌: `'void Thermometer::calibrate(int)' marked 'override', but does not override`
+- GCC는 `-Wall`에서 경고도 줌: `'virtual void Sensor::calibrate(double)' was hidden [-Woverloaded-virtual=]`. 경고는 놓치기 쉬우니 `override`에 기대는 것이 확실함
+
+:::caution
+기반 클래스의 멤버 함수를 재정의하려는 멤버 함수에는 언제나 `override`를 붙인다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `override` | C++11 | 없음. 재정의하는 함수에 `virtual`을 다시 적는 관례 |
+| `= default` 소멸자 | C++11 | 빈 본문 `{}` |
+
+- `virtual`, 재정의, 슬라이싱은 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={overrideCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 파생 클래스에서 같은 이름으로 다시 정의하면 재정의다?
+  - 기반 클래스에서 `virtual`이어야 재정의. 아니면 감추기
+- 기반 클래스 참조로 부르면 늘 기반 클래스의 판이 불린다?
+  - `virtual` 함수는 실제 객체의 클래스 판이 불림
+- 파생 객체를 기반 클래스 변수에 넣어도 다형적으로 동작한다?
+  - 객체로 복사하면 슬라이싱. 다형성은 포인터나 참조로만
+- `override`는 장식이다?
+  - 재정의가 아닌 경우를 컴파일 오류로 잡아 줌. 늘 붙임
+- 파생 클래스에서 `virtual`을 빼면 더 아래 클래스에서 재정의할 수 없다?
+  - 한번 `virtual`이면 계속 `virtual`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `virtual` | 파생 클래스에서 재정의할 수 있게 함. 정의에는 적지 않음 |
+| 재정의 | 같은 시그니처로 다시 선언. `override`를 붙임 |
+| 기반 참조·포인터로 부르기 | `virtual`이면 실제 클래스의 판 |
+| 감추기 | `virtual`이 아닌 함수를 다시 정의한 것. 파생 타입으로 다룰 때만 쓰임 |
+| 슬라이싱 | 파생 객체를 기반 객체로 복사하면 파생 부분이 잘림 |
+| `override` | 재정의가 아니면 컴파일 오류. 늘 붙임 |
+
+## 복습 질문
+
+<details>
+<summary>`void print(Sensor s) { s.describe(); }`에 `Thermometer`를 넘기면 어느 `describe()`가 불리는가? 고치려면?</summary>
+
+- `Sensor`판. 값으로 받아 슬라이싱되기 때문
+- `void print(const Sensor& s)`처럼 참조로 받음
+
+</details>
+
+<details>
+<summary>기반 클래스의 `void show();`(비`virtual`)를 파생 클래스에서 다시 정의했다. `Base& b{ derived }; b.show();`는?</summary>
+
+- `Base`판이 불림. `virtual`이 아니면 재정의가 아니라 감추기
+
+</details>
+
+<details>
+<summary>기반 클래스에 `virtual void f(long);`, 파생 클래스에 `void f(int) override;`라고 쓰면?</summary>
+
+- 컴파일 오류: `marked 'override', but does not override`. 매개변수 타입이 달라 재정의가 아님
+
+</details>

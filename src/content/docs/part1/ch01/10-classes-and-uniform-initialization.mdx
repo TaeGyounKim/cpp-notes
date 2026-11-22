@@ -1,0 +1,334 @@
+---
+title: 클래스 첫걸음과 유니폼 초기화
+description: 데이터와 함수를 하나로 묶는 클래스의 기본 문법, 이름을 찾는 범위, 중괄호로 통일된 초기화와 지정 초기화를 익힙니다.
+sidebar:
+  order: 10
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import ScopeMap from '../../../../components/ScopeMap.svelte';
+import scopeLookup from '../../../../data/ch01/scope.js';
+import classBasicCode from '../../../../examples/ch01/class-basic.cpp?raw';
+import classInclassCode from '../../../../examples/ch01/class-inclass.cpp?raw';
+import scopeCode from '../../../../examples/ch01/scope.cpp?raw';
+import uniformInitCode from '../../../../examples/ch01/uniform-init.cpp?raw';
+import designatedInitCode from '../../../../examples/ch01/designated-init.cpp?raw';
+import classCpp11Code from '../../../../examples/ch01/class-cpp11.cpp?raw';
+
+- 다루는 것: C++을 "더 나은 C"가 아니라 객체 지향 언어로 만드는 핵심, 클래스
+- 배우는 요소: 클래스 정의, 접근 지정자, 생성자와 소멸자, 범위와 `::`, 유니폼 초기화, 지정 초기화
+- 앞의 글들에서 "뒤에서 다룸"이라고 미뤄 둔 것이 여기서 풀림: 유니폼 초기화를 권장하는 이유, `struct`와 `class`의 차이
+- 클래스의 깊은 내용은 8, 9, 10장에서 다룸. 여기서는 읽고 쓸 수 있을 만큼의 문법만 익힘
+
+## 클래스 정의하기
+
+- **클래스** (class): 데이터와 그 데이터를 다루는 함수를 하나로 묶은 타입 <CppRef path="cpp/language/classes" />
+- **객체** (object): 클래스로 만든 변수 하나하나. 클래스가 설계도라면 객체는 그 설계도로 만든 물건
+- **객체 지향 프로그래밍** (object-oriented programming, OOP): 프로그램을 객체들의 모음으로 보고 짜는 방식. 5장에서 다룸
+
+```cpp
+class MovieTicket
+{
+public:
+    int calculatePrice();
+    void setSeatCount(int seatCount);
+
+private:
+    int m_seatCount;
+    bool m_member;
+};
+```
+
+| 용어 | 위 코드에서 | 뜻 |
+| --- | --- | --- |
+| **데이터 멤버** (data member) | `m_seatCount`, `m_member` | 객체가 갖고 있는 값 <CppRef path="cpp/language/data_members" /> |
+| **멤버 함수** (member function) | `calculatePrice`, `setSeatCount` | 객체가 할 수 있는 일 <CppRef path="cpp/language/member_functions" /> |
+| **접근 지정자** (access specifier) | `public:`, `private:` | 그 아래 멤버를 어디서 쓸 수 있는지 정함 <CppRef path="cpp/language/access" /> |
+
+- 닫는 중괄호 뒤의 세미콜론(`;`)을 빠뜨리지 말 것. 구조체와 같음
+- 이름 관례: 이 사이트는 데이터 멤버 이름 앞에 `m_`을 붙임 (`m_seatCount`). 매개변수나 지역 변수와 구별하기 위함
+
+### 접근 지정자
+
+| 지정자 | 쓸 수 있는 곳 |
+| --- | --- |
+| `public` | 어디서나 |
+| `private` | 그 클래스의 멤버 함수 안에서만 |
+| `protected` | 그 클래스와, 그 클래스를 물려받은 클래스에서. 10장에서 다룸 |
+
+- 접근 지정자는 순서에 상관없이 여러 번 적을 수 있음
+- 권장: 데이터 멤버는 모두 `private`으로 둠
+  - 밖에서 읽어야 하면 값을 돌려주는 멤버 함수를 `public`으로 제공. 흔히 getter라고 부름 (`getSeatCount`)
+  - 밖에서 바꿔야 하면 값을 넣는 멤버 함수를 제공. 흔히 setter라고 부름 (`setSeatCount`)
+  - 이유: 나중에 데이터를 담는 방식을 바꿔도, 밖에서 쓰는 코드는 고치지 않아도 됨
+
+### 생성자와 소멸자
+
+- **생성자** (constructor): 객체가 만들어질 때 자동으로 호출되는 멤버 함수 <CppRef path="cpp/language/constructor" />
+  - 이름이 클래스 이름과 같고, 반환 타입이 없음. `MovieTicket();`
+- **소멸자** (destructor): 객체가 사라질 때 자동으로 호출되는 멤버 함수 <CppRef path="cpp/language/destructor" />
+  - 클래스 이름 앞에 물결표(`~`)를 붙임. `~MovieTicket();`
+  - 뒷정리가 필요할 때만 적음. 파일 닫기, 메모리 돌려주기 등. 할 일이 없으면 적지 않아도 됨
+
+### 데이터 멤버의 첫 값을 정하는 세 가지 방법
+
+| 방법 | 코드 | 평가 |
+| --- | --- | --- |
+| **생성자 초기화 리스트** (constructor initializer) | `MovieTicket() : m_seatCount{ 1 } { }` | 생성자가 있을 때의 기본 방법 |
+| 생성자 본문에서 대입 | `MovieTicket() { m_seatCount = 1; }` | 초기화가 아니라 만든 뒤에 값을 넣는 것 |
+| **클래스 내부 초기화** (in-class initializer) <Badge text="C++11" /> | `int m_seatCount{ 1 };` | 가장 간단함. 값만 정하면 될 때 권장 |
+
+- 생성자 초기화 리스트: 생성자의 괄호 뒤에 콜론(`:`)을 적고, 멤버마다 첫 값을 중괄호로 적음. 여러 개면 쉼표로 구분 <CppRef path="cpp/language/initializer_list" />
+- 클래스 내부 초기화: 데이터 멤버를 선언하는 자리에서 바로 첫 값을 줌 <CppRef path="cpp/language/data_members#Member_initialization" />
+- 고르는 기준
+  - 첫 값만 정하면 됨 → 클래스 내부 초기화. 생성자를 쓸 필요가 없음
+  - 파일 열기, 메모리 마련 같은 다른 일도 해야 함 → 생성자를 씀
+
+### 멤버 함수의 정의를 두는 곳
+
+- 클래스 밖에 둘 때: 함수 이름 앞에 `클래스이름::`을 붙임
+
+```cpp
+int MovieTicket::calculatePrice()
+{
+    return m_seatCount * 14000;
+}
+```
+
+- 클래스 안에 바로 둘 수도 있음. 아래 두 번째 예제가 이 방식
+- 파일을 나눌 때의 관례: 클래스 정의는 모듈 인터페이스 파일(`.cppm`)이나 헤더 파일에, 멤버 함수의 정의는 `.cpp` 파일에 둠. 11장에서 다룸
+
+<RunCode client:load code={classBasicCode} />
+
+- 볼 것
+  - `[표가 만들어짐]`, `[표가 사라짐]`: 호출한 적이 없는데 출력됨. 생성자와 소멸자가 자동으로 호출된 것
+  - 소멸자가 불리는 때: `main`이 끝나 `ticket`이 사라질 때
+- 해 볼 것: 주석 처리된 마지막 줄의 `//`를 지우고 실행
+  - 결과: 컴파일 오류 `'int MovieTicket::m_seatCount' is private within this context`
+
+<RunCode client:load code={classInclassCode} />
+
+- 위 예제와 하는 일은 같음. 달라진 것: 생성자·소멸자가 없고, 첫 값은 클래스 내부 초기화로, 멤버 함수는 클래스 안에 정의
+
+## 클래스 사용하기
+
+| 하는 일 | 코드 |
+| --- | --- |
+| 객체 만들기 | `MovieTicket ticket;` |
+| 멤버 함수 호출 | `ticket.setSeatCount(2);` |
+| 돌려받은 값 쓰기 | `int price{ ticket.calculatePrice() };` |
+
+- 구조체의 필드에 접근할 때와 같은 점(`.`)을 씀
+- `MovieTicket ticket;`처럼 만든 객체는 그 블록이 끝날 때 자동으로 사라짐. 소멸자도 그때 호출됨
+
+### struct와 class의 차이
+
+- 차이는 하나뿐: 접근 지정자를 적지 않았을 때의 기본값
+
+| | 기본 접근 |
+| --- | --- |
+| `struct` | `public` |
+| `class` | `private` |
+
+- 그 밖에는 똑같음. 구조체도 멤버 함수, 생성자, 소멸자를 가질 수 있음
+- 흔한 관례: 데이터만 묶어 두는 단순한 타입은 `struct`, 그 밖에는 `class`
+
+## 범위와 이름 찾기
+
+- **범위** (scope): 어떤 이름을 쓸 수 있는 구역 <CppRef path="cpp/language/scope" />
+- 프로그램의 모든 이름(변수, 함수, 클래스)은 어떤 범위에 속함
+- 범위를 만드는 것
+  - 네임스페이스, 클래스 정의, 함수 정의, 중괄호 블록
+  - `for` 문, `if` 문, `switch` 문의 초기화 구문에서 만든 변수는 그 문장이 범위
+  - 어디에도 속하지 않은 이름은 **전역 범위** (global scope)
+- 이름을 찾는 순서: 지금 있는 범위 → 그 바깥 범위 → ... → 전역 범위. 끝까지 없으면 컴파일 오류
+- **이름 가리기** (name hiding): 안쪽 범위에 같은 이름이 있으면 바깥 범위의 이름은 가려짐
+- 원하는 범위를 직접 고르는 법: **범위 지정 연산자** (scope resolution operator) `::`
+  - `settings::value()`: `settings` 네임스페이스의 것
+  - `::value()`: 앞에 이름 없이 `::`만 붙이면 전역 범위의 것
+
+<ScopeMap client:load data={scopeLookup} />
+
+<RunCode client:load code={scopeCode} />
+
+- 해 볼 것: `main` 바로 위에 `using namespace settings;`를 추가하고 실행
+  - 결과: 네 번째 줄의 `value()`에서 오류 `call of overloaded 'value()' is ambiguous`
+- **이름 없는 네임스페이스** (unnamed namespace): `namespace { ... }`처럼 이름 없이 만든 네임스페이스 <CppRef path="cpp/language/namespace#Unnamed_namespaces" />
+  - 그 안의 이름은 같은 파일 안에서 접두어 없이 쓸 수 있음
+  - 위 예제의 `settings`를 이름 없는 네임스페이스로 바꾸면 `value()`가 같은 이유로 모호해짐
+
+## 유니폼 초기화 <Badge text="C++11" />
+
+- 문제 상황: C++11 이전에는 타입에 따라 초기화 문법이 달랐음
+
+```cpp
+CircleStruct circle1 = { 10, 10, 2.5 };   // 구조체: 중괄호
+CircleClass circle2(10, 10, 2.5);         // 클래스: 소괄호로 생성자 호출
+```
+
+- **유니폼 초기화** (uniform initialization): 어떤 타입이든 중괄호 `{ }`로 초기화하는 문법 <CppRef path="cpp/language/list_initialization" />
+
+```cpp
+CircleStruct circle1{ 10, 10, 2.5 };
+CircleClass circle2{ 10, 10, 2.5 };   // 생성자가 호출됨
+```
+
+- 거의 모든 것에 쓸 수 있음: 기본 타입, 구조체, 클래스, 배열, 표준 컨테이너
+- 기본 타입의 초기화 네 가지. 결과는 모두 같음
+
+| 코드 | 문법 |
+| --- | --- |
+| `int a = 3;` | 대입 문법 |
+| `int b(3);` | 소괄호 |
+| `int c = { 3 };` | 등호 + 중괄호 |
+| `int d{ 3 };` | 중괄호. 이 사이트가 쓰는 방식 |
+
+- 빈 중괄호 `{ }`: 0으로 초기화
+  - `Product item;`: 필드가 초기화되지 않음. 알 수 없는 값
+  - `Product item{};`: 모든 필드가 0
+
+### 권장하는 이유
+
+- 문법이 하나로 통일됨. 타입마다 다른 문법을 기억하지 않아도 됨
+- 축소 변환을 막아 줌
+  - `int x = 3.14;`: 컴파일됨. 소수 부분이 말없이 사라져 3
+  - `int x{ 3.14 };`: 컴파일 오류
+- 꼭 축소 변환이 필요하면: `static_cast`로 의도를 드러냄
+
+<RunCode client:load code={uniformInitCode} />
+
+## 지정 초기화 <Badge text="C++20" />
+
+- **지정 초기화** (designated initializer): 필드 이름을 적어 가며 초기화하는 문법. 점(`.`) 뒤에 필드 이름을 적음 <CppRef path="cpp/language/aggregate_initialization#Designated_initializer" />
+
+```cpp
+Product item{
+    .grade = 'A',
+    .id = 1024,
+    .price = 4500,
+};
+```
+
+- 쓸 수 있는 대상: **집합체** (aggregate) <CppRef path="cpp/language/aggregate_initialization" />
+  - 배열, 또는 아래 조건을 모두 만족하는 구조체·클래스
+  - 데이터 멤버가 모두 `public`
+  - 직접 적은 생성자가 없음
+  - 가상 함수가 없음 (10장에서 다룸)
+- 규칙
+  - 필드를 **선언한 순서대로** 적어야 함
+  - 이름을 적는 방식과 적지 않는 방식을 섞을 수 없음
+  - 필드를 건너뛸 수 있음
+- 건너뛴 필드의 값
+  - 클래스 내부 초기화로 기본값을 준 필드: 그 기본값
+  - 기본값이 없는 필드: 0
+
+### 좋은 점
+
+- 어느 값이 어느 필드인지 코드에 드러남. `{ 'A', 1024, 50, 4500 }`보다 읽기 쉬움
+- 기본값으로 충분한 필드는 적지 않아도 됨
+- 구조체에 필드가 추가되어도 기존 코드가 그대로 동작함. 새 필드는 기본값으로 초기화됨
+
+<RunCode client:load code={designatedInitCode} />
+
+- 실행 결과의 경고 `missing initializer for member 'Product::stock'`: 필드를 건너뛰었다는 것을 알려 주는 경고. 일부러 건너뛴 것이면 문제없음
+- 해 볼 것: `b`에서 `.id`와 `.grade`의 순서를 바꾸고 실행
+  - 결과: 컴파일 오류 `designator order ... does not match declaration order`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| 유니폼 초기화, 클래스 내부 초기화 | C++11 | 그대로 사용 |
+| 기본값이 있는 구조체를 `{ 값, 값 }`으로 초기화 | C++14 | 안 됨. 기본값을 빼거나 생성자를 만듦 |
+| 지정 초기화 | C++20 | 없음. 선언한 순서대로 값을 나열 |
+
+- C++98 / C++03: 유니폼 초기화가 없음. 구조체는 `= { }`, 클래스는 소괄호로 초기화
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={classCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `MovieTicket ticket();`은 객체를 만들지 않음
+  - 컴파일러는 이것을 "`MovieTicket`을 돌려주는 `ticket`이라는 함수의 선언"으로 읽음
+  - 인수 없이 객체를 만들 때: `MovieTicket ticket;` 또는 `MovieTicket ticket{};`
+- 생성자 초기화 리스트의 실행 순서
+  - 적은 순서가 아니라 클래스에 데이터 멤버를 선언한 순서대로 초기화됨
+  - 두 순서를 같게 적어 두면 헷갈릴 일이 없음
+- 이름이 비슷한 세 가지
+  - 생성자 초기화 리스트: 생성자의 `:` 뒤에 적는 멤버 초기화
+  - 초기화 리스트 (`std::initializer_list`): 중괄호로 묶은 값 목록을 받는 타입. 앞 글에서 다룸
+  - 유니폼 초기화: 중괄호로 초기화하는 문법 전체
+- `std::vector<int> v{ 5 };`는 원소가 다섯 개인 벡터가 아님
+  - 중괄호 안의 값은 원소로 취급됨. 원소가 `5` 하나
+  - 유니폼 초기화에서 예외적으로 주의할 곳. 개수를 주려면 소괄호 `v(5)`
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| 클래스 | 데이터 멤버 + 멤버 함수 | |
+| `public` / `private` | 밖에서 쓸 수 있음 / 클래스 안에서만 | |
+| 생성자, 소멸자 | 객체가 만들어질 때 / 사라질 때 자동 호출 | |
+| 생성자 초기화 리스트 | `: m_count{ 1 }` | |
+| 클래스 내부 초기화 | `int m_count{ 1 };` | C++11 |
+| `struct`와 `class` | 기본 접근이 `public` / `private` | |
+| 범위와 `::` | 가까운 범위부터 찾음. `::`로 직접 고름 | |
+| 유니폼 초기화 | 무엇이든 `{ }`로. 축소 변환을 막음 | C++11 |
+| 지정 초기화 | `{ .grade = 'A', .id = 1 }`. 선언 순서대로 | C++20 |
+
+## 복습 질문
+
+<details>
+<summary>`struct`와 `class`의 차이는 무엇인가요?</summary>
+
+- 접근 지정자를 적지 않았을 때의 기본값
+- `struct`는 `public`, `class`는 `private`. 그 밖에는 같음
+
+</details>
+
+<details>
+<summary>데이터 멤버를 `private`으로 두고 getter와 setter를 제공하는 이유는?</summary>
+
+- 데이터를 담는 방식을 나중에 바꿔도, 밖에서 쓰는 코드는 `public` 멤버 함수만 보고 있으므로 고칠 필요가 없음
+- 값을 넣을 때 검사하는 코드를 setter 한곳에 둘 수 있음
+
+</details>
+
+<details>
+<summary>생성자를 직접 쓰지 않고 데이터 멤버의 첫 값을 정하려면?</summary>
+
+- 클래스 내부 초기화: `int m_seatCount{ 1 };`
+- 첫 값만 정하면 되는 경우에 권장
+
+</details>
+
+<details>
+<summary>전역 함수 `value()`와 `namespace settings`의 `value()`가 있을 때, 전역의 것을 분명하게 호출하는 코드는?</summary>
+
+- `::value();`
+- 이름 없이 `::`만 붙이면 전역 범위를 뜻함
+
+</details>
+
+<details>
+<summary>유니폼 초기화를 권장하는 이유 두 가지는?</summary>
+
+- 타입에 상관없이 문법이 하나로 통일됨
+- 축소 변환을 컴파일 오류로 막아 줌
+
+</details>
+
+<details>
+<summary>`struct Config { int width{ 800 }; int height{ 600 }; bool fullscreen; };`를 `Config c{ .height = 720 };`으로 만들면 각 필드의 값은?</summary>
+
+- `width`는 800 (기본값)
+- `height`는 720 (지정한 값)
+- `fullscreen`은 `false` (기본값이 없으므로 0에 해당하는 값)
+
+</details>

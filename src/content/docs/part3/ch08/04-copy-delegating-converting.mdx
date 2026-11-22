@@ -1,0 +1,275 @@
+---
+title: 복사·초기화 목록·위임·변환 생성자
+description: 다른 객체를 본떠 만드는 복사 생성자와 그것이 불리는 때, 초기화 목록 생성자, 위임 생성자, 변환 생성자와 explicit, 컴파일러가 만들어 주는 생성자의 규칙을 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import copyCtorCode from '../../../../examples/ch08/copy-ctor.cpp?raw';
+import initListCtorCode from '../../../../examples/ch08/init-list-ctor.cpp?raw';
+import delegatingCode from '../../../../examples/ch08/delegating.cpp?raw';
+import explicitCtorCode from '../../../../examples/ch08/explicit-ctor.cpp?raw';
+import cpp11Code from '../../../../examples/ch08/copy-delegate-cpp11.cpp?raw';
+
+- 다루는 것: 앞 글에 이어, 특별한 역할을 맡은 생성자들
+- 이 글에서 배우는 요소: 복사 생성자와 그것이 불리는 때, 객체를 `const` 참조로 넘기기, 초기화 목록 생성자, 위임 생성자, 변환 생성자와 `explicit`, 컴파일러가 만드는 생성자 정리
+
+## 복사 생성자
+
+- **복사 생성자** (copy constructor): 다른 객체와 똑같은 사본으로 새 객체를 만드는 생성자 <CppRef path="cpp/language/copy_constructor" />
+
+```cpp
+class Temperature
+{
+public:
+    Temperature(const Temperature& src);
+    // ...
+};
+
+Temperature::Temperature(const Temperature& src)
+    : m_celsius{ src.m_celsius }
+{
+}
+```
+
+- 모양
+  - 원본 객체를 **`const` 참조**로 받음. 다른 생성자처럼 반환 타입이 없음
+  - 원본의 데이터 멤버를 모두 복사하는 것이 할 일. 다른 일을 해도 문법상 막히지는 않지만, 사용자가 기대하는 "똑같은 사본"을 만드는 것이 맞음
+- 직접 쓰지 않으면 컴파일러가 만들어 줌
+  - 새 객체의 데이터 멤버를 원본의 같은 멤버로 하나씩 초기화함. 객체 멤버라면 그 복사 생성자가 불림
+  - 멤버가 `m1`, `m2`, ..., `mn`이라면 아래와 같은 것을 만들어 주는 셈
+
+```cpp
+ClassName::ClassName(const ClassName& src)
+    : m1{ src.m1 }, m2{ src.m2 }, /* ... */ mn{ src.mn } {}
+```
+
+- 그래서 대부분은 복사 생성자를 직접 쓸 필요가 없음
+  - 이 글의 복사 생성자도 언제 불리는지 보여 주려고 쓴 것. 컴파일러가 만든 것으로 충분함
+  - 컴파일러가 만든 것으로 부족한 경우(멤버가 동적 메모리를 가리킬 때)는 9장에서 다룸
+
+### 복사 생성자가 불리는 때
+
+- 다른 객체로 새 객체를 만들 때: `Temperature copy{ noon };`
+- 객체를 **값으로** 함수에 넘길 때
+  - C++에서 인수를 넘기는 기본 방식은 **값에 의한 전달** (pass-by-value). 함수는 값이나 객체의 **사본**을 받음
+  - 그러니 객체를 값으로 넘기면, 매개변수라는 새 객체가 인수의 복사 생성자로 만들어짐
+  - `std::string`도 기본 타입이 아니라 클래스. `void print(std::string s)`에 문자열을 넘기면 `s`가 복사 생성자로 만들어짐
+  - 함수가 끝나면 사본은 사라지고, 원본은 그대로
+- 객체를 값으로 돌려줄 때도 불릴 수 있음. 다음 글에서 다룸
+
+<RunCode client:load code={copyCtorCode} />
+
+- 볼 것
+  - 1과 2에서 `[복사 생성자]`가 찍힘. 2는 `byValue`의 매개변수 `t`를 만드는 복사
+  - 3에서는 찍히지 않음. 참조는 원본을 가리킬 뿐 새 객체가 아님
+
+### 객체를 참조로 넘기기
+
+- 객체를 함수에 넘길 때 복사를 피하려면 참조로 받음
+  - 객체 전체가 아니라 주소만 넘어가므로 대개 더 효율적임
+  - 객체 안의 동적 메모리 때문에 생기는 문제도 피함(9장)
+- 참조로 받으면 함수가 원본을 바꿀 수 있음. 효율 때문에 참조를 쓴 것이라면 `const`를 붙여 막음: **`const` 참조에 의한 전달** (pass-by-reference-to-const)
+
+:::note
+성능을 위해 객체는 값보다 `const` 참조로 넘기는 것이 좋다. 9장에서 이동 의미론을 배우면 값으로 넘기는 편이 나은 경우가 생겨 이 규칙이 조금 바뀐다.
+:::
+
+- 예외: 복사가 싼 것은 값으로 넘김
+  - `int`, `double` 같은 기본 타입: `const` 참조로 넘겨도 얻는 것이 없음
+  - `std::string_view`: 사실상 포인터와 길이뿐이라 복사가 쌈. 보통 값으로 넘김
+- 돌려줄 때는 반대 상황: 함수 안에서 만든 지역 객체는 **값으로** 돌려줘야 함
+  - 지역 객체의 참조를 돌려주면, 함수가 끝나 객체가 사라진 뒤 참조만 남음(7장의 댕글링)
+
+### = default와 = delete
+
+- 기본 생성자처럼 복사 생성자도 명시적으로 기본 정의를 요청하거나 지울 수 있음 <Badge text="C++11" />
+
+```cpp
+Temperature(const Temperature& src) = default;   // 컴파일러가 만드는 것 그대로
+Temperature(const Temperature& src) = delete;    // 복사 금지
+```
+
+- 복사 생성자를 지우면 객체를 복사할 수 없음. 값으로 넘기려 하면 오류: `use of deleted function 'Temperature::Temperature(const Temperature&)'`
+- 데이터 멤버 가운데 복사 생성자가 지워졌거나 `private`인 것이 있으면, 그 클래스의 복사 생성자도 저절로 지워짐. `= default`로 요청해도 마찬가지
+
+## 초기화 목록 생성자
+
+- **초기화 목록 생성자** (initializer-list constructor): 첫 매개변수가 `std::initializer_list<T>`이고, 다른 매개변수가 없거나 모두 기본값이 있는 생성자 <Badge text="C++11" /> <CppRef path="cpp/utility/initializer_list" />
+  - `std::initializer_list<T>`는 `<initializer_list>`에 있음. 1장에서 함수 매개변수로 써 봄
+- 중괄호 안의 값 여러 개를 한꺼번에 받음: `TemperatureLog morning{ 12.5, 14.0, 17.5 };`
+- 생성자 안에서
+  - 범위 기반 `for`로 원소를 하나씩 읽음
+  - `size()`로 원소 개수를 앎
+  - `std::vector`의 `assign()`에 통째로 넘겨 복사할 수도 있음(`vector`는 18장)
+
+<RunCode client:load code={initListCtorCode} />
+
+- 볼 것
+  - `broken`은 -300이 섞여 생성자가 예외를 던짐. 그래서 `broken.print()`는 실행되지 않음
+  - 마지막 줄: `std::vector<int>`의 `{ 6 }`과 `( 6 )`이 전혀 다른 결과
+
+- 표준 라이브러리도 초기화 목록 생성자를 적극 씀
+  - `std::vector<std::string> names{ "a", "b", "c" };`
+  - 이것이 없던 시절에는 빈 `vector`를 만들고 `push_back()`을 여러 번 불러야 했음
+
+:::caution
+초기화 목록 생성자와 인수 하나짜리 생성자가 함께 있으면 어느 쪽이 불리는지 조심한다. 중괄호 `{}`는 초기화 목록 생성자를 고른다. `std::vector<int>{ 6 }`은 원소 6 하나, `std::vector<int>(6)`은 원소 여섯 개다.
+:::
+
+## 위임 생성자
+
+- **위임 생성자** (delegating constructor): 같은 클래스의 다른 생성자에게 일을 맡기는 생성자 <Badge text="C++11" />
+  - 앞 글에서 본, 생성자 본문에서 다른 생성자를 불렀다가 임시 객체만 만든 실수를 바르게 하는 방법
+
+```cpp
+Temperature::Temperature(const std::string& text)
+    : Temperature{ std::stod(text) }
+{
+}
+```
+
+- 규칙
+  - 다른 생성자 호출은 본문이 아니라 **생성자 초기화 목록**에 적음
+  - 그때 목록에는 **그 호출 하나만** 올 수 있음. 다른 멤버 초기화를 함께 적으면 오류: `mem-initializer for 'Temperature::m_x' follows constructor delegation`
+- 실행 순서: 맡은 생성자(대상 생성자)가 끝까지 실행된 뒤, 위임한 생성자의 본문이 실행됨
+
+<RunCode client:load code={delegatingCode} />
+
+- 재귀에 주의
+  - 생성자 A가 B에게, B가 다시 A에게 위임하면 끝없이 돌게 됨. 표준은 이것을 정의되지 않은 동작으로 둠
+  - GCC는 자기 자신에게 바로 위임하는 것(`constructor delegates to itself`)만 잡고, 서로 위임하는 두 생성자는 아무 말 없이 컴파일함
+
+## 변환 생성자와 explicit
+
+- 인수 하나로 부를 수 있는 생성자(예: `Temperature(double)`)는 `double`을 `Temperature`로 **바꾸는** 데 쓸 수 있음
+- **변환 생성자** (converting constructor): 컴파일러가 이런 생성자로 **암시적 변환**을 해 줌 <CppRef path="cpp/language/converting_constructor" />
+  - `Temperature`를 받는 함수에 `30.0`을 넘기면, 컴파일러가 몰래 `Temperature{ 30.0 }`을 만들어 넘김
+  - `t = 99.0;`도 `99.0`으로 임시 `Temperature`를 만든 뒤 대입함
+- C++11부터는 매개변수가 여러 개인 생성자도 변환 생성자가 될 수 있음. 중괄호 목록 `{ 18.0, 24.0 }`이 그 생성자로 변환되기 때문
+- 늘 원하는 동작은 아님. 막으려면 클래스 정의 안의 선언에 `explicit` 키워드를 붙임 <CppRef path="cpp/language/explicit" />
+  - `explicit`은 클래스 정의 안에만 적음. 클래스 밖의 정의에는 적지 않음
+  - 그러면 `showStrict(30.0)`은 오류: `invalid initialization of reference of type 'const Strict&' from expression of type 'double'`
+  - 변환을 원하면 `showStrict(Strict{ 30.0 })`처럼 드러내 적음
+
+<RunCode client:load code={explicitCtorCode} />
+
+- 볼 것: `Loose`는 `30.0`, `{ 18.0, 24.0 }`, `99.0`이 모두 몰래 변환됨. `Strict`는 직접 만들어 넘겨야 함
+
+### 조건부 explicit
+
+- `explicit`에 `bool` 값을 줄 수 있음 <Badge text="C++20" />: `explicit(true)`는 `explicit`과 같고, `explicit(false)`는 붙이지 않은 것과 같음
+- 쓸모는 템플릿에서. 타입 특성(type trait)으로 "이 타입이 저 타입으로 변환되는가" 같은 성질을 물어 그 결과를 `explicit(...)`에 넣음(26장)
+
+:::tip
+인수 하나로 부를 수 있는 생성자에는 적어도 `explicit`을 붙여 뜻하지 않은 변환을 막는다. 암시적 변환이 정말 필요하면 `explicit(false)`를 적어, 일부러 허용했다는 뜻을 사용자에게 알린다.
+:::
+
+## 컴파일러가 만드는 생성자 정리
+
+- 컴파일러는 클래스마다 기본 생성자와 복사 생성자를 만들어 줄 수 있음. 무엇을 만들지는 직접 쓴 생성자에 따라 달라짐
+
+| 직접 쓴 생성자 | 컴파일러가 만드는 것 | 만들 수 있는 객체 |
+| --- | --- | --- |
+| 없음 | 기본 생성자, 복사 생성자 | `T a;` `T b{ a };` |
+| 기본 생성자만 | 복사 생성자 | `T a;` `T b{ a };` |
+| 복사 생성자만 | 없음 | 사실상 만들 수 없음(사본을 만들 원본이 없음) |
+| 복사가 아닌 생성자만 | 복사 생성자 | `T a{ 6 };` `T b{ a };` |
+| 기본 생성자 + 복사가 아닌 생성자 | 복사 생성자 | `T a;` `T b{ 5 };` `T c{ a };` |
+
+- 비대칭에 주의
+  - 복사 생성자: 직접 쓰지 않는 한 컴파일러가 늘 만들어 줌
+  - 기본 생성자: 생성자를 **하나라도** 쓰면 더 이상 만들어 주지 않음
+- 둘 다 `= default`, `= delete`로 바꿀 수 있음
+- 생성자가 하나 더 있음: **이동 생성자** (move constructor). 이동 의미론을 구현할 때 필요하며 9장에서 다룸
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `= default`, `= delete` | C++11 | 복사 금지는 복사 생성자를 `private`으로 선언만 함 |
+| 초기화 목록 생성자 | C++11 | 빈 객체를 만들고 원소를 하나씩 추가 |
+| 위임 생성자 | C++11 | 공통 초기화를 `private` 멤버 함수로 빼서 각 생성자가 부름 |
+| 매개변수 여러 개인 변환 생성자 | C++11 | 매개변수 하나짜리만 변환 생성자 |
+| `explicit(bool)` | C++20 | `explicit` 또는 붙이지 않음 |
+| `std::println`으로 `vector` 출력 | C++23 | 반복문으로 원소를 하나씩 출력 |
+
+- 복사 생성자와 `explicit`은 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={cpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 복사 생성자는 늘 직접 써야 한다?
+  - 컴파일러가 멤버별로 복사하는 것을 만들어 줌. 대부분 그것으로 충분
+- 객체를 함수에 넘기면 원본이 넘어간다?
+  - 값으로 받으면 사본이 만들어짐(복사 생성자 호출). 원본을 쓰려면 참조로 받음
+- 모든 매개변수를 `const` 참조로 받는 것이 좋다?
+  - 객체는 그렇지만, `int`, `double`, `std::string_view`처럼 복사가 싼 것은 값으로
+- `std::vector<int> v{ 6 };`은 원소 6개다?
+  - 원소 하나(값 6). 6개는 `std::vector<int> v(6);`
+- 위임 생성자는 다른 멤버도 함께 초기화할 수 있다?
+  - 위임할 때는 초기화 목록에 그 호출 하나만 올 수 있음
+- `explicit`이 없으면 컴파일러가 알아서 잘 고른다?
+  - 뜻하지 않은 암시적 변환이 일어날 수 있음. 인수 하나짜리 생성자에는 `explicit`을 붙이는 것이 기본
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 복사 생성자 | `T(const T& src)`. 없으면 컴파일러가 멤버별 복사로 만듦 |
+| 불리는 때 | 다른 객체로 만들 때, 값으로 넘길 때, 값으로 돌려줄 때 |
+| `const` 참조 전달 | 객체 복사를 피하는 기본 방법. 기본 타입과 `string_view`는 값으로 |
+| 초기화 목록 생성자 | `T(std::initializer_list<U>)`. 중괄호의 값들을 받음. `{}`가 우선 |
+| 위임 생성자 | `: T{ ... }`. 초기화 목록에 그 호출 하나만. 대상 생성자가 먼저 실행 |
+| 변환 생성자 | 인수로 부를 수 있는 생성자가 암시적 변환에 쓰임 |
+| `explicit` | 암시적 변환 금지. 인수 하나짜리 생성자에 기본으로 |
+
+## 복습 질문
+
+<details>
+<summary>`void save(Temperature t);`를 `save(noon);`으로 부르면 어떤 생성자가 불리는가? 불리지 않게 하려면?</summary>
+
+- 매개변수 `t`를 만드는 복사 생성자
+- `void save(const Temperature& t);`로 바꾸면 복사가 일어나지 않음
+
+</details>
+
+<details>
+<summary>`std::vector<int> a{ 3, 0 };`와 `std::vector<int> b(3, 0);`의 원소는?</summary>
+
+- `a`: 초기화 목록 생성자가 골라져 원소 둘, `3`과 `0`
+- `b`: "개수, 값" 생성자가 골라져 `0`이 세 개
+
+</details>
+
+<details>
+<summary>`Range(int high) : Range{ 0, high }, m_step{ 1 } {}`가 컴파일되지 않는 이유는?</summary>
+
+- 위임 생성자의 초기화 목록에는 위임 호출 하나만 올 수 있음
+- `m_step`은 대상 생성자에서 초기화하거나 클래스 안 멤버 초기화로 줌
+
+</details>
+
+<details>
+<summary>`class Meter { public: Meter(double v); };`가 있을 때 `void draw(const Meter& m);`에 `draw(3.0)`이 컴파일되는 이유와 막는 법은?</summary>
+
+- `Meter(double)`이 변환 생성자라서 컴파일러가 `3.0`으로 임시 `Meter`를 만들어 넘김
+- 생성자에 `explicit`을 붙이면 막힘. 그 뒤로는 `draw(Meter{ 3.0 })`
+
+</details>
+
+<details>
+<summary>복사 생성자만 직접 쓴 클래스로 객체를 만들 수 없는 이유는?</summary>
+
+- 생성자를 하나라도 썼으므로 기본 생성자가 만들어지지 않음
+- 남은 것은 복사 생성자뿐인데, 복사하려면 이미 있는 객체가 필요함. 첫 객체를 만들 방법이 없음
+
+</details>

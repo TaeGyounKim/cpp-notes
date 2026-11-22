@@ -1,0 +1,214 @@
+---
+title: 객체 쓰기와 this 포인터
+description: 클래스로 스택과 자유 저장소에 객체를 만들어 쓰는 법, 멤버 함수에 숨어서 넘어오는 this 포인터, C++23의 명시적 객체 매개변수를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import usingObjectsCode from '../../../../examples/ch08/using-objects.cpp?raw';
+import thisCode from '../../../../examples/ch08/this-pointer.cpp?raw';
+import thisCpp11Code from '../../../../examples/ch08/this-pointer-cpp11.cpp?raw';
+import explicitObjectCode from '../../../../examples/ch08/explicit-object.cpp?raw';
+
+- 다루는 것: 앞 글에서 정의한 클래스로 실제 객체를 만들어 쓰기
+- 이 글에서 배우는 요소: 스택의 객체와 `.`, 자유 저장소의 객체와 `->`, 스마트 포인터로 객체 다루기, `this` 포인터, 명시적 객체 매개변수
+
+## 객체 쓰기
+
+- 클래스 정의는 객체를 만들지 않음. 모양과 동작을 정해 둘 뿐
+  - 비유: 건축 설계도. 설계도는 집이 어떻게 생겨야 하는지 정하지만, 설계도를 그린다고 집이 지어지지 않음. 집은 나중에 설계도대로 지음
+  - 한 설계도로 집을 여러 채 짓듯, 한 클래스로 객체를 여러 개 만듦
+- 객체를 만들고 쓰는 두 자리: 스택, 자유 저장소
+
+### 스택의 객체
+
+```cpp
+Temperature inside;
+inside.setCelsius(22.0);
+```
+
+- 보통 변수를 선언하듯 만듦. 타입 자리에 클래스 이름이 올 뿐
+- `.`: **멤버 접근 연산자** (member access operator). "점 연산자"라고도 함. 객체의 `public` 멤버 함수를 부름
+  - `public` 데이터 멤버가 있다면 `.`으로 접근할 수 있음. 하지만 `public` 데이터 멤버는 권하지 않음(4장의 데이터 숨기기)
+
+### 자유 저장소의 객체
+
+```cpp
+Temperature* fridge{ new Temperature{} };
+fridge->setCelsius(4.0);
+delete fridge;
+fridge = nullptr;
+```
+
+- `new`로 동적으로 만들고, 포인터로 다룸
+- `->`: **화살표 연산자**. 역참조(`*`)와 멤버 접근(`.`)을 합친 것 <CppRef path="cpp/language/operator_member_access" />
+  - `(*fridge).setCelsius(4.0)`도 같은 뜻이지만 어색해서 잘 쓰지 않음
+- 자유 저장소에 만든 객체는 다른 동적 메모리처럼 반드시 `delete`로 돌려줘야 함
+- 더 좋은 방법: 스마트 포인터(7장). 메모리를 손으로 풀 필요가 없음
+
+```cpp
+auto freezer{ std::make_unique<Temperature>() };
+freezer->setCelsius(-18.0);
+```
+
+<RunCode client:load code={usingObjectsCode} />
+
+:::caution
+`new`로 만든 객체는 다 쓴 뒤 `delete`로 돌려준다. 더 좋은 방법은 스마트 포인터가 메모리를 저절로 관리하게 하는 것이다.
+:::
+
+- 스마트 포인터를 쓰지 않는다면, 객체를 지운 뒤 포인터를 `nullptr`로 비울 것. 의무는 아니지만, 지운 객체를 실수로 쓰면 디버깅이 훨씬 쉬워짐
+
+## this 포인터
+
+- 보통의 멤버 함수를 부를 때마다, 그 함수를 부른 객체를 가리키는 포인터가 **숨은 매개변수**로 함께 넘어감. 그 이름이 **`this`** <CppRef path="cpp/language/this" />
+  - `morning.setCelsius(12.5)`를 부르면, `setCelsius` 안에서 `this`는 `&morning`
+- `this`로 할 수 있는 일
+  - 데이터 멤버에 접근하거나 멤버 함수를 부름. 평소에는 `this->`를 생략할 뿐
+  - 이 객체를 다른 함수나 멤버 함수에 넘김
+  - 이름이 겹칠 때 구별함
+
+### 이름이 겹칠 때
+
+- 데이터 멤버 이름을 `m_` 없이 `celsius`로 지었다고 하자. 매개변수도 `celsius`라면
+
+```cpp
+void setWrong(double celsius) { celsius = celsius; }   // 무엇이 무엇에?
+```
+
+- 여기서 두 `celsius`는 모두 **매개변수**. 매개변수에 자기 자신을 대입할 뿐, 데이터 멤버는 바뀌지 않음
+- 컴파일러나 설정에 따라 경고도 오류도 없이 컴파일됨. GCC는 `-Wall -Wextra`를 줘도 아무 말이 없음. 그런데 기대한 결과가 나오지 않음
+- `this`로 구별함
+
+```cpp
+void setRight(double celsius) { this->celsius = celsius; }
+```
+
+- 3장의 이름 규칙(데이터 멤버에 `m_`)을 따르면 이런 충돌이 아예 생기지 않음
+
+### 이 객체를 다른 함수에 넘기기
+
+- 멤버 함수 안에서, 객체를 받는 독립 함수를 부르고 싶을 때
+- 그 함수가 참조를 받는다면 `*this`를 넘김. `this`는 포인터이므로 역참조해서 객체 자체를 넘기는 것
+
+```cpp
+void log(const Reading& reading);
+
+void Reading::setRight(double celsius)
+{
+    this->celsius = celsius;
+    log(*this);
+}
+```
+
+<RunCode client:load code={thisCode} />
+
+- 볼 것
+  - `setWrong(25.0)` 뒤에도 0. 대입이 매개변수에만 일어났음
+  - `setRight(25.0)`: 멤버가 25가 되고, `log(*this)`가 이 객체를 받아 기록함
+- 이런 출력 함수를 따로 만드는 대신, 2장의 `std::formatter`를 특수화하면 `std::println("{}", reading);`처럼 바로 출력할 수 있음. `<<` 연산자를 오버로딩하는 방법도 있음(15장)
+
+## 명시적 객체 매개변수
+
+- C++23부터는 컴파일러가 숨겨서 넘기는 `this` 대신, "이 객체"를 **명시적인 첫 매개변수**로 받을 수 있음 <Badge text="C++23" /> <CppRef path="cpp/language/member_functions" />
+  - **명시적 객체 매개변수** (explicit object parameter). 흔히 "deducing this"라고도 부름
+
+```cpp
+void setCelsius(this Temperature& self, double celsius)
+{
+    self.m_celsius = celsius;
+}
+```
+
+- 규칙
+  - 첫 매개변수여야 하고, 타입 앞에 `this` 키워드를 붙임. 보통 참조 타입
+  - 이름은 아무것이나 됨. 관례상 `self`
+  - 이 함수에는 숨은 `this`가 **없음**. 객체의 멤버는 반드시 `self.`로 접근해야 함
+    - 그냥 `m_celsius`라고 쓰면 컴파일 오류: `invalid use of non-static data member`
+  - `const` 멤버 함수에 해당하는 것은 `this const Temperature& self`
+- 부르는 모습은 그대로: `room.setCelsius(21.5);`. 매개변수가 둘이어도 인수는 하나만 넘김
+
+<RunCode client:load code={explicitObjectCode} />
+
+- 이 예처럼 쓰면 이득이 없고 오히려 장황함. 쓸모가 있는 곳
+  - 참조 한정 멤버 함수를 더 분명한 문법으로 쓸 때 (9장)
+  - 명시적 객체 매개변수의 타입을 템플릿 매개변수로 두어, `const`판과 비`const`판 멤버 함수를 하나로 합칠 때 (12장)
+  - 자기 자신을 부르는 재귀 람다를 쓸 때 (19장)
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T())` |
+| 명시적 객체 매개변수 `this T& self` | C++23 | 숨은 `this` 포인터 |
+| `std::println` | C++23 | `std::cout <<` |
+
+- 객체, `.`, `->`, `this`는 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={thisCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 클래스를 정의하면 객체가 생긴다?
+  - 설계도일 뿐. 변수로 선언하거나 `new`로 만들어야 객체가 생김
+- `.`과 `->`
+  - 객체(또는 참조)에는 `.`, 객체를 가리키는 포인터(스마트 포인터 포함)에는 `->`
+- `this`는 객체다?
+  - 객체를 가리키는 **포인터**. 객체 자체가 필요하면 `*this`
+- `celsius = celsius;`는 컴파일러가 잡아 준다?
+  - 잡아 주지 않을 수 있음. 매개변수에 자기 자신을 대입하는 문법상 올바른 문장. 이름 규칙으로 예방함
+- 명시적 객체 매개변수를 쓰면 부를 때 객체를 인수로 넘긴다?
+  - 부르는 모습은 그대로. `room.setCelsius(21.5)`에서 `room`이 `self`가 됨
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 스택의 객체 | `Temperature t;` 멤버는 `t.f()` |
+| 자유 저장소의 객체 | `new`로 만들고 `p->f()`. `delete` 필수. 스마트 포인터 권장 |
+| `->` | `(*p).f()`를 줄인 것 |
+| `this` | 멤버 함수를 부른 객체를 가리키는 숨은 포인터 |
+| 이름 겹침 | `this->name = name;` 또는 `m_` 접두사로 예방 |
+| `*this` | 이 객체 자체를 다른 함수에 넘길 때 |
+| 명시적 객체 매개변수 | `this T& self`. 숨은 `this` 대신. 멤버는 `self.`로 |
+
+## 복습 질문
+
+<details>
+<summary>`std::unique_ptr<Temperature> t{ ... };`에서 멤버 함수를 부를 때 `.`과 `->` 가운데 무엇을 쓰는가?</summary>
+
+- `->`. `t->setCelsius(20.0);`
+- `t.`로 부르는 것은 `unique_ptr` 자체의 멤버(`get`, `reset` 등)
+
+</details>
+
+<details>
+<summary>`void Box::setWidth(int width) { width = width; }`를 고치는 두 방법은?</summary>
+
+- `this->width = width;`로 데이터 멤버를 가리킴
+- 데이터 멤버 이름을 `m_width`로 바꿔 충돌을 없앰
+
+</details>
+
+<details>
+<summary>멤버 함수 안에서 `void save(const Box& box)`를 부르며 이 객체를 넘기려면?</summary>
+
+- `save(*this);`
+- `this`는 포인터이므로 역참조해서 참조 매개변수에 넘김
+
+</details>
+
+<details>
+<summary>`int area(this const Box& self) { return width * height; }`가 컴파일되지 않는 이유는?</summary>
+
+- 명시적 객체 매개변수를 쓰는 함수에는 숨은 `this`가 없음
+- `self.width * self.height`처럼 `self`로 접근해야 함
+
+</details>

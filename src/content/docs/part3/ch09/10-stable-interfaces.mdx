@@ -1,0 +1,237 @@
+---
+title: 안정적인 인터페이스
+description: 인터페이스 클래스와 구현 클래스를 나누는 pimpl 관용구로 구현 세부를 완전히 숨기고, 구현이 바뀌어도 사용하는 코드를 다시 컴파일하지 않게 하는 법을 익힙니다. 9장을 마무리합니다.
+sidebar:
+  order: 10
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import pimplCode from '../../../../examples/ch09/pimpl.cpp?raw';
+import pimplCpp11Code from '../../../../examples/ch09/pimpl-cpp11.cpp?raw';
+
+- 다루는 것: 클래스 문법을 다 익혔으니, 5장과 6장의 설계 원칙을 다시 떠올려 클래스에 적용하는 법
+- 이 글에서 배우는 요소: 인터페이스와 구현의 분리, pimpl 관용구
+
+## 추상화와 클래스
+
+- C++에서 추상화의 기본 단위는 클래스. 인터페이스와 구현을 최대한 떼어 놓아야 함
+- 기본: 데이터 멤버는 모두 `private`으로 두고, 필요하면 게터·세터 멤버 함수를 제공함
+  - 지금까지의 `Grid`도 그렇게 만들었음: 칸 배열은 `private`, 값을 넣고 읽는 것은 `public` 멤버 함수
+
+## 문제: 클래스 정의가 구현을 드러냄
+
+- 그렇게 해도 C++ 문법은 근본적으로 추상화에 불리함
+  - `public` 인터페이스와 `private`(또는 `protected`) 데이터 멤버·멤버 함수를 **한 클래스 정의 안에** 함께 적어야 함
+  - 그래서 구현 세부의 일부가 클래스를 쓰는 사람에게 보임
+- 실제 불편: 비`public` 멤버 함수나 데이터 멤버를 하나 추가해도, 그 클래스를 쓰는 **모든 코드를 다시 컴파일**해야 함
+  - 큰 프로젝트에서는 큰 부담
+
+## 해법: 인터페이스 클래스와 구현 클래스
+
+- 좋은 소식: 구현 세부를 완전히 숨겨 **안정적인 인터페이스**를 만들 수 있음. 나쁜 소식: 코드를 조금 더 써야 함
+- 원리: 클래스 하나를 쓰는 대신 둘을 씀
+  - **구현 클래스**: 이 방법을 쓰지 않았다면 썼을 바로 그 클래스
+  - **인터페이스 클래스**: 구현 클래스와 같은 `public` 멤버 함수를 가지지만, 데이터 멤버는 **구현 클래스 객체를 가리키는 포인터 하나뿐**
+  - 인터페이스 클래스의 멤버 함수는 구현 객체의 같은 멤버 함수를 부르기만 함
+- 이 기법의 이름: **pimpl 관용구** (pointer to implementation, private implementation), 또는 **브리지 패턴** (bridge pattern) <CppRef path="cpp/language/pimpl" />
+- 효과: 구현이 아무리 바뀌어도 `public` 인터페이스 클래스는 그대로. 구현만 바뀐 경우 인터페이스 클래스를 쓰는 코드는 다시 컴파일할 필요가 없음
+- 주의: 데이터 멤버가 반드시 **포인터**여야 함
+  - 구현 클래스 객체를 값으로 가지면, 구현 클래스 정의가 바뀔 때 결국 사용하는 쪽을 다시 컴파일해야 함
+
+### 인터페이스 클래스
+
+```cpp
+class Grid
+{
+public:
+    Grid(std::size_t width, std::size_t height);
+    Grid(const Grid& src);
+    Grid(Grid&&) noexcept;
+    ~Grid();
+    Grid& operator=(const Grid& rhs);
+    Grid& operator=(Grid&&) noexcept;
+
+    void set(std::size_t x, std::size_t y, double value);
+    double get(std::size_t x, std::size_t y) const;
+    void swap(Grid& other) noexcept;
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> m_impl;
+};
+```
+
+- 구현 클래스 `Impl`은 `private` 중첩 클래스. `Grid` 말고는 알 필요가 없기 때문
+- 데이터 멤버는 `Impl`을 가리키는 `std::unique_ptr` 하나뿐
+- `public` 멤버 함수는 원래 `Grid`와 같음
+
+### 구현 클래스
+
+- `Grid::Impl`은 구현 파일에서 정의함. 사용하는 쪽에 숨겨야 하므로 헤더(모듈이라면 인터페이스 파일)에 두지 않음
+
+```cpp
+class Grid::Impl
+{
+public:
+    Impl(std::size_t width, std::size_t height);
+    // 원래 Grid의 멤버 함수와 데이터 멤버
+};
+```
+
+- 중첩 클래스이므로 멤버 함수를 정의할 때 범위를 `Grid::Impl`로 적음: 생성자는 `Grid::Impl::Impl(...)`
+
+### 소멸자는 구현 파일에서 기본 정의
+
+- `Grid`가 `unique_ptr<Impl>`을 가지므로 소멸자를 직접 선언해야 함. 할 일이 없으니 구현 파일에서 `= default`
+
+```cpp
+Grid::~Grid() = default;
+```
+
+- 클래스 정의 안에서 `~Grid() = default;`로 쓰면 **안 됨**
+  - 클래스 정의 시점에 `Impl`은 앞쪽 선언만 되어 있어 정의를 모름(불완전한 타입)
+  - 소멸자를 그 자리에서 만들면 `unique_ptr`가 `Impl`의 소멸자를 써야 하는데, 아직 모르는 타입이라 오류: `invalid application of 'sizeof' to incomplete type 'Grid::Impl'`
+  - 이동 생성자와 이동 대입 연산자를 `= default`로 할 때도 마찬가지. `Impl`의 정의가 보이는 구현 파일에서 기본 정의함
+
+### 인터페이스 클래스의 멤버 함수
+
+- 대부분은 요청을 `Impl` 객체에 넘길 뿐
+
+```cpp
+void Grid::set(std::size_t x, std::size_t y, double value)
+{
+    m_impl->set(x, y, value);
+}
+```
+
+- 생성자는 일을 맡을 `Impl`을 새로 만듦
+
+```cpp
+Grid::Grid(std::size_t width, std::size_t height)
+    : m_impl{ std::make_unique<Impl>(width, height) }
+{
+}
+
+Grid::Grid(const Grid& src)
+    : m_impl{ std::make_unique<Impl>(*src.m_impl) }
+{
+}
+```
+
+- 복사 생성자가 조금 낯섦
+  - 원본의 `Impl`을 복사해야 함. `Impl`의 복사 생성자는 포인터가 아니라 참조를 받으므로 `*src.m_impl`로 역참조해 객체 자체를 넘김
+- 대입 연산자도 `Impl`의 대입 연산자에 넘김
+
+```cpp
+Grid& Grid::operator=(const Grid& rhs)
+{
+    *m_impl = *rhs.m_impl;
+    return *this;
+}
+```
+
+- 첫 줄이 낯섦: 포인터끼리가 아니라 `Impl` 객체끼리 대입해야 `Impl`의 대입 연산자가 불림. 그래서 양쪽 다 역참조함
+- `swap()`은 데이터 멤버 하나, 포인터만 맞바꿈
+
+```cpp
+void Grid::swap(Grid& other) noexcept
+{
+    std::swap(m_impl, other.m_impl);
+}
+```
+
+<RunCode client:load code={pimplCode} />
+
+- 이 예는 한 파일에 모두 넣었지만, 실제로는 주석의 (1)이 헤더나 모듈 인터페이스 파일, (2)와 (3)이 구현 파일에 있음
+- 볼 것
+  - 복사한 `b`를 바꿔도 `a`는 그대로. `Impl`까지 복사되기 때문
+  - `swap`은 포인터만 바꾸지만 결과는 두 격자의 내용이 맞바뀐 것
+
+## 쓸 만한가
+
+- 처음엔 번거롭지만 익숙해지면 자연스러워짐
+- 다만 대부분의 일터에서 흔히 쓰는 방식은 아니어서, 동료들이 꺼릴 수도 있음
+- 가장 설득력 있는 이유는 인터페이스를 떼어 놓는 미적 장점이 아니라 **빌드 시간**
+  - pimpl을 쓰지 않으면 구현 세부를 바꿔도 긴 재빌드가 일어날 수 있음. 예: 데이터 멤버 하나를 추가하면 그 클래스 정의를 쓰는 모든 소스 파일을 다시 빌드함
+  - pimpl을 쓰면 `public` 인터페이스 클래스를 건드리지 않는 한, 구현 클래스는 마음대로 고쳐도 긴 재빌드가 일어나지 않음
+
+:::note
+안정적인 인터페이스 클래스를 쓰면 빌드 시간을 줄일 수 있다.
+:::
+
+- 구현과 인터페이스를 나누는 다른 방법: **추상 인터페이스**. 순수 가상 멤버 함수만 가진 인터페이스를 두고, 구현 클래스가 그것을 구현함. 다음 장(10장)에서 다룸
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::unique_ptr` | C++11 | 맨 포인터와 직접 쓴 소멸자(또는 지금은 없어진 `std::auto_ptr`) |
+| `std::make_unique` | C++14 | `std::unique_ptr<Impl>(new Impl(...))` |
+| `= default` 소멸자·이동 연산 | C++11 | 빈 본문을 직접 씀 |
+
+- pimpl 관용구 자체는 그 이전부터 쓰던 기법
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={pimplCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `private` 멤버만 바꾸면 사용하는 코드는 다시 컴파일하지 않아도 된다?
+  - `private` 멤버도 클래스 정의에 있으므로, 정의가 바뀌면 그것을 쓰는 코드를 다시 컴파일해야 함. pimpl은 그 부분을 구현 파일로 옮김
+- 구현 클래스 객체를 값으로 가져도 된다?
+  - 포인터여야 함. 값으로 가지면 구현 클래스 정의가 보여야 하고, 바뀌면 다시 컴파일해야 함
+- 소멸자를 클래스 안에서 `= default`로 해도 된다?
+  - `Impl`이 불완전한 타입이라 오류. 구현 파일에서 기본 정의함
+- 대입 연산자는 `m_impl = rhs.m_impl;`이면 된다?
+  - `unique_ptr`는 복사할 수 없어 컴파일되지 않음. `*m_impl = *rhs.m_impl;`로 객체끼리 대입함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 문제 | 클래스 정의에 `private` 구현이 드러나, 바뀌면 사용하는 코드를 다시 컴파일 |
+| pimpl | 인터페이스 클래스는 `unique_ptr<Impl>` 하나만 가짐. 일은 `Impl`에 넘김 |
+| `Impl` | `private` 중첩 클래스. 구현 파일에서 정의 |
+| 소멸자·이동 연산 | 구현 파일에서 `= default` |
+| 복사 | `make_unique<Impl>(*src.m_impl)`, `*m_impl = *rhs.m_impl` |
+| 이득 | 구현만 바뀌면 재컴파일이 줄어 빌드 시간 단축 |
+
+## 복습 질문
+
+<details>
+<summary>pimpl을 쓰지 않는 클래스에 `private` 데이터 멤버를 하나 추가하면 무엇을 다시 컴파일해야 하는가?</summary>
+
+- 그 클래스 정의를 포함하는 모든 소스 파일. 객체 크기와 배치가 바뀌기 때문
+
+</details>
+
+<details>
+<summary>`class Grid { class Impl; std::unique_ptr<Impl> m_impl; public: ~Grid() = default; };`가 문제인 이유는?</summary>
+
+- 소멸자를 클래스 안에서 정의하면 그 자리에서 `unique_ptr<Impl>`의 소멸자가 만들어지는데, `Impl`은 아직 불완전한 타입
+- 선언만 `~Grid();`로 두고, 구현 파일에서 `Grid::~Grid() = default;`
+
+</details>
+
+<details>
+<summary>pimpl 인터페이스 클래스의 `swap()`이 멤버 하나만 맞바꾸면 되는 이유는?</summary>
+
+- 데이터 멤버가 `m_impl` 포인터 하나뿐이기 때문. 포인터를 맞바꾸면 두 객체의 내용 전체가 맞바뀜
+
+</details>
+
+## 9장을 마치며
+
+- 8장과 이 장으로 튼튼하고 잘 설계된 클래스를 쓰고 객체를 효과적으로 쓰는 데 필요한 도구를 모두 갖춤
+- 동적 메모리를 가진 클래스
+  - 소멸자, 복사 생성자, 복사 대입 연산자, 이동 생성자, 이동 대입 연산자가 메모리를 올바르게 복사·이동·해제해야 함
+  - 복사 생성자와 대입 연산자를 지워 값 전달과 대입을 막는 법
+  - 복사 후 교환, 이동 후 교환 관용구, 그리고 영의 규칙
+- 여러 종류의 데이터 멤버(`static`, `const`, `const` 참조, `mutable`)와 멤버 함수(`static`, `inline`, `const`), 멤버 함수 오버로딩, 기본 인수, 중첩 클래스, `friend`
+- 연산자 오버로딩: 산술·비교 연산자를 전역 함수와 멤버 함수로. 3방향 비교 연산자로 비교가 훨씬 쉬워짐
+- 인터페이스 클래스와 구현 클래스를 나눠 추상화를 끝까지 밀고 가는 법
+- 다음 장(10장): 상속

@@ -1,0 +1,362 @@
+---
+title: 모듈 만들기와 쓰기
+description: 헤더 파일의 문제를 푸는 C++20 모듈, 모듈 인터페이스 파일과 export, 모듈 구현 파일, 인터페이스와 구현의 분리, 보이는 것과 닿을 수 있는 것의 차이를 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+
+- 11장에서 다루는 것: 모듈, 전처리기, 링크, 헤더 파일, `static` 키워드의 여러 쓰임, C 스타일 가변 인자
+- 이 글에서 배우는 요소: 모듈의 장점, 모듈 인터페이스 파일, `export`, 모듈 구현 파일, 인터페이스와 구현의 분리, 보이는 것과 닿을 수 있는 것
+
+:::note
+이 사이트의 실행 예제는 파일 하나로 돌아가야 해서 모듈을 페이지 안에서 실행할 수 없다. 이 글의 코드는 정적 코드 블록으로 보이며, 로컬 GCC 15(`-std=c++23 -fmodules`)로 여러 파일을 실제로 빌드해 결과를 확인했다. 모듈을 컴파일하는 방법은 컴파일러마다 다르므로 쓰는 컴파일러의 문서를 확인한다.
+:::
+
+## 왜 모듈인가
+
+- **모듈** (module) <Badge text="C++20" />: 재사용할 코드의 인터페이스를 제공하는 새 방법 <CppRef path="cpp/language/modules" />
+  - C++20 이전에는 이 일을 **헤더 파일**(이 장 뒤쪽)이 맡았음
+- 헤더 파일의 문제
+  - 같은 헤더를 여러 번 포함하지 않게 막아야 함
+  - 헤더를 올바른 순서로 포함해야 할 때가 있음
+  - `#include <iostream>` 하나가 컴파일러가 처리할 코드 수만 줄을 끌고 옴. 여러 소스 파일이 포함하면 그 번역 단위가 모두 커짐. `<vector>`, `<format>`까지 더하면?
+- 모듈이 푸는 것
+  - 가져오는(import) **순서가 상관없음**
+  - 모듈은 한 번 컴파일되어 이진 형식으로 저장되고, 다른 소스 파일이 가져올 때마다 그것을 씀. 헤더는 `#include`를 만날 때마다 다시 컴파일함. 그래서 컴파일 시간이 크게 줄 수 있음
+  - 증분 컴파일도 빨라짐. 예: 모듈 인터페이스 파일 안에서 내보낸 함수의 **구현**만 바꾸면 그 모듈을 쓰는 코드를 다시 컴파일하지 않음(아래 "인터페이스와 구현의 분리")
+  - 밖에서 정의한 매크로의 영향을 받지 않고, 모듈 안에서 정의한 매크로는 밖으로 보이지 않음. 모듈은 스스로 격리됨
+
+:::note
+컴파일러가 모듈을 지원한다면, 새로 쓰는 코드는 모듈로 구조를 나눠 논리적으로 분리된 구성 요소로 만든다.
+:::
+
+- 기존 코드도 가능하면 천천히 모듈로 옮길 수 있음
+- 그래도 헤더 파일을 알아야 함
+  - 세상에는 기존 코드가 아주 많고, 외부 라이브러리 상당수가 아직 모듈을 쓰지 않음
+  - 모든 컴파일러가 모듈을 완전히 지원하는 것도 아님(주요 컴파일러는 적어도 부분적으로 지원)
+
+### 모듈 코드를 헤더 코드로 바꾸기
+
+- 모듈을 완전히 지원하지 않는 컴파일러에서 모듈 코드를 쓰려면
+  - `.cppm` 모듈 인터페이스 파일을 `.h` 헤더 파일로 이름을 바꿈
+  - 각 `.h` 파일 맨 위에 `#pragma once`를 넣음
+  - `export module 이름;` 선언을 지움
+  - `module 이름;` 선언을 해당 헤더를 포함하는 `#include`로 바꿈
+  - `import`와 `export import` 선언을 알맞은 `#include`로 바꿈. `import std;`라면 필요한 표준 헤더를 하나하나 포함함
+  - `export` 키워드를 모두 지움
+  - 전역 모듈 조각의 시작을 뜻하는 `module;`을 모두 지움
+  - `.h` 파일에 함수나 변수의 정의가 있으면 앞에 `inline`을 붙임
+
+### 표준 이름 모듈
+
+- `import std;` <Badge text="C++23" />: 표준 라이브러리 전체를 가져옴(1장)
+  - `<cstddef>` 같은 C 헤더의 기능도 포함되지만, 모두 `std` 네임스페이스 안에만 있음
+- `import std.compat;`: `std`가 가져오는 모든 것에 더해, C 기능을 전역 네임스페이스에도 둠
+  - 기존 코드용. 새 코드에는 권하지 않음
+- 이 사이트의 예제는 Compiler Explorer에서 한 파일로 돌리기 위해 `import std;` 대신 `#include`를 씀
+
+## 모듈 인터페이스 파일
+
+- **모듈 인터페이스 파일** (module interface file): 모듈이 제공하는 기능의 인터페이스를 정의함. 확장자는 보통 `.cppm`
+  - 표준이 정한 확장자는 없음. 대부분의 컴파일러가 `.cppm`을 지원하지만 문서를 확인할 것
+- 파일은 이 파일이 어떤 이름의 모듈을 정의한다는 **모듈 선언** (module declaration)으로 시작함
+  - 이름은 올바른 C++ 식별자. 점을 넣을 수 있지만 점으로 시작하거나 끝나거나 점을 연달아 쓸 수 없음
+  - 예: `sensor`, `weather.sensor`, `weather.sensor.core`, `sensor_core`
+- 무엇을 내보낼지 명시해야 함: **`export`** 키워드
+  - 변수·함수·타입 선언, `using` 지시문과 선언, `import` 선언까지 내보낼 수 있음
+  - 내보내지 않은 것은 모듈 안에서만 보임
+  - 내보낸 것 전체를 **모듈 인터페이스**라고 함
+
+```cpp
+module;                    // 전역 모듈 조각: 헤더는 여기서 포함
+#include <string>
+#include <utility>
+
+export module sensor;      // 모듈 선언
+
+export class Sensor        // 내보내기 선언
+{
+public:
+    Sensor(std::string id, double offset);
+    const std::string& id() const;
+    double correct(double raw) const;
+private:
+    std::string m_id;
+    double m_offset;
+};
+
+export double toFahrenheit(double c) { return c * 9.0 / 5.0 + 32.0; }
+
+double secretFactor() { return 1.0; }   // 내보내지 않음: 모듈 안에서만
+```
+
+- 처음의 `module;`부터 `export module sensor;` 앞까지를 **전역 모듈 조각** (global module fragment)이라고 함
+  - 모듈이 아닌 기존 헤더를 `#include`하는 자리. `import std;`를 쓸 수 있다면 그것으로 대신할 수 있음
+- 표준 용어로, 이름 있는 모듈 선언부터 파일 끝까지를 **모듈 범위** (module purview)라고 함
+- 쓰는 쪽
+
+```cpp
+#include <print>
+import sensor;             // 모듈 가져오기
+
+int main()
+{
+    Sensor kitchen{ "T-01", -0.4 };
+    double c{ kitchen.correct(22.0) };
+    std::println("{}: {}°C = {}°F", kitchen.id(), c, toFahrenheit(c));
+    // secretFactor();     // 오류: 'secretFactor' was not declared in this scope
+}
+```
+
+- 실행 결과: `T-01: 21.6°C = 70.88°F`
+
+### 무엇을 내보낼 수 있나
+
+- 이름이 있는 것이면 거의 다: 클래스 정의, 함수 원형, `enum class`, `using` 선언과 지시문, 네임스페이스 등
+- 네임스페이스를 `export`하면 그 안의 모든 것이 저절로 내보내짐
+
+```cpp
+export namespace Weather
+{
+    class Sensor { /* ... */ };
+    class Station { /* ... */ };
+    using Sensors = std::vector<Sensor>;
+}
+```
+
+- `export { ... }` 블록으로 선언 여러 개를 한꺼번에 내보낼 수도 있음
+
+```cpp
+export
+{
+    namespace Weather
+    {
+        class Sensor { /* ... */ };
+        class Station { /* ... */ };
+    }
+}
+```
+
+## 모듈 구현 파일
+
+- 모듈은 인터페이스 파일 하나와 **모듈 구현 파일** (module implementation file) 여럿으로 나눌 수 있음. 확장자는 보통 `.cpp`
+- 무엇을 구현 파일로 옮길지는 자유
+  - 함수와 멤버 함수의 구현을 모두 옮기고, 인터페이스에는 원형과 클래스 정의만 남길 수도 있음
+  - 작은 함수는 인터페이스에 두고 나머지만 옮길 수도 있음
+- 구현 파일도 어느 모듈의 구현인지 밝히는 모듈 선언을 가짐. 단 `export` 없이
+
+```cpp
+module;
+#include <string>
+#include <utility>
+
+module sensor;             // export 없이
+
+Sensor::Sensor(std::string id, double offset)
+    : m_id{ std::move(id) }, m_offset{ offset }
+{
+}
+
+const std::string& Sensor::id() const { return m_id; }
+
+double Sensor::correct(double raw) const
+{
+    return (raw + m_offset) * secretFactor();   // 같은 모듈이라 보임
+}
+```
+
+- 구현 파일에는 `import sensor;`가 없음. `module sensor;` 선언이 암묵적으로 `import sensor;`를 포함함
+- 구현 파일은 같은 모듈의 일부이므로, 인터페이스 파일의 `import` 선언(예: `import std;`)도 암묵적으로 물려받음
+  - 반대로 모듈 밖의 파일이 `import sensor;`를 해도 `sensor`의 `import std;`를 물려받지는 않음(아래 "보이는 것과 닿을 수 있는 것")
+
+:::note
+모듈 인터페이스 파일과 구현 파일의 `import` 선언은 모두 파일 맨 위, 이름 있는 모듈 선언 바로 뒤, 다른 선언보다 앞에 있어야 한다.
+:::
+
+:::caution
+모듈 구현 파일은 아무것도 내보낼 수 없다. 내보내기는 모듈 인터페이스 파일만 할 수 있다. 구현 파일에 `export`를 쓰면 `'export' may only occur after a module interface declaration` 오류가 난다.
+:::
+
+## 인터페이스와 구현의 분리
+
+- 헤더 파일을 쓸 때는 헤더(`.h`)에 선언만 두고 구현은 모두 소스 파일(`.cpp`)로 옮기라고 강하게 권함
+  - 헤더에 구현을 두면 주석 하나만 바꿔도 그 헤더를 포함하는 모든 소스 파일을 다시 컴파일해야 함. 헤더에 따라서는 코드 전체를 다시 컴파일하게 됨
+  - 구현을 소스 파일에 두면, 헤더를 건드리지 않는 한 그 소스 파일 하나만 다시 컴파일함
+- 모듈은 다르게 동작함
+  - 모듈 인터페이스는 클래스 정의, 함수 원형 등으로만 이루어지고, 함수와 멤버 함수의 **구현은 포함하지 않음**. 구현이 인터페이스 파일 안에 있어도 마찬가지
+  - 그래서 인터페이스 파일 안의 함수 구현을 바꿔도, 함수 머리(이름, 매개변수 목록, 반환 타입) 같은 인터페이스 부분을 건드리지 않는 한 쓰는 쪽을 다시 컴파일하지 않음
+  - 예외: `inline` 함수와 템플릿 정의. 쓰는 쪽을 컴파일할 때 전체 구현이 필요하므로, 바꾸면 쓰는 쪽도 다시 컴파일될 수 있음
+
+:::note
+헤더 파일의 클래스 정의 안에 구현한 멤버 함수는 `inline`을 적지 않아도 암묵적으로 인라인이다. 모듈 인터페이스 파일의 클래스 정의 안에 구현한 멤버 함수는 그렇지 않다. 인라인으로 만들려면 `inline`을 명시한다(9장).
+:::
+
+- 기술적으로는 이제 인터페이스와 구현을 나눌 필요가 없지만, 그래도 나누는 것이 좋을 때가 있음
+  - 목표는 깨끗하고 읽기 쉬운 인터페이스
+  - 구현이 인터페이스를 가려 사용하는 쪽이 `public` 인터페이스를 한눈에 파악하기 어렵게 만들지 않는다면, 구현을 인터페이스에 둬도 됨
+  - 큰 `public` 인터페이스라면 구현으로 가리지 않는 편이 나음. 작은 게터·세터는 인터페이스에 둬도 읽기에 지장이 없음
+- 나누는 방법
+  - 앞에서처럼 인터페이스 파일과 구현 파일로 나눔
+  - 인터페이스 파일 **하나 안에서** 클래스 정의와 구현을 앞뒤로 나눔
+
+```cpp
+module;
+#include <string>
+#include <utility>
+export module sensor;
+
+// 클래스 정의
+export class Sensor
+{
+public:
+    Sensor(std::string id, double offset);
+    const std::string& id() const;
+private:
+    std::string m_id;
+    double m_offset;
+};
+
+// 구현
+Sensor::Sensor(std::string id, double offset)
+    : m_id{ std::move(id) }, m_offset{ offset } {}
+const std::string& Sensor::id() const { return m_id; }
+```
+
+## 보이는 것과 닿을 수 있는 것
+
+- 모듈 밖의 파일(예: `main.cpp`)이 `import sensor;`만 하면, `sensor` 인터페이스 파일이 포함한 `<string>`이나 `import std;`를 물려받지 않음
+  - `std::string`이라는 이름이 **보이지 않음**. `std::string s;`는 오류: `'string' is not a member of 'std'`
+- 그런데 다음은 잘 됨
+
+```cpp
+import sensor;
+
+int main()
+{
+    Sensor kitchen{ "T-01", 0.0 };
+    const auto& id{ kitchen.id() };
+    auto length{ id.size() };
+}
+```
+
+- 이유: C++은 **보이는 것** (visibility)과 **닿을 수 있는 것** (reachability)을 구별함
+  - `sensor`를 가져오면 `std::string`은 닿을 수 있게 되지만 보이지는 않음
+  - 닿을 수 있는 클래스의 멤버 함수는 저절로 보임
+  - 그래서 `auto`로 `id()`의 결과를 받고, 거기에 `size()` 같은 멤버 함수를 부를 수 있음
+- `std::string`이라는 이름을 직접 쓰려면 `main.cpp`가 `import std;`나 `#include <string>`을 따로 해야 함
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 모듈, `export`, `import` | C++20 | 헤더 파일(`.h`)과 `#include`, `#pragma once`나 포함 가드 |
+| `import std;`, `import std.compat;` | C++23 | 표준 헤더를 하나하나 `#include` |
+
+- 모듈 이전의 같은 코드는 헤더 파일로 씀. 아래는 C++11 옵션(`-std=c++11 -Wall -Wextra`)으로 세 파일을 실제로 빌드해 확인한 것
+- `sensor.h`
+
+```cpp
+#pragma once            // 같은 헤더를 두 번 포함하지 않게
+#include <string>
+
+class Sensor
+{
+public:
+    Sensor(std::string id, double offset);
+    const std::string& id() const;
+    double correct(double raw) const;
+private:
+    std::string m_id;
+    double m_offset;
+};
+
+// 헤더에 정의하는 함수는 inline이어야 함(여러 파일이 포함해도 하나로)
+inline double toFahrenheit(double celsius)
+{
+    return celsius * 9.0 / 5.0 + 32.0;
+}
+```
+
+- `sensor.cpp`: 내보내지 않던 `secretFactor()`는 이름 없는 네임스페이스로 이 파일 안에 숨김(4편에서 다룸)
+
+```cpp
+#include "sensor.h"
+#include <utility>
+
+namespace {
+double secretFactor() { return 1.0; }
+}
+
+Sensor::Sensor(std::string id, double offset)
+    : m_id(std::move(id)), m_offset(offset) {}
+const std::string& Sensor::id() const { return m_id; }
+double Sensor::correct(double raw) const
+{
+    return (raw + m_offset) * secretFactor();
+}
+```
+
+- `main.cpp`는 `import sensor;` 대신 `#include "sensor.h"`
+
+## 헷갈리기 쉬운 점
+
+- 모듈도 헤더처럼 가져오는 순서가 중요하다?
+  - 순서는 상관없음
+- 모듈 인터페이스 파일에 있는 것은 모두 밖에서 쓸 수 있다?
+  - `export`한 것만. 나머지는 모듈 안에서만 보임
+- 구현 파일에도 `import sensor;`를 써야 한다?
+  - `module sensor;`가 암묵적으로 가져옴
+- `import sensor;`만 하면 `sensor`가 쓰는 `std::string`도 이름으로 쓸 수 있다?
+  - 닿을 수는 있지만 보이지 않음. 이름으로 쓰려면 따로 가져옴
+- 모듈 인터페이스의 클래스 안에 정의한 멤버 함수는 인라인이다?
+  - 헤더와 달리 아님. 필요하면 `inline`을 명시
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 모듈의 장점 | 순서 무관, 한 번 컴파일, 매크로 격리, 빠른 증분 컴파일 |
+| 인터페이스 파일 | `export module 이름;`으로 시작. 보통 `.cppm` |
+| `export` | 내보낸 것만 밖에서 보임. 네임스페이스·블록 단위로도 |
+| 전역 모듈 조각 | `module;` 뒤. 기존 헤더를 `#include`하는 자리 |
+| 구현 파일 | `module 이름;`(export 없이). 모듈을 암묵적으로 가져옴. 내보내기 불가 |
+| 인터페이스와 구현 분리 | 모듈은 구현이 인터페이스에 있어도 바꿀 때 재컴파일이 적음. 읽기 좋게 나눔 |
+| 보이는 것 / 닿을 수 있는 것 | 가져온 모듈이 쓰는 타입은 닿지만 이름은 보이지 않음 |
+
+## 복습 질문
+
+<details>
+<summary>모듈 인터페이스 파일에서 `export`하지 않은 함수를 그 모듈을 가져온 `main.cpp`에서 부르면?</summary>
+
+- 컴파일 오류(`was not declared in this scope`). 내보내지 않은 것은 모듈 안에서만 보임
+
+</details>
+
+<details>
+<summary>모듈 구현 파일이 인터페이스 파일의 `import std;`를 다시 쓰지 않아도 되는 이유는?</summary>
+
+- 같은 모듈의 일부이므로 `module 이름;` 선언이 모듈을 암묵적으로 가져오고, 인터페이스 파일의 `import` 선언도 물려받음
+
+</details>
+
+<details>
+<summary>모듈 인터페이스 파일 안에 있는 함수의 구현만 바꿨다. 그 모듈을 쓰는 코드는 다시 컴파일되는가?</summary>
+
+- 대개 아님. 모듈 인터페이스에는 구현이 포함되지 않기 때문
+- 그 함수가 `inline`이거나 템플릿이라면 다시 컴파일될 수 있음
+
+</details>
+
+<details>
+<summary>`import sensor;`만 한 파일에서 `auto n{ kitchen.id().size() };`는 되는데 `std::string s;`는 안 되는 이유는?</summary>
+
+- `std::string`은 `sensor`를 통해 닿을 수는 있지만 이름이 보이지 않음
+- 닿을 수 있는 클래스의 멤버 함수는 보이므로 `size()`는 부를 수 있음
+
+</details>

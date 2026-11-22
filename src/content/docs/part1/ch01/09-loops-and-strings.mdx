@@ -1,0 +1,236 @@
+---
+title: 반복문, 초기화 리스트, 문자열
+description: 같은 코드를 되풀이하는 네 가지 반복문, 개수가 정해지지 않은 값을 받는 초기화 리스트, std::string의 첫걸음을 익힙니다.
+sidebar:
+  order: 9
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import forLoopViz from '../../../../data/ch01/for-loop.js';
+import whileCode from '../../../../examples/ch01/while.cpp?raw';
+import doWhileCode from '../../../../examples/ch01/do-while.cpp?raw';
+import forCode from '../../../../examples/ch01/for.cpp?raw';
+import rangeForCode from '../../../../examples/ch01/range-for.cpp?raw';
+import initializerListCode from '../../../../examples/ch01/initializer-list.cpp?raw';
+import stringBasicCode from '../../../../examples/ch01/string-basic.cpp?raw';
+import loopsCpp11Code from '../../../../examples/ch01/loops-cpp11.cpp?raw';
+
+- 다루는 것: 같은 일을 여러 번 시키는 방법, 그리고 그와 함께 자주 쓰는 두 가지 타입
+- 배우는 요소: `while`, `do`/`while`, `for`, 범위 기반 `for`, `std::initializer_list`, `std::string`
+- 앞 글의 컨테이너를 여기서부터 반복문으로 다룸
+
+## 반복문 네 가지
+
+| 반복문 | 한 줄 설명 | 어울리는 경우 |
+| --- | --- | --- |
+| `while` | 조건이 참인 동안 반복 | 몇 번 돌지 미리 모를 때 |
+| `do` / `while` | 일단 한 번 실행하고, 조건이 참이면 반복 | 적어도 한 번은 실행해야 할 때 |
+| `for` | 시작, 조건, 매 바퀴 뒤에 할 일을 한 줄에 적음 | 횟수가 정해져 있을 때 |
+| 범위 기반 `for` | 컨테이너의 원소를 처음부터 끝까지 하나씩 | 컨테이너의 모든 원소를 다룰 때 |
+
+## while 문
+
+- `while (조건) { ... }`: 조건을 검사하고, 참이면 블록을 실행. 이것을 조건이 거짓이 될 때까지 되풀이 <CppRef path="cpp/language/while" />
+- 블록 안에서 조건에 영향을 주는 값을 바꿔야 함. 그렇지 않으면 영원히 끝나지 않음(무한 반복)
+
+### break와 continue
+
+- `break`: 반복문을 즉시 빠져나감. 반복문 바로 다음 줄부터 이어서 실행 <CppRef path="cpp/language/break" />
+- `continue`: 이번 바퀴의 남은 부분을 건너뛰고 조건 검사로 돌아감 <CppRef path="cpp/language/continue" />
+- `continue`는 아껴 쓸 것. 실행이 이리저리 건너뛰어 코드의 흐름을 따라가기 어려워짐
+
+<RunCode client:load code={whileCode} />
+
+- 두 번째 반복문의 `while (true)`: 조건이 항상 참. 끝내는 일은 안쪽의 `break`가 맡음
+
+## do / while 문
+
+- `do { ... } while (조건);`: 블록을 **먼저** 실행하고 조건을 **나중에** 검사 <CppRef path="cpp/language/do" />
+- `while`과의 차이: 조건이 처음부터 거짓이어도 블록이 한 번은 실행됨
+- 끝의 세미콜론(`;`)을 빠뜨리지 말 것
+
+<RunCode client:load code={doWhileCode} />
+
+- 실행 결과: `while` 쪽은 한 줄도 출력하지 않고, `do`/`while` 쪽만 한 번 출력함
+
+## for 문
+
+- `for (시작; 조건; 매 바퀴 뒤에 할 일) { ... }` <CppRef path="cpp/language/for" />
+
+| 부분 | 예 | 실행되는 때 |
+| --- | --- | --- |
+| 시작 | `int i{ 1 }` | 맨 처음 한 번 |
+| 조건 | `i <= 3` | 매 바퀴를 시작하기 전. 거짓이면 반복을 끝냄 |
+| 매 바퀴 뒤에 할 일 | `++i` | 블록이 한 번 끝날 때마다 |
+
+- 모든 `for` 문은 `while` 문으로 바꿔 쓸 수 있고, 반대도 마찬가지
+- `for`가 읽기 좋은 이유: 시작값, 끝나는 조건, 값이 변하는 방식이 한 줄에 모여 있음
+- 시작 부분에서 만든 변수는 그 `for` 문 안에서만 쓸 수 있음
+
+<StepViz client:load data={forLoopViz} />
+
+- 볼 것: 실행 순서는 "시작 → 조건 → 블록 → `++i` → 조건 → 블록 → ..." 순서
+  - 조건이 거짓이 되는 순간의 `i`는 4. 블록은 `i`가 1, 2, 3일 때 세 번 실행됨
+
+<RunCode client:load code={forCode} />
+
+- 컨테이너를 번호로 돌 때의 관례: `0`부터 시작하고 조건은 `< 크기`
+  - `<=`로 쓰면 없는 칸(크기 번째)까지 건드리게 됨
+- 번호의 타입을 `std::size_t`로 한 이유: `scores.size()`가 돌려주는 타입이 `std::size_t`. `int`와 비교하면 부호 있는 타입과 없는 타입을 섞게 되어 경고가 나옴
+
+## 범위 기반 for 문 <Badge text="C++11" />
+
+- **범위 기반 for 문** (range-based for loop): 컨테이너의 원소를 처음부터 끝까지 하나씩 꺼내며 반복 <CppRef path="cpp/language/range-for" />
+
+```cpp
+for (int score : scores) {
+    // score에 scores의 원소가 하나씩 들어온다.
+}
+```
+
+- 읽는 법: "`scores` 안의 각 `score`에 대해"
+- 번호, 조건, 증가를 직접 적지 않으므로 범위를 벗어나는 실수가 없음
+- 쓸 수 있는 대상: C 스타일 배열, 초기화 리스트, `std::array`, `std::vector`를 비롯한 모든 표준 컨테이너, `std::string`
+- 주의: 위 코드의 `score`는 원소의 **복사본**
+  - `score`를 바꿔도 컨테이너 안의 원소는 바뀌지 않음
+  - 복사하지 않고 원소 자체를 다루는 방법(참조): 이 장의 뒤쪽 "참조" 글에서 다룸
+
+### 초기화 구문 <Badge text="C++20" />
+
+- `if`, `switch`처럼 범위 기반 `for` 문에도 초기화 구문을 쓸 수 있음
+  - `for (초기화; 변수 : 컨테이너) { ... }`
+  - 여기서 만든 변수는 그 `for` 문 안에서만 쓸 수 있음
+
+<RunCode client:load code={rangeForCode} />
+
+## 초기화 리스트 <Badge text="C++11" />
+
+- `std::initializer_list`: 중괄호로 묶은 값 목록을 받는 타입. `<initializer_list>` 헤더 <CppRef path="cpp/utility/initializer_list" />
+- 쓰는 곳: 인수를 몇 개든 받는 함수를 쉽게 만들 때
+- 꺾쇠괄호 안에 원소의 타입을 적음. `std::vector<int>`와 같은 방식
+
+```cpp
+int sum(std::initializer_list<int> values);
+
+sum({ 1, 2, 3 });
+sum({ 10, 20, 30, 40, 50, 60 });
+```
+
+- 호출할 때 값들을 중괄호로 묶어 넘김
+- 함수 안에서는 범위 기반 `for` 문으로 원소를 하나씩 꺼냄
+- 모든 원소가 같은 타입이어야 함. `int` 목록에 `3.0`을 넣으면 축소 변환이라 컴파일 오류
+- `std::vector<int> v{ 1, 2, 3 };`이 되는 것도 이 타입 덕분. `vector`가 초기화 리스트를 받도록 만들어져 있음
+
+<RunCode client:load code={initializerListCode} />
+
+- 해 볼 것: 주석 처리된 마지막 줄의 `//`를 지우고 실행
+  - 결과: 컴파일 오류 `narrowing conversion of '3.0e+0' from 'double' to 'int'`
+
+## 문자열 맛보기
+
+- C++에서 문자열을 다루는 두 가지 방식
+
+| 방식 | 내용 |
+| --- | --- |
+| C 스타일 | 문자의 배열. 끝을 표시하는 0이 붙어 있음. `"hello"` 같은 문자열 리터럴이 이 방식 |
+| C++ 스타일 | `std::string`. C 스타일 문자열을 감싸 쓰기 쉽고 안전하게 만든 타입 |
+
+- `std::string`: `<string>` 헤더에 있음. 기본 타입처럼 쓸 수 있음 <CppRef path="cpp/string/basic_string" />
+
+| 하는 일 | 코드 |
+| --- | --- |
+| 만들기 | `std::string name{ "C++" };` |
+| 글자 하나 읽기 | `name[1]` |
+| 길이 | `name.size()` |
+| 이어 붙이기 | `greeting + " and " + name` |
+| 비교 | `name == "C++"` |
+
+- 문자열의 자세한 내용: 2장 전체가 문자열을 다룸. 지금은 "문자 배열처럼 쓸 수 있는 편리한 타입" 정도로 충분
+
+<RunCode client:load code={stringBasicCode} />
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| `while`, `do`/`while`, `for`, `std::string` | C++11 이전 | 그대로 사용 |
+| 범위 기반 `for` 문, `std::initializer_list` | C++11 | 그대로 사용 |
+| 범위 기반 `for` 문의 초기화 구문 | C++20 | 변수를 앞에 선언하고, 범위를 좁히려면 `{ }`로 감쌈 |
+
+- C++98 / C++03: 범위 기반 `for` 문이 없음. 번호를 쓰는 `for` 문이나 반복자로 돎
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={loopsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `for (int i{ 0 }; i <= size; ++i)`는 한 번 더 돎
+  - 원소가 3개면 번호는 0, 1, 2. `<=`를 쓰면 3번까지 건드림
+  - 이런 "하나 차이" 실수를 off-by-one 오류라고 부름. 범위 기반 `for` 문을 쓰면 생기지 않음
+- 범위 기반 `for` 문에서 원소를 바꿨는데 반영되지 않음
+  - `for (int score : scores) { score = 0; }`은 복사본만 바꿈
+- `while (조건);`처럼 괄호 뒤에 세미콜론을 붙이면 안 됨
+  - 세미콜론이 "아무것도 안 하는 문장"으로 취급되어 그것만 되풀이함. 뒤의 블록은 반복문과 상관없는 코드가 됨
+- `"hello" + " world"`는 컴파일되지 않음
+  - 둘 다 C 스타일 문자열이라 `+`로 붙일 수 없음. 한쪽이 `std::string`이어야 함
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| `while` | 조건이 참인 동안 반복 | |
+| `do` / `while` | 먼저 실행, 나중에 검사. 적어도 한 번 실행 | |
+| `for` | 시작; 조건; 매 바퀴 뒤에 할 일 | |
+| `break` / `continue` | 반복문을 빠져나감 / 다음 바퀴로 건너뜀 | |
+| 범위 기반 `for` | `for (타입 변수 : 컨테이너)`. 원소는 복사본 | C++11 |
+| 범위 기반 `for`의 초기화 구문 | `for (초기화; 변수 : 컨테이너)` | C++20 |
+| `std::initializer_list<T>` | 중괄호로 묶은 값 목록을 받는 타입 | C++11 |
+| `std::string` | 쓰기 쉬운 문자열 타입. `[ ]`, `size()`, `+`, `==` | |
+
+## 복습 질문
+
+<details>
+<summary>`while`과 `do`/`while`의 차이는?</summary>
+
+- `while`: 조건을 먼저 검사. 처음부터 거짓이면 한 번도 실행하지 않음
+- `do`/`while`: 블록을 먼저 실행. 조건이 거짓이어도 한 번은 실행함
+
+</details>
+
+<details>
+<summary>`for (int i{ 0 }; i < 4; ++i) { ... }`의 블록은 몇 번 실행되고, 마지막 바퀴의 `i`는 얼마인가요?</summary>
+
+- 4번 실행됨
+- `i`가 0, 1, 2, 3일 때 실행됨. 마지막 바퀴의 `i`는 3
+
+</details>
+
+<details>
+<summary>`std::vector<int> v{ 1, 2, 3 }; for (int n : v) { n = n * 2; }`를 실행한 뒤 `v`의 내용은?</summary>
+
+- 그대로 1, 2, 3
+- `n`은 원소의 복사본이므로 바꿔도 `v`에는 영향이 없음
+
+</details>
+
+<details>
+<summary>`int sum(std::initializer_list<int> values)`를 값 네 개로 호출하는 코드는?</summary>
+
+- `sum({ 1, 2, 3, 4 })`
+- 값들을 중괄호로 묶어 넘김
+
+</details>
+
+<details>
+<summary>`break`와 `continue`의 차이는?</summary>
+
+- `break`: 반복문 자체를 끝냄
+- `continue`: 이번 바퀴만 건너뛰고 다음 바퀴로 넘어감
+
+</details>

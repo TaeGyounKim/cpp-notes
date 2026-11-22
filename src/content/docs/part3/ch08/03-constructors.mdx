@@ -1,0 +1,334 @@
+---
+title: 생성자
+description: 객체가 만들어질 때 실행되는 생성자를 쓰고 부르는 법, 여러 생성자, 기본 생성자와 컴파일러가 만드는 생성자, = default와 = delete, 생성자 초기화 목록과 멤버 초기화 순서를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import constructorsCode from '../../../../examples/ch08/constructors.cpp?raw';
+import constructorsCpp11Code from '../../../../examples/ch08/constructors-cpp11.cpp?raw';
+import wrongDelegationCode from '../../../../examples/ch08/wrong-delegation.cpp?raw';
+import defaultCtorCode from '../../../../examples/ch08/default-ctor.cpp?raw';
+import ctorInitializerCode from '../../../../examples/ch08/ctor-initializer.cpp?raw';
+import initOrderCode from '../../../../examples/ch08/init-order.cpp?raw';
+
+- 다루는 것: 객체의 **생애 주기** 가운데 첫 단계, 생성
+  - 생애 주기의 세 가지 일: 생성, 소멸, 대입. 언제 어떻게 일어나는지 알고, 그 동작을 원하는 대로 바꾸는 법을 배움
+- 이 글에서 배우는 요소: 생성자 정의와 사용, 여러 생성자, 기본 생성자, 가장 성가신 구문 분석, 컴파일러가 만드는 기본 생성자, `= default`와 `= delete`, 생성자 초기화 목록, 멤버 초기화 순서
+
+## 객체가 만들어지는 때
+
+- 스택의 객체: 선언하는 그 자리에서
+- 자유 저장소의 객체: 스마트 포인터, `new`, `new[]`로 공간을 잡을 때
+- 객체가 만들어질 때, 그 안에 든 객체(데이터 멤버)들도 함께 만들어짐
+  - 예: `std::string` 데이터 멤버는 그것을 가진 객체가 만들어질 때 만들어지고, 그 객체가 사라질 때 사라짐
+- 변수를 선언하며 초기값을 주듯(`int x{ 0 };`) 객체에도 초기값을 주고 싶음
+- **생성자** (constructor): 객체를 초기화하는 일을 하는 특별한 멤버 함수. 객체가 만들어질 때마다 생성자 가운데 하나가 실행됨 <CppRef path="cpp/language/constructor" />
+  - 줄여서 ctor("씨-터")라고도 부름
+
+## 생성자 정의와 사용
+
+- 문법
+  - 이름이 **클래스 이름과 같음**
+  - **반환 타입이 없음** (`void`도 적지 않음)
+  - 매개변수는 있을 수도 없을 수도 있음
+
+```cpp
+class Temperature
+{
+public:
+    Temperature(double celsius);
+    // ...
+};
+
+Temperature::Temperature(double celsius)
+{
+    setCelsius(celsius);
+}
+```
+
+- 클래스 밖에서 정의하면 `Temperature::Temperature`라는 낯선 모양이 됨: 앞은 "Temperature 클래스의", 뒤는 생성자 이름
+
+### 생성자 사용: 스택
+
+```cpp
+Temperature a(18.0);    // 함수 호출 모양
+Temperature b{ 21.5 };  // 균일 초기화
+```
+
+- 생성자를 직접 "부르는" 것이 아님. 객체를 선언하면서 인수를 주면 생성자가 실행됨
+- 생성자를 나중에 따로 부를 수 없음
+  - `a.Temperature(5.0);`은 컴파일 오류: `invalid use of 'Temperature::Temperature'`
+
+### 생성자 사용: 자유 저장소
+
+```cpp
+auto d{ std::make_unique<Temperature>(-4.0) };   // 인수가 생성자로 전달됨
+Temperature* e{ new Temperature{ 5.0 } };        // 맨 포인터(권하지 않음)
+```
+
+- 스택과 다른 점: 포인터만 먼저 선언하고 객체는 나중에 만들 수 있음. 스택의 객체는 선언하는 순간 생성자가 실행됨
+- 포인터는 언제나 올바른 주소나 `nullptr`로 초기화할 것
+
+### 여러 생성자
+
+- 생성자를 여러 개 둘 수 있음. 이름은 모두 클래스 이름이고, 매개변수의 개수나 타입이 달라야 함
+- 이름이 같은 함수가 여럿이면 컴파일러는 부르는 쪽의 인수 타입에 맞는 것을 고름: **오버로딩** (overloading). 9장에서 자세히 다룸
+- 예: 섭씨 숫자로 만드는 생성자, `"36.5"` 같은 문자열로 만드는 생성자
+
+<RunCode client:load code={constructorsCode} />
+
+- 볼 것: `Temperature c{ "36.5" }`는 문자열 생성자가, `make_unique<Temperature>(-4.0)`은 `double` 생성자가 골라짐
+
+### 생성자 안에서 다른 생성자를 부르면
+
+- 한 생성자를 다른 생성자로 구현하고 싶어짐. 보통 멤버 함수는 다른 멤버 함수를 부를 수 있으니까
+
+```cpp
+Temperature::Temperature(const std::string& text)
+{
+    Temperature(std::stod(text));   // 기대와 다르게 동작
+}
+```
+
+- 컴파일도 링크도 실행도 되지만 **기대대로 동작하지 않음**
+  - 이 줄은 지금 초기화하는 객체의 생성자를 부르는 것이 아니라, **이름 없는 임시 객체**를 새로 만들었다가 바로 버림
+
+<RunCode client:load code={wrongDelegationCode} />
+
+- 볼 것: "36.5로 만듦"은 임시 객체 이야기. `t` 자체는 0
+- 방법은 있음: **위임 생성자**. 생성자 초기화 목록에서 다른 생성자를 부름. 다음 글에서 다룸
+
+## 기본 생성자
+
+- **기본 생성자** (default constructor): 인수 없이 부를 수 있는 생성자 <CppRef path="cpp/language/default_constructor" />
+  - 매개변수가 없거나, 모든 매개변수에 기본값이 있는 생성자
+  - "인수가 0개인 생성자"라고도 함
+
+### 기본 생성자가 필요한 때
+
+- 객체의 배열
+  - 배열을 만들면 이어진 메모리를 잡고, **원소마다 기본 생성자**를 부름
+  - 다른 생성자를 부르라고 배열 생성 코드에 직접 알릴 문법이 없음
+  - 기본 생성자가 없으면 `Temperature week[7];`도 `new Temperature[3]`도 컴파일되지 않음
+  - 초기화 목록으로 원소를 하나하나 주면 피할 수는 있음
+
+```cpp
+Temperature week[2]{ Temperature{ 1.0 }, Temperature{ 2.0 } };
+```
+
+- 배열로 쓸 클래스라면 기본 생성자를 두는 편이 쉬움
+
+### 기본 생성자 정의와 사용
+
+```cpp
+Temperature::Temperature()
+{
+    m_celsius = 0.0;   // 클래스 안 멤버 초기화가 있다면 이 줄도 필요 없음
+}
+```
+
+- 스택에서 기본 생성자로 만들 때
+
+| 모양 | 결과 |
+| --- | --- |
+| `Temperature room;` | 기본 생성자 |
+| `Temperature room{};` | 기본 생성자 |
+| `Temperature room();` | **함수 선언**으로 해석됨 |
+
+- `Temperature room();`은 컴파일되지만, 컴파일러는 이것을 "인수 없이 `Temperature`를 돌려주는 함수 `room`"의 선언으로 읽음
+  - **가장 성가신 구문 분석** (most vexing parse)이라는 이름이 붙은 유명한 함정
+  - 다음 줄에서 `room.getCelsius()`를 부르면 그제야 오류: `request for member 'getCelsius' in 'room', which is of non-class type 'Temperature()'`
+  - GCC는 선언한 줄에서 경고도 줌: `empty parentheses were disambiguated as a function declaration [-Wvexing-parse]`
+
+:::caution
+스택에 기본 생성자로 객체를 만들 때는 중괄호를 쓰거나 괄호를 아예 생략한다.
+:::
+
+- 자유 저장소에서는 `std::make_unique<Temperature>()`, `new Temperature{}`, `new Temperature`, `new Temperature()` 모두 기본 생성자
+
+### 컴파일러가 만드는 기본 생성자
+
+- 생성자를 하나도 선언하지 않으면, 컴파일러가 인수 없는 기본 생성자를 대신 만들어 줌
+  - 객체 타입의 데이터 멤버에 대해서는 그 기본 생성자를 부름
+  - `int`, `double` 같은 기본 타입 멤버는 초기화하지 **않음** (클래스 안 멤버 초기화가 있으면 그 값)
+- 그러나 생성자를 **하나라도** 직접 선언하면, 컴파일러는 기본 생성자를 더 이상 만들어 주지 않음
+  - `Temperature(double)`만 있는 클래스로 `Temperature t;`를 쓰면 오류: `no matching function for call to 'Temperature::Temperature()'`
+- 용어 주의: 기본 생성자는 "컴파일러가 만들어 준 생성자"만 뜻하는 것이 아님. 인수 없이 부를 수 있는 생성자라면 직접 쓴 것도 기본 생성자
+
+### = default와 = delete
+
+- **명시적 기본 생성자** (explicitly defaulted) <Badge text="C++11" />: 다른 생성자가 있어도 컴파일러가 만드는 기본 생성자를 그대로 달라고 요청
+
+```cpp
+Temperature() = default;
+Temperature(double celsius);
+```
+
+- C++11 이전에는 이럴 때 빈 기본 생성자 `Temperature() {}`를 손으로 써야 했음
+- `= default`는 클래스 정의 안에 적어도, 구현 파일에 적어도 됨
+- **명시적으로 지운 기본 생성자** (explicitly deleted) <Badge text="C++11" />: 반대로 기본 생성자를 아예 없앰
+  - 예: `static` 멤버 함수만 모은 클래스(9장). 객체를 만들 일이 없고, 컴파일러가 기본 생성자를 만드는 것도 원하지 않음
+  - 그런 클래스의 객체를 만들려 하면 오류: `use of deleted function 'Units::Units()'`
+- 데이터 멤버 가운데 기본 생성자가 지워진 것이 있으면, 그 클래스의 기본 생성자도 저절로 지워짐
+
+<RunCode client:load code={defaultCtorCode} />
+
+- 볼 것
+  - `week[7]`과 `new Temperature[3]`: 원소가 모두 기본 생성자로 만들어져 0
+  - `Units::toFahrenheit()`: 객체 없이 클래스 이름으로 부르는 `static` 멤버 함수. 9장
+
+## 생성자 초기화 목록
+
+- 지금까지는 생성자 **본문**에서 데이터 멤버에 값을 넣었음
+- 다른 방법: **생성자 초기화 목록** (constructor initializer, ctor-initializer, member initializer list)
+
+```cpp
+Temperature::Temperature(double celsius)
+    : m_celsius{ celsius }
+{
+}
+```
+
+- 자리: 매개변수 목록 뒤, 본문의 `{` 앞. 콜론으로 시작하고 쉼표로 구분함
+- 목록에 올 수 있는 것
+  - 데이터 멤버의 초기화. 함수 호출 모양 `m_celsius(celsius)`, 또는 균일 초기화 `m_celsius{celsius}`
+  - 기반 클래스의 생성자 호출 (10장)
+  - 위임 생성자 호출 (다음 글)
+
+### 본문에서 대입하는 것과 무엇이 다른가
+
+- C++은 객체를 만들 때, 생성자 **본문을 실행하기 전에** 데이터 멤버를 모두 먼저 만듦
+  - 멤버가 객체라면 이때 그 생성자가 불림
+- 그러니 본문에서 값을 넣는 것은 이미 만들어진 멤버의 값을 **바꾸는**(대입하는) 일
+- 초기화 목록은 멤버가 **만들어지는 순간** 값을 줌. 나중에 대입하는 것보다 효율적임
+- 기본 생성자가 있는 멤버 객체는 목록에 적지 않아도 됨. 예: `std::string`은 기본 생성자가 빈 문자열을 만들므로 `""`로 초기화하는 것은 군더더기
+
+### 반드시 초기화 목록(또는 클래스 안 초기화)을 써야 하는 멤버
+
+| 멤버 | 이유 |
+| --- | --- |
+| `const` 데이터 멤버 | 만든 뒤에는 대입할 수 없음. 값은 만들 때 줘야 함 |
+| 참조 데이터 멤버 | 무언가를 가리키지 않는 참조는 있을 수 없고, 한번 만들면 다른 대상을 가리키게 바꿀 수 없음 |
+| 기본 생성자가 없는 객체 멤버 | C++은 멤버 객체를 기본 생성자로 만들려 함. 없으면 어떤 생성자를 부를지 알려 줘야 함 |
+| 기본 생성자가 없는 기반 클래스 | 10장 |
+
+- 예: `Temperature(double)`만 있는 `Temperature`를 멤버로 가진 클래스의 생성자를 `Sensor() {}`처럼 쓰면 오류: `no matching function for call to 'Temperature::Temperature()'`
+
+<RunCode client:load code={ctorInitializerCode} />
+
+- 볼 것
+  - `m_id`(`const`), `m_room`(참조), `m_last`(기본 생성자 없음): 셋 다 초기화 목록에서만 값을 줄 수 있음
+  - `explicit`: 변환 생성자와 함께 다음 글에서 다룸
+
+:::tip
+생성자 초기화 목록은 데이터 멤버가 만들어지는 그 순간 값을 준다.
+:::
+
+### 초기화 순서의 함정
+
+- 초기화 목록은 데이터 멤버를 **클래스 정의에 선언된 순서**대로 초기화함. 목록에 적은 순서가 아님
+
+<RunCode client:load code={initOrderCode} />
+
+- 무슨 일이 일어났나
+  - 의도: `m_scale`을 먼저 1.5로 정하고, 그 값으로 `m_gauge`를 15로 만듦
+  - 실제: 클래스에서 `m_gauge`가 먼저 선언되었으므로 먼저 초기화됨. 그때 `m_scale`은 아직 초기화 전이라 엉뚱한 값을 넘김
+  - 출력값은 환경마다 다를 수 있음(정의되지 않은 동작)
+- 컴파일러가 경고해 줌: `'Panel::m_scale' will be initialized after [-Wreorder]`, `member 'Panel::m_scale' is used uninitialized`
+- 고치는 법: 멤버 대신 매개변수를 넘김. `m_gauge{ scale * 10.0 }`. 또는 선언 순서를 의존 순서에 맞춤
+
+:::caution
+생성자 초기화 목록은 데이터 멤버를 목록의 순서가 아니라 클래스 정의에 선언된 순서대로 초기화한다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 균일 초기화 `T b{ 21.5 };` | C++11 | `T b(21.5);` |
+| `= default`, `= delete` | C++11 | 빈 기본 생성자를 직접 씀 / 기본 생성자를 `private`으로 선언만 하고 정의하지 않음 |
+| 클래스 안 멤버 초기화 | C++11 | 모든 생성자의 초기화 목록에서 초기화 |
+| `std::string_view`, `std::from_chars` | C++17 | `const std::string&`, `std::stod` |
+| `std::println` | C++23 | `std::cout <<` |
+
+- 생성자, 기본 생성자, 생성자 초기화 목록은 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={constructorsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 생성자에 `void`를 적는다?
+  - 생성자는 반환 타입이 아예 없음. `void`도 적지 않음
+- 생성자 본문에서 다른 생성자를 부르면 위임이 된다?
+  - 임시 객체를 만들 뿐. 위임은 초기화 목록에서
+- `Temperature t();`로 기본 생성자를 부른다?
+  - 함수 선언이 됨. `Temperature t;`나 `Temperature t{};`
+- 다른 생성자를 추가했는데 `Temperature t;`가 갑자기 안 된다?
+  - 생성자를 하나라도 직접 쓰면 컴파일러가 기본 생성자를 만들어 주지 않음. `Temperature() = default;`를 추가
+- 컴파일러가 만든 기본 생성자는 모든 멤버를 0으로 만든다?
+  - 기본 타입 멤버는 초기화하지 않음. 클래스 안 멤버 초기화로 값을 줄 것
+- 초기화 목록의 순서대로 초기화된다?
+  - 클래스에 선언된 순서대로. 한 멤버로 다른 멤버를 초기화할 때 특히 주의
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 생성자 | 클래스 이름과 같은 이름, 반환 타입 없음. 객체가 만들어질 때 실행 |
+| 여러 생성자 | 매개변수가 다른 생성자를 여럿(오버로딩) |
+| 기본 생성자 | 인수 없이 부를 수 있는 생성자. 배열에 필요 |
+| 가장 성가신 구문 분석 | `T t();`는 함수 선언. `T t;` 또는 `T t{};` |
+| 컴파일러가 만드는 기본 생성자 | 생성자를 하나도 안 쓰면 생김. 하나라도 쓰면 없음 |
+| `= default` / `= delete` | 기본 생성자를 그대로 달라 / 없애라 |
+| 생성자 초기화 목록 | `: 멤버{ 값 }`. 만드는 순간 값을 줌. `const`, 참조, 기본 생성자 없는 멤버에 필수 |
+| 초기화 순서 | 클래스에 선언된 순서 |
+
+## 복습 질문
+
+<details>
+<summary>`Temperature(double)` 생성자만 있는 클래스에서 `Temperature list[5];`가 컴파일되지 않는 이유와 고치는 법은?</summary>
+
+- 배열의 원소는 기본 생성자로 만들어지는데, 생성자를 직접 썼으므로 컴파일러가 기본 생성자를 만들어 주지 않음
+- `Temperature() = default;`를 추가하거나, 초기화 목록으로 원소마다 값을 줌
+
+</details>
+
+<details>
+<summary>`Point origin();` 다음 줄의 `origin.x`가 오류인 이유는?</summary>
+
+- `Point origin();`이 객체가 아니라 "인수 없이 `Point`를 돌려주는 함수"의 선언으로 해석됨(가장 성가신 구문 분석)
+- `Point origin;`이나 `Point origin{};`으로 씀
+
+</details>
+
+<details>
+<summary>`const int m_id;`를 생성자 본문에서 `m_id = id;`로 초기화할 수 없는 이유는?</summary>
+
+- 본문이 실행될 때 멤버는 이미 만들어져 있고, 본문의 `=`는 대입임. `const`에는 대입할 수 없음
+- 초기화 목록 `: m_id{ id }`나 클래스 안 초기화로 만드는 순간 값을 줌
+
+</details>
+
+<details>
+<summary>`class A { int m_b; int m_a; public: A(int x) : m_a{ x }, m_b{ m_a + 1 } {} };`의 문제는?</summary>
+
+- 멤버는 선언 순서(`m_b` 먼저)대로 초기화되므로, `m_b`를 초기화할 때 `m_a`는 아직 초기화 전
+- `m_b{ x + 1 }`처럼 매개변수를 쓰거나, 선언 순서를 바꿈
+
+</details>
+
+<details>
+<summary>`static` 멤버 함수만 모은 클래스의 객체를 아무도 만들지 못하게 하려면?</summary>
+
+- `Units() = delete;`로 기본 생성자를 지움
+- 객체를 만들려 하면 `use of deleted function` 컴파일 오류
+
+</details>

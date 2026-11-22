@@ -1,0 +1,301 @@
+---
+title: 다형성을 위한 상속
+description: 공통 부모를 둔 형제 클래스로 다형적 계층을 설계하는 법, 순수 가상 함수와 추상 클래스, 서로 다른 파생 객체를 한 컨테이너에 담아 같은 방식으로 다루기, 형제 클래스 사이의 변환과 연산자를 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import abstractCode from '../../../../examples/ch10/abstract.cpp?raw';
+import fieldOpsCode from '../../../../examples/ch10/field-ops.cpp?raw';
+import pureWithBodyCode from '../../../../examples/ch10/pure-with-body.cpp?raw';
+import abstractCpp11Code from '../../../../examples/ch10/abstract-cpp11.cpp?raw';
+
+- 다루는 것: 상속을 가장 강력하게 쓰는 경우, **다형성**
+  - 5장: 다형성 덕분에 공통 부모를 가진 객체들을 서로 바꿔 쓰고, 부모 자리에 자식 객체를 쓸 수 있음
+- 이 글에서 배우는 요소: 다형적 계층 설계, 순수 가상 함수, 추상 클래스, 컨테이너에 여러 파생 객체 담기, 형제 클래스 사이의 변환과 연산자, 구현이 있는 순수 가상 함수
+
+## 예: 입력 양식의 칸
+
+- 입력 양식의 한 칸 `Field`를 생각함. 지금까지라면 값 하나(예: `double`)를 담는 클래스 하나로 만들었을 것
+- 실제 양식의 칸에는 여러 가지가 들어감: 숫자, 글자, 나아가 날짜나 계산식
+- 어떻게 지원할까?
+
+### 설계: 재사용인가 다형성인가
+
+- 한 가지 방법: `Field`를 글자 전용 `TextField`로 좁히고, 숫자 칸 `NumberField`가 `TextField`를 상속해 기능을 빌려 씀
+  - 재사용을 위한 상속 모델
+  - 실제로 만들어 보면, 숫자는 거의 모든 경우에 글자와 다르게 다뤄지므로 파생 클래스가 기반 클래스의 기능을 거의 다 재정의하게 됨
+  - "숫자 칸은 글자 칸이다(is-a)"라는 관계도 어색함
+- 더 좋은 설계: 두 클래스를 **공통 부모 `Field` 아래의 형제**로 만듦
+
+| 설계 | 모양 | 문제·장점 |
+| --- | --- | --- |
+| 재사용 | `TextField` ← `NumberField` | 거의 모든 기능을 재정의하게 됨. is-a가 어색 |
+| 다형성 | `Field` ← `TextField`, `Field` ← `NumberField` | 형제는 서로 바꿔 쓸 수 있음 |
+
+- 형제 설계에서 얻는 것
+  - 두 파생 클래스가 기반 클래스가 정한 **같은 인터페이스**(멤버 함수 집합)를 지원함
+  - `Field`를 쓰는 코드는 칸이 숫자인지 글자인지 몰라도 인터페이스의 어떤 함수든 부를 수 있음
+  - 가상 함수 덕분에 객체의 클래스에 맞는 판이 불림
+  - 다른 자료 구조(예: 9장의 격자 같은 양식 클래스)가 기반 타입으로 가리켜 여러 종류의 칸을 함께 담을 수 있음
+
+## 기반 클래스 Field
+
+- 모든 칸이 `Field`를 상속하므로 기반 클래스부터 씀
+- 기반 클래스를 설계할 때는 파생 클래스들의 공통점을 찾아 부모에 넣음
+  - 글자 칸과 숫자 칸은 둘 다 값 하나를 담음
+  - 값은 사용자에게서 오고 사용자에게 다시 보여 주므로, 문자열로 설정하고 문자열로 꺼냄
+- 첫 시도
+
+```cpp
+class Field
+{
+public:
+    virtual ~Field() = default;
+    virtual void set(std::string_view text);
+    virtual std::string text() const;
+};
+```
+
+- 데이터 멤버가 없음. 구현 파일을 쓰려는 순간 막힘: 숫자도 글자도 담지 않는 기반 클래스의 `set()`을 어떻게 구현하나?
+  - 아무것도 하지 않는 구현을 둘 수도 있지만 옳지 않음
+  - 기반 클래스의 객체는 애초에 있어서는 안 됨. `set()`은 언제나 `TextField`나 `NumberField`에 대해 불려야 함. 좋은 해법은 이 제약을 강제하는 것
+
+## 순수 가상 함수와 추상 클래스
+
+- **순수 가상 멤버 함수** (pure virtual member function): 클래스 정의에서 명시적으로 정의하지 않은 가상 함수 <CppRef path="cpp/language/abstract_class" />
+  - 이 클래스에는 이 함수의 정의가 없다고 컴파일러에게 알림
+- 순수 가상 함수가 하나라도 있는 클래스: **추상 클래스** (abstract class)
+  - 다른 코드가 이 클래스의 객체를 만들 수 없음. 컴파일러가 강제함
+- 문법: 선언 뒤에 `= 0`. 구현은 쓰지 않아도 됨
+
+```cpp
+class Field
+{
+public:
+    virtual ~Field() = default;
+    virtual void set(std::string_view text) = 0;
+    virtual std::string text() const = 0;
+};
+```
+
+- 이제 `Field` 객체는 만들 수 없음: `Field field;`는 오류 `cannot declare variable 'field' to be of abstract type 'Field'`
+- 파생 클래스를 만드는 것은 됨: `std::unique_ptr<Field> f{ std::make_unique<TextField>() };`
+- `Field`에는 구현할 것이 없음. 멤버 함수는 모두 순수 가상이고 소멸자는 `= default`
+
+:::note
+추상 클래스는 다른 코드가 그 클래스의 객체를 직접 만들지 못하게 하고, 파생 클래스의 객체만 만들게 하는 수단이다.
+:::
+
+## 각 파생 클래스
+
+- `TextField`와 `NumberField`는 부모가 정한 기능을 구현하면 됨
+- 사용하는 쪽이 이 칸들을 만들어 써야 하므로 추상이면 안 됨. 물려받은 **모든** 순수 가상 함수를 구현해야 함
+  - 하나라도 구현하지 않으면 파생 클래스도 추상 클래스가 되어 객체를 만들 수 없음
+
+### TextField
+
+```cpp
+class TextField : public Field
+{
+public:
+    void set(std::string_view text) override { m_value = text; }
+    std::string text() const override { return m_value.value_or(""); }
+private:
+    std::optional<std::string> m_value;
+};
+```
+
+- 순수 가상 함수를 재정의함. 이번에는 `= 0` 없이
+- 데이터 멤버 `m_value`는 `std::optional`(1장). 값을 한 번도 넣지 않은 상태와 빈 문자열을 넣은 상태를 구별할 수 있음
+- `value_or("")`: 값이 있으면 그 값, 없으면 빈 문자열 <CppRef path="cpp/utility/optional/value_or" />
+
+### NumberField
+
+```cpp
+class NumberField : public Field
+{
+public:
+    virtual void set(double value) { m_value = value; }
+    virtual double value() const { return m_value.value_or(0.0); }
+
+    void set(std::string_view text) override { m_value = parse(text); }
+    std::string text() const override
+    {
+        return m_value.has_value() ? std::format("{:.1f}", m_value.value())
+                                   : "";
+    }
+private:
+    static double parse(std::string_view text);
+    std::optional<double> m_value;
+};
+```
+
+- 기반 클래스의 `set(std::string_view)` 말고도 `double`을 받는 `set()`과, `double`로 꺼내는 `value()`를 더함
+- `has_value()`로 값이 있는지 묻고, 있으면 `value()`로 꺼냄
+- 계층으로 나누니 코드가 단순해짐. 각 클래스는 자기 기능만 신경 쓰면 됨
+
+## 다형성 활용하기
+
+- `Field`는 추상 클래스라 객체를 만들 수 없지만, `Field`를 가리키는 포인터나 참조는 둘 수 있음. 실제로는 파생 클래스 객체를 가리킴
+- 그래서 기반 타입의 컨테이너에 서로 다른 파생 객체를 섞어 담을 수 있음
+
+```cpp
+std::vector<std::unique_ptr<Field>> form;
+form.push_back(std::make_unique<TextField>());
+form.push_back(std::make_unique<NumberField>());
+```
+
+- 컴파일러는 컴파일 시점에 각 원소의 실제 타입을 모름. 그래도 모두 `Field`를 상속하므로 `Field`의 멤버 함수를 지원함
+- `text()`를 부르면 각 객체가 알맞은 문자열을 돌려줌
+  - 놀라운 점: 객체마다 **다른 방식으로** 함. `TextField`는 저장한 글자를, `NumberField`는 숫자를 문자열로 바꿔서
+  - 프로그래머는 객체가 어떻게 하는지 몰라도 됨. `Field`이므로 이 동작을 할 수 있다는 것만 알면 됨
+
+<RunCode client:load code={abstractCode} />
+
+## 더 생각할 점
+
+- 새 계층은 객체 지향 설계 면에서 분명히 나아졌지만, 실제 프로그램에 쓰기에는 부족한 점이 있음
+
+### 형제 클래스 사이의 변환
+
+- 칸 종류를 바꾸는 기능이 없음. 두 클래스로 나누면서 칸 객체들의 결합이 느슨해졌기 때문
+- `NumberField`에서 `TextField`를 만들 수 있게 하려면 **변환 생성자**(타입 생성자)를 더함
+  - 복사 생성자와 비슷하지만, 같은 클래스가 아니라 **형제 클래스**의 참조를 받음
+  - 생성자를 하나라도 선언하면 컴파일러가 기본 생성자를 만들지 않으므로, 기본 생성자도 `= default`로 선언함
+
+```cpp
+class TextField : public Field
+{
+public:
+    TextField() = default;
+    TextField(const NumberField& number) : m_value{ number.text() } {}
+    // ...
+};
+```
+
+- 포인터나 참조의 캐스트와 헷갈리지 말 것. 형제 클래스의 포인터·참조끼리는 캐스트할 수 없음(15장의 캐스트 연산자 오버로딩을 쓰지 않는 한)
+
+:::caution
+계층을 따라 위로는 언제나 캐스트할 수 있고, 아래로는 경우에 따라 캐스트할 수 있다. 계층을 가로지르는 캐스트는 캐스트 연산자의 동작을 바꾸거나 `reinterpret_cast`를 써야 가능하며, 둘 다 권하지 않는다.
+:::
+
+### 칸끼리의 연산자
+
+- 칸에 대한 연산자를 어떻게 오버로딩할지도 흥미로운 문제. 몇 가지 방법
+  - 모든 칸 조합마다 연산자를 하나씩: 파생 클래스가 둘뿐이면 해볼 만함. 숫자+숫자, 글자+글자, 숫자+글자마다 결과를 정함
+  - 공통 표현을 정함: 앞의 구현은 이미 문자열을 공통 표현처럼 씀. `operator+` 하나로 모든 경우를 처리
+  - 섞은 방법: 숫자 칸끼리는 숫자 칸을 돌려주는 `operator+`, 하나라도 글자 칸이면 글자 칸을 돌려주는 `operator+`
+- 섞은 방법에서 숫자 칸 + 글자 칸은?
+  - 연산자는 두 개뿐이지만, `TextField`에 `NumberField`를 받는 변환 생성자가 있으므로 컴파일러가 숫자 칸을 글자 칸으로 바꿔 글자판 `operator+`를 씀
+
+<RunCode client:load code={fieldOpsCode} />
+
+- 이 예제는 연산자에 집중하려고 기반 클래스 없이 두 클래스만 남겼음
+- 다형성이 아직 낯설다면 이 장의 예제들을 고쳐 가며 실험해 보는 것이 좋은 출발점
+
+## 구현이 있는 순수 가상 함수
+
+- 순수 가상 함수에도 구현을 줄 수 있음
+  - 클래스 정의 안이 아니라 **클래스 밖에서** 정의해야 함
+  - 클래스는 여전히 추상 클래스. 파생 클래스도 여전히 그 함수를 구현해야 함
+  - 객체는 만들 수 없지만, 파생 클래스에서 그 구현을 부를 수 있음
+
+```cpp
+class Field
+{
+public:
+    virtual void reset() = 0;
+};
+
+void Field::reset() { /* 공통 정리 */ }   // 클래스 밖 구현
+
+class TextField : public Field
+{
+public:
+    void reset() override
+    {
+        Field::reset();   // 기반 클래스의 구현을 부름
+        // 자기 정리
+    }
+};
+```
+
+<RunCode client:load code={pureWithBodyCode} />
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::optional` | C++17 | "값이 있는가" 플래그를 따로 둠 |
+| `std::string_view` | C++17 | `const std::string&` |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T())` |
+| `std::unique_ptr` | C++11 | 맨 포인터와 직접 `delete` |
+| `std::format` | C++20 | `std::ostringstream` |
+
+- 순수 가상 함수와 추상 클래스는 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={abstractCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 추상 클래스는 포인터로도 쓸 수 없다?
+  - 객체만 만들 수 없음. 포인터와 참조는 파생 객체를 가리킬 수 있음
+- 순수 가상 함수를 일부만 구현해도 파생 클래스의 객체를 만들 수 있다?
+  - 모두 구현해야 함. 하나라도 남으면 파생 클래스도 추상 클래스
+- 순수 가상 함수는 구현을 가질 수 없다?
+  - 클래스 밖에서 구현할 수 있음. 클래스는 여전히 추상
+- 형제 클래스의 포인터끼리 캐스트할 수 있다?
+  - 안 됨. 변환이 필요하면 변환 생성자로 새 객체를 만듦
+- `vector<Field>`에 파생 객체를 담으면 된다?
+  - 추상 클래스라 불가하고, 구체 클래스였어도 슬라이싱됨. `vector<unique_ptr<Field>>`처럼 포인터를 담음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 다형적 설계 | 공통 부모 아래 형제 클래스. 같은 인터페이스를 서로 바꿔 씀 |
+| 순수 가상 함수 | `virtual ... = 0;`. 이 클래스에는 정의가 없음 |
+| 추상 클래스 | 순수 가상 함수가 하나라도 있는 클래스. 객체를 만들 수 없음 |
+| 구체 파생 클래스 | 모든 순수 가상 함수를 구현 |
+| 다형적 컨테이너 | `vector<unique_ptr<Base>>`에 여러 파생 객체 |
+| 형제 변환 | 변환 생성자. 포인터 캐스트는 안 됨 |
+| 구현이 있는 순수 가상 | 클래스 밖에서 정의. 파생 클래스가 `Base::f()`로 부름 |
+
+## 복습 질문
+
+<details>
+<summary>`class Shape { public: virtual double area() const = 0; };`에서 `Shape s;`가 오류인 이유는?</summary>
+
+- 순수 가상 함수가 있어 `Shape`는 추상 클래스. 추상 클래스의 객체는 만들 수 없음
+
+</details>
+
+<details>
+<summary>`Circle`이 `Shape`를 상속하면서 `area()`를 구현하지 않았다. `Circle c;`는?</summary>
+
+- 오류. 물려받은 순수 가상 함수를 구현하지 않았으므로 `Circle`도 추상 클래스
+
+</details>
+
+<details>
+<summary>여러 종류의 칸을 한 컨테이너에 담아 같은 방식으로 출력하려면 어떤 타입의 컨테이너를 쓰는가?</summary>
+
+- `std::vector<std::unique_ptr<Field>>`처럼 기반 클래스를 가리키는 (스마트) 포인터의 컨테이너
+- `text()`가 가상 함수라 각 원소의 실제 타입에 맞는 판이 불림
+
+</details>
+
+<details>
+<summary>`TextField`에 `TextField(const NumberField&)`가 있을 때 `textField + numberField`(글자판 `operator+`만 있음)가 되는 이유는?</summary>
+
+- 컴파일러가 변환 생성자로 `numberField`를 임시 `TextField`로 바꿔 글자판 `operator+`에 넘김
+
+</details>

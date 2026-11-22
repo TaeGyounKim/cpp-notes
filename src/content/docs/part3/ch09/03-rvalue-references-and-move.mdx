@@ -1,0 +1,320 @@
+---
+title: 우측값 참조와 이동 의미론
+description: 좌측값과 우측값, 우측값 참조와 std::move, C++23의 auto(x) 사본, 이동 생성자와 이동 대입 연산자 구현, 컴파일러가 이동 연산을 만들어 주는 조건과 다섯의 규칙, std::exchange를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import rvalueRefsCode from '../../../../examples/ch09/rvalue-refs.cpp?raw';
+import decayCopyCode from '../../../../examples/ch09/decay-copy.cpp?raw';
+import moveGridCode from '../../../../examples/ch09/move-grid.cpp?raw';
+import moveGridCpp11Code from '../../../../examples/ch09/move-grid-cpp11.cpp?raw';
+import moveVsCopyViz from '../../../../data/ch09/move-vs-copy.js';
+
+- 다루는 것: 복사 대신 **이동**으로 객체를 넘기는 법
+- 이 글에서 배우는 요소: 좌측값과 우측값, 우측값 참조, `std::move()`, `auto(x)` 사본, 이동 생성자, 이동 대입 연산자, 다섯의 규칙, `std::exchange()`
+
+## 이동 의미론이란
+
+- **이동 의미론** (move semantics) <Badge text="C++11" />: 한 객체가 가진 메모리 같은 자원의 **소유권을 다른 객체로 옮기는** 것
+- 이동이 쓰이는 때
+  - 원본이 연산이 끝나면 바로 사라질 **임시 객체**일 때. 컴파일러가 알아서 이동을 고름
+  - `std::move()`로 명시적으로 요청할 때
+- 하는 일: 데이터 멤버를 얕게 복사하고, 원본은 자원을 놓게 만듦
+  - 얕은 복사인데도 댕글링 포인터나 누수가 생기지 않음. 자원의 주인이 하나로 유지되기 때문
+- 필요한 것: **이동 생성자**와 **이동 대입 연산자**
+
+<StepViz client:load data={moveVsCopyViz} />
+
+- 이동한 뒤의 원본(**옮겨진 객체**, moved-from object)
+  - 표준의 요구: 올바르지만 값은 정해지지 않은 상태. 흔히 멤버를 "빈" 값으로 비움(필수는 아님)
+  - 권장: 직접 만드는 클래스는 이동 뒤 원본이 분명한 빈 상태가 되게 할 것
+  - 안전을 위해 옮겨진 객체는 다시 쓰지 않는 것이 원칙. 정의되지 않은 동작이 될 수 있음
+  - 예외: 표준의 `std::unique_ptr`와 `std::shared_ptr`는 이동 뒤 반드시 `nullptr`가 된다고 정해져 있어 다시 써도 안전함
+- 구현 전에 알아야 할 것: 우측값과 우측값 참조
+
+## 좌측값과 우측값
+
+- **좌측값** (lvalue): 주소를 얻을 수 있는 것. 예: 이름 있는 변수 <CppRef path="cpp/language/value_category" />
+  - 대입문의 왼쪽에 올 수 있다고 해서 붙은 이름
+- **우측값** (rvalue): 좌측값이 아닌 것. 예: 리터럴, 임시 객체나 임시 값
+  - 대개 대입문의 오른쪽에 옴
+  - 표준은 이를 더 잘게(xvalue, prvalue, glvalue) 나누지만 지금은 몰라도 됨
+
+```cpp
+int a{ 4 * 2 };
+```
+
+- `a`는 좌측값. 이름이 있고 `&a`로 주소를 얻을 수 있음
+- `4 * 2`의 결과는 우측값. 문장이 끝나면 사라지는 임시 값이고, 그 사본이 `a`에 저장됨
+- 함수 호출의 결과
+  - 값으로 돌려주는 함수: 결과는 우측값(임시 값)
+  - 비`const` 참조를 돌려주는 함수: 결과는 좌측값. 대입문 왼쪽에 쓸 수 있음
+
+## 우측값 참조
+
+- **우측값 참조** (rvalue reference): 우측값을 가리키는 참조. `타입&& 이름` <CppRef path="cpp/language/reference" />
+  - 목적: 우측값이 넘어왔을 때 **그것을 받는 오버로드가 골라지게** 하는 것
+  - 그러면 큰 값을 복사하는 대신 포인터만 넘기는 식의 최적화를 할 수 있음
+- 보통 임시 객체는 `const 타입&`에 묶이지만, 우측값 참조를 받는 오버로드가 있으면 그쪽이 골라짐
+
+```cpp
+void handle(std::string& text);    // 좌측값 참조
+void handle(std::string&& text);   // 우측값 참조
+```
+
+| 호출 | 골라지는 것 | 이유 |
+| --- | --- | --- |
+| `handle(a)` | `string&` | `a`는 이름 있는 변수 |
+| `handle(a + b)` | `string&&` | `a + b`의 결과는 임시 값 |
+| `handle("리터럴")` | `string&&` | 리터럴로 만든 임시 `string` |
+| `handle(std::move(b))` | `string&&` | `std::move()`가 우측값으로 바꿈 |
+
+- 좌측값 판으로 받으면 함수 안에서 바꾼 것이 원래 변수에 남음. 우측값 판에서 바꾼 것은 임시 값이라 호출이 끝나면 사라짐
+- 좌측값 판이 없으면 `handle(b)`는 컴파일 오류. 우측값 참조는 좌측값에 묶이지 않음
+
+### std::move()
+
+- `std::move()`는 아무것도 옮기지 않음 <CppRef path="cpp/utility/move" />
+  - 하는 일은 좌측값을 **우측값 참조로 바꾸는 것**(캐스트)뿐
+  - 그 결과 우측값 참조를 받는 오버로드가 골라지고, 실제 이동은 그 함수가 함
+- `<utility>`에 있음
+
+### 이름 있는 우측값 참조는 좌측값
+
+- 우측값 참조 매개변수 `text`도 **이름이 있으므로** 함수 안에서는 좌측값
+- 그래서 그것을 다시 우측값 참조를 받는 함수에 넘기려면 `std::move()`가 필요함
+
+```cpp
+void handle(std::string&& text)
+{
+    // store(text);             // 컴파일 오류: text는 좌측값
+    store(std::move(text));     // 우측값으로 바꿔 넘김
+}
+```
+
+- 오류 메시지: `cannot bind rvalue reference of type 'std::string&&' ... to lvalue of type 'std::string'`
+
+:::caution
+우측값 참조 매개변수처럼 이름이 붙은 우측값 참조는 그 자체로 좌측값이다. 이름이 있기 때문이다.
+:::
+
+### 우측값 참조 변수
+
+- 매개변수가 아닌 변수로도 선언할 수 있음. 흔히 쓰지는 않음
+
+```cpp
+int& i{ 2 };          // 오류: 비const 좌측값 참조는 우측값에 묶이지 않음
+int&& j{ 2 };         // 됨
+int a{ 2 }, b{ 3 };
+int&& k{ a + b };     // 됨
+```
+
+- 임시 값을 우측값 참조에 묶으면, 그 참조가 범위에 있는 동안 **임시 값의 수명이 늘어남**
+
+<RunCode client:load code={rvalueRefsCode} />
+
+## auto(x): 사본을 우측값으로
+
+- `auto y{ x };`는 `x`의 사본을 만들어 이름 `y`를 붙임. 그러니 좌측값
+- C++23의 **`auto(x)`, `auto{x}`** <Badge text="C++23" />: `x`의 사본을 **우측값**으로 만듦(decay-copy)
+- 쓰임새: 우측값 참조만 받는 함수에 원본은 그대로 두고 사본을 넘기고 싶을 때
+  - `consume(label)`: 컴파일 오류(좌측값)
+  - `consume(std::move(label))`: 되지만 그 뒤로 `label`을 쓰면 안 됨(옮겨졌을 수 있음)
+  - `consume(auto{ label })`: 사본을 넘기므로 `label`은 그대로
+
+<RunCode client:load code={decayCopyCode} />
+
+## 이동 연산 구현하기
+
+- 클래스에 이동 의미론을 넣으려면 이동 생성자와 이동 대입 연산자를 씀
+- 둘 다 `noexcept`를 붙임
+  - 표준 라이브러리와 잘 맞물리기 위해 특히 중요함. 예를 들어 표준 컨테이너는 원소를 옮길 때, 이동 연산이 예외를 던지지 않는다고 보장될 때만 이동을 씀. 그래야 강한 예외 보장을 지킬 수 있기 때문
+  - 보장이 없으면 더 느린 복사를 씀
+
+```cpp
+class Grid
+{
+public:
+    Grid(Grid&& src) noexcept;              // 이동 생성자
+    Grid& operator=(Grid&& rhs) noexcept;   // 이동 대입 연산자
+private:
+    void cleanup() noexcept;
+    void moveFrom(Grid& src) noexcept;
+    // ...
+};
+```
+
+- 두 도우미 멤버 함수
+  - `cleanup()`: 가진 배열을 지우고 멤버를 빈 값으로. 소멸자와 이동 대입이 함께 씀
+  - `moveFrom()`: 원본의 멤버를 얕게 가져온 뒤 원본을 빈 상태로 만듦
+
+```cpp
+void Grid::moveFrom(Grid& src) noexcept
+{
+    m_width = src.m_width;      // 얕은 복사
+    m_height = src.m_height;
+    m_cells = src.m_cells;
+    src.m_width = 0;            // 소유권이 넘어갔으니 원본을 비움
+    src.m_height = 0;
+    src.m_cells = nullptr;
+}
+
+Grid::Grid(Grid&& src) noexcept
+{
+    moveFrom(src);
+}
+
+Grid& Grid::operator=(Grid&& rhs) noexcept
+{
+    if (this == &rhs) {   // 자기 이동 확인
+        return *this;
+    }
+    cleanup();            // 내 배열을 먼저 정리
+    moveFrom(rhs);
+    return *this;
+}
+```
+
+- 원본의 포인터를 `nullptr`로 비우는 이유: 원본의 소멸자가 배열을 지우지 못하게. 이제 주인은 새 객체
+- 이동은 원본이 더 이상 필요 없을 때만 쓸모 있음
+
+### 자기 이동 확인
+
+- 클래스나 쓰는 방식에 따라 필요 없을 수도 있지만 **언제나 넣을 것**
+  - `c = std::move(c);` 같은 코드가 실행 중에 프로그램을 망가뜨리지 않게
+  - 확인이 없으면 `cleanup()`이 자기 배열을 지운 뒤 `moveFrom()`이 이미 비운 자신에게서 가져옴. 배열을 잃음
+  - C++ 핵심 지침(C++ Core Guidelines)도 이동 대입을 자기 대입에 안전하게 만들라고 권함
+- GCC는 이런 코드에 경고도 줌: `moving 'c' of type 'Grid' to itself [-Wself-move]`
+
+### std::exchange()
+
+- `std::exchange(대상, 새 값)` <Badge text="C++14" />: 대상에 새 값을 넣고 **원래 값을 돌려줌**. `<utility>`에 있음 <CppRef path="cpp/utility/exchange" />
+
+```cpp
+int a{ 11 };
+int b{ 22 };
+int old{ std::exchange(a, b) };   // a는 22, old는 11. b는 그대로 22
+```
+
+- "가져오고 원본을 비우기"를 한 줄로 쓸 수 있어 `moveFrom()`이 짧아짐
+
+```cpp
+void Grid::moveFrom(Grid& src) noexcept
+{
+    m_width = std::exchange(src.m_width, 0);
+    m_height = std::exchange(src.m_height, 0);
+    m_cells = std::exchange(src.m_cells, nullptr);
+}
+```
+
+<RunCode client:load code={moveGridCode} />
+
+- 볼 것
+  - `Grid b{ a }`는 복사, `Grid c{ std::move(a) }`는 이동. 이동 뒤 `a`는 0x0, 배열 없음
+  - `b = Grid{ 2, 2 }`: 오른쪽이 임시 객체라 `std::move()` 없이도 이동 대입이 골라짐
+  - `c = std::move(c)`: 컴파일러 경고가 뜨지만, 자기 이동 확인 덕분에 `c`는 그대로
+
+## 컴파일러가 만드는 이동 연산과 다섯의 규칙
+
+- 이동 생성자와 이동 대입 연산자도 `= default`, `= delete`로 명시할 수 있음(8장의 복사 연산처럼)
+- 컴파일러가 이동 연산을 만들어 주는 조건 <CppRef path="cpp/language/move_constructor" />
+  - 기본 이동 생성자: 클래스에 직접 선언한 복사 생성자, 복사 대입 연산자, 이동 대입 연산자, 소멸자가 **하나도 없을 때만**
+  - 기본 이동 대입 연산자: 직접 선언한 복사 생성자, 이동 생성자, 복사 대입 연산자, 소멸자가 **하나도 없을 때만**
+  - 예를 들어 소멸자만 직접 써도 이동 연산은 만들어지지 않음. 그러면 우측값도 복사 연산으로 처리됨
+
+:::caution
+특별 멤버 함수(소멸자, 복사 생성자, 이동 생성자, 복사 대입 연산자, 이동 대입 연산자) 가운데 하나라도 선언했다면 다섯 개를 모두 선언한다. 이를 **다섯의 규칙** (rule of five)이라고 한다. 직접 구현하거나, `= default`나 `= delete`로 명시한다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 우측값 참조, `std::move`, 이동 연산 | C++11 | 없음. 복사하거나 `swap`으로 맞바꿈 |
+| `noexcept` | C++11 | `throw()` |
+| `std::exchange` | C++14 | 값을 가져온 뒤 원본에 직접 대입해 비움 |
+| `auto(x)`, `auto{x}` | C++23 | `std::decay_t<decltype(x)>(x)` 같은 명시적 사본(C++14) 또는 사본 변수를 따로 만듦 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. `std::exchange` 없이 원본을 직접 비움
+
+<RunCode client:load code={moveGridCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::move()`가 객체를 옮긴다?
+  - 우측값 참조로 바꾸는 캐스트일 뿐. 옮기는 일은 골라진 이동 생성자나 이동 대입 연산자가 함
+- 우측값 참조 매개변수는 함수 안에서도 우측값이다?
+  - 이름이 있으므로 좌측값. 다시 넘기려면 `std::move()`
+- 이동 뒤에도 원본을 계속 써도 된다?
+  - 원칙적으로 쓰지 않음. `unique_ptr`·`shared_ptr`처럼 이동 뒤 상태가 정해진 것은 예외
+- 이동 연산에 `noexcept`가 없어도 똑같이 쓰인다?
+  - 표준 컨테이너는 예외가 날 수 있는 이동 대신 복사를 고를 수 있음
+- 소멸자만 직접 쓴 클래스도 이동이 된다?
+  - 이동 연산이 만들어지지 않아 복사로 처리됨. 다섯의 규칙대로 모두 선언할 것
+- 임시 객체를 대입할 때도 `std::move()`를 써야 한다?
+  - 임시 객체는 이미 우측값이라 이동이 저절로 골라짐
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 좌측값 / 우측값 | 주소를 얻을 수 있는 것 / 그 밖(리터럴, 임시 값) |
+| `T&&` | 우측값 참조. 우측값일 때 골라지는 오버로드를 만듦 |
+| `std::move(x)` | `x`를 우측값 참조로 캐스트. 옮기지는 않음 |
+| 이름 있는 `T&&` | 좌측값. 넘길 때 다시 `std::move` |
+| `auto{x}` | C++23. `x`의 사본을 우측값으로 |
+| 이동 생성자·대입 | `T(T&&) noexcept`, `T& operator=(T&&) noexcept`. 가져오고 원본을 비움 |
+| 자기 이동 | 이동 대입에서도 확인 |
+| `std::exchange` | 새 값을 넣고 원래 값을 돌려줌 |
+| 다섯의 규칙 | 특별 멤버 함수 하나를 선언하면 다섯 개 모두 |
+
+## 복습 질문
+
+<details>
+<summary>`std::string s{ "x" };`일 때 `s`, `s + "y"`, `std::move(s)`는 각각 좌측값인가 우측값인가?</summary>
+
+- `s`: 좌측값(이름 있는 변수)
+- `s + "y"`: 우측값(임시 값)
+- `std::move(s)`: 우측값(우측값 참조로 캐스트한 결과)
+
+</details>
+
+<details>
+<summary>`void f(std::string&& t) { g(t); }`에서 `g`가 `std::string&&`를 받으면 왜 컴파일되지 않는가?</summary>
+
+- `t`는 이름이 있으므로 함수 안에서 좌측값. 우측값 참조는 좌측값에 묶이지 않음
+- `g(std::move(t));`로 씀
+
+</details>
+
+<details>
+<summary>이동 생성자가 원본의 포인터를 `nullptr`로 비우지 않으면 무슨 일이 생기는가?</summary>
+
+- 원본과 새 객체가 같은 배열을 가리킴
+- 둘 다 소멸하며 같은 배열을 지움(이중 해제)
+
+</details>
+
+<details>
+<summary>이동 대입 연산자에서 자기 이동 확인이 없으면 `c = std::move(c);`는 어떻게 되는가?</summary>
+
+- `cleanup()`이 `c`의 배열을 지우고 멤버를 비운 뒤, `moveFrom()`이 이미 비워진 자신에게서 가져옴
+- `c`는 배열을 잃고 빈 상태가 됨
+
+</details>
+
+<details>
+<summary>소멸자만 직접 쓴 클래스에 우측값을 넘기면 이동 생성자가 쓰이는가?</summary>
+
+- 쓰이지 않음. 직접 선언한 소멸자가 있으면 이동 연산이 만들어지지 않아 복사 생성자가 쓰임
+- 다섯의 규칙대로 이동 연산을 `= default` 등으로 선언함
+
+</details>

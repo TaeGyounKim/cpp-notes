@@ -1,0 +1,278 @@
+---
+title: 함수와 어트리뷰트
+description: 코드를 이름 붙은 조각으로 나누는 함수, 함수 오버로딩, 컴파일러에 추가 정보를 주는 어트리뷰트를 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import functionCallViz from '../../../../data/ch01/function-call.js';
+import functionBasicCode from '../../../../examples/ch01/function-basic.cpp?raw';
+import functionAutoCode from '../../../../examples/ch01/function-auto.cpp?raw';
+import overloadCode from '../../../../examples/ch01/overload.cpp?raw';
+import nodiscardCode from '../../../../examples/ch01/nodiscard.cpp?raw';
+import maybeUnusedCode from '../../../../examples/ch01/maybe-unused.cpp?raw';
+import noreturnCode from '../../../../examples/ch01/noreturn.cpp?raw';
+import deprecatedCode from '../../../../examples/ch01/deprecated.cpp?raw';
+import likelyAssumeCode from '../../../../examples/ch01/likely-assume.cpp?raw';
+import functionsCpp11Code from '../../../../examples/ch01/functions-cpp11.cpp?raw';
+
+- 다루는 것: 코드를 `main` 하나에 몰아 쓰지 않고 이름 붙은 조각으로 나누는 방법
+- 배우는 요소: 함수의 선언과 정의, 반환 타입 추론, `__func__`, 함수 오버로딩, 어트리뷰트
+- 지금까지 쓴 함수는 `main` 하나뿐. 여기서부터 함수를 직접 만듦
+
+## 함수 만들기
+
+- **함수** (function): 이름을 붙여 둔 코드 묶음. 이름을 불러서 실행함 <CppRef path="cpp/language/functions" />
+- 필요한 이유: 프로그램이 커지면 `main` 하나로는 읽을 수도 고칠 수도 없음 → 하는 일 단위로 쪼갬
+
+### 선언과 정의
+
+- **선언** (declaration): 함수의 이름, 매개변수, 반환 타입만 알리는 것. 본문이 없음 <CppRef path="cpp/language/function" />
+  - 함수 프로토타입(function prototype)이라고도 부름. "어떻게 부르는지"만 보여 준다는 뜻
+- **정의** (definition): 실제로 실행되는 본문까지 적은 것
+
+```cpp
+int calculateTotal(int price, int count);   // 선언
+
+int calculateTotal(int price, int count)    // 정의
+{
+    return price * count;
+}
+```
+
+- 각 부분의 이름
+
+| 부분 | 위 코드에서 | 뜻 |
+| --- | --- | --- |
+| **반환 타입** (return type) | 맨 앞의 `int` | 함수가 돌려주는 값의 타입 |
+| 함수 이름 | `calculateTotal` | 부를 때 쓰는 이름 |
+| **매개변수** (parameter) | `int price`, `int count` | 함수가 받는 값을 담는 변수 |
+| **인수** (argument) | 호출할 때 넘기는 `4500`, `3` | 매개변수에 들어갈 실제 값 |
+| `return` 문 | `return price * count;` | 값을 돌려주고 함수를 끝냄 <CppRef path="cpp/language/return" /> |
+
+- **함수 시그니처** (function signature): 함수 이름과 매개변수 목록을 합친 것. 반환 타입은 들어가지 않음
+- 선언만 있고 정의가 없으면: 컴파일은 되지만 링크 단계에서 오류. 호출할 코드가 존재하지 않기 때문
+- 선언이 필요한 경우: 함수를 정의보다 위쪽에서 호출할 때. 컴파일러는 위에서 아래로 읽으므로 아직 못 본 이름은 모름
+  - 호출하는 곳보다 위에 정의가 있으면 선언을 따로 적지 않아도 됨
+
+### 값을 돌려주지 않는 함수
+
+- 반환 타입 자리에 `void`를 적음
+- 매개변수가 없으면 괄호를 비워 둠: `void printLine()`
+  - C 언어처럼 `(void)`라고 적을 필요가 없음
+
+<RunCode client:load code={functionBasicCode} />
+
+- 해 볼 것: 맨 위의 선언 두 줄을 지우고 실행
+  - 결과: 컴파일 오류. `main`에서 호출하는 시점에 컴파일러가 그 이름을 아직 모름
+
+### 호출하면 일어나는 일
+
+- 함수를 호출하면 인수의 값이 매개변수로 **복사**됨
+- 매개변수는 그 함수 안에서만 쓰는 변수. 함수가 끝나면 사라짐
+
+<StepViz client:load data={functionCallViz} />
+
+- 볼 것: `main`의 `count`와 `getTotal`의 `count`는 이름만 같고 서로 다른 칸
+  - 각 칸의 작은 글씨가 그 변수가 속한 함수
+  - 함수 안에서 매개변수를 바꿔도 호출한 쪽의 변수는 바뀌지 않음
+  - 호출한 쪽의 변수를 바꾸는 방법(참조): 이 장의 뒤쪽 "참조" 글에서 다룸
+
+## 반환 타입 추론 <Badge text="C++14" />
+
+- 반환 타입 자리에 `auto`를 적으면 컴파일러가 `return` 문의 식을 보고 타입을 정함 <CppRef path="cpp/language/function#Return_type_deduction" />
+- 규칙
+  - `return` 문이 여러 개면 모두 **정확히 같은 타입**이어야 함. 컴파일러가 알아서 맞춰 주지 않음
+  - 자기 자신을 호출하는 함수(재귀)도 가능. 단, 첫 번째 `return` 문은 자기 자신을 호출하지 않는 것이어야 함
+
+```cpp
+auto pick(bool flag)
+{
+    if (flag) { return 1; }   // int
+    return 2.5;               // double → 오류: 타입이 서로 다름
+}
+```
+
+### 지금 실행 중인 함수의 이름 <Badge text="C++11" />
+
+- `__func__`: 모든 함수 안에 미리 만들어져 있는 변수. 그 함수의 이름이 들어 있음 <CppRef path="cpp/language/function#func" />
+- 쓰는 곳: 어느 함수가 실행되었는지 기록(로그)을 남길 때
+
+<RunCode client:load code={functionAutoCode} />
+
+## 함수 오버로딩
+
+- **함수 오버로딩** (function overloading): 이름은 같고 매개변수가 다른 함수를 여러 개 만드는 것 <CppRef path="cpp/language/overload_resolution" />
+  - 달라야 하는 것: 매개변수의 개수 또는 타입
+  - 반환 타입만 다른 것은 안 됨. 호출할 때 반환값을 안 쓸 수도 있어서 구별할 수 없음
+- 좋은 점: 같은 일을 하는 함수에 `addInts`, `addDoubles`처럼 이름을 따로 지을 필요가 없음
+- **오버로드 해석** (overload resolution): 넘긴 인수를 보고 컴파일러가 알맞은 함수를 고르는 과정
+
+<RunCode client:load code={overloadCode} />
+
+- 해 볼 것: `main`에 `std::println("{}", add(1, 2.5));`를 추가하고 실행
+  - 결과: 컴파일 오류 `call of overloaded 'add(int, double)' is ambiguous`
+  - 이유: `int` 버전과 `double` 버전 어느 쪽도 인수 하나를 변환해야 해서 우열을 가릴 수 없음
+- "네임스페이스" 글에서 본 것: 서로 다른 네임스페이스의 같은 이름 함수가 `using`으로 함께 들어오는 것도 오버로딩으로 취급됨
+
+## 어트리뷰트 <Badge text="C++11" />
+
+- **어트리뷰트** (attribute): 코드에 붙여 컴파일러에 추가 정보를 주는 표시. 대괄호 두 겹 `[[이름]]`으로 적음 <CppRef path="cpp/language/attributes" />
+- 표준화되기 전: 컴파일러 회사마다 문법이 달랐음 (`__attribute__`, `__declspec` 등)
+- 프로그램의 동작을 바꾸는 것이 아님. 경고를 켜거나 끄고, 최적화에 힌트를 주는 용도
+- 앞 글에서 본 `[[fallthrough]]`도 어트리뷰트
+
+| 어트리뷰트 | 하는 일 | 들어온 표준 |
+| --- | --- | --- |
+| `[[noreturn]]` | 이 함수는 호출한 곳으로 돌아가지 않음 | C++11 |
+| `[[deprecated]]` | 더 이상 권장하지 않음. 쓰면 경고 | C++14 |
+| `[[fallthrough]]` | `switch`의 폴스루가 의도한 것임 | C++17 |
+| `[[nodiscard]]` | 반환값을 버리면 경고 | C++17 (이유 문자열은 C++20) |
+| `[[maybe_unused]]` | 쓰지 않아도 경고하지 않음 | C++17 |
+| `[[likely]]` / `[[unlikely]]` | 이 갈래가 자주 / 드물게 실행됨 | C++20 |
+| `[[assume(식)]]` | 이 식이 참이라고 가정해도 됨 | C++23 |
+
+### [[nodiscard]] <Badge text="C++17" />
+
+- 값을 돌려주는 함수에 붙임. 호출한 쪽이 반환값을 쓰지 않으면 컴파일러가 경고 <CppRef path="cpp/language/attributes/nodiscard" />
+- 쓰는 곳: 오류 코드를 돌려주는 함수. 오류를 무시하고 지나가지 못하게 함
+- 이유를 문자열로 적을 수 있음: `[[nodiscard("이유")]]`. 경고 메시지에 함께 표시됨 <Badge text="C++20" />
+- 함수뿐 아니라 클래스, 구조체, 열거형에도 붙일 수 있음. 그 타입을 돌려주는 모든 함수에 적용됨
+
+<RunCode client:load code={nodiscardCode} />
+
+- 실행 결과의 경고 두 개: `ignoring return value of ... declared with attribute 'nodiscard'`
+
+### [[maybe_unused]] <Badge text="C++17" />
+
+- 쓰지 않는 것에 붙여 "쓰지 않음" 경고를 끔 <CppRef path="cpp/language/attributes/maybe_unused" />
+- 붙일 수 있는 곳: 매개변수, 변수, 함수, 클래스, 구조체, 열거형 등
+
+<RunCode client:load code={maybeUnusedCode} />
+
+- 실행 결과: `depth`에 대한 경고만 나옴. `height`는 `[[maybe_unused]]` 덕분에 조용함
+
+### [[noreturn]] <Badge text="C++11" />
+
+- 호출한 곳으로 절대 돌아가지 않는 함수에 붙임 <CppRef path="cpp/language/attributes/noreturn" />
+  - 그런 함수: 프로그램을 끝내는 함수, 항상 예외를 던지는 함수
+- 효과: 컴파일러가 의도를 알게 되어 엉뚱한 경고를 내지 않음
+
+<RunCode client:load code={noreturnCode} />
+
+- `safeDivide`의 `if` 쪽 갈래에는 `return`이 없음. 그래도 경고가 없는 이유: `stopProgram`이 돌아오지 않는다는 것을 컴파일러가 앎
+- 해 볼 것: `[[noreturn]]`을 지우고 실행
+  - 결과: 경고 `control reaches end of non-void function`
+- 종료 코드가 1로 표시됨: `std::exit(1)`로 끝냈기 때문
+
+### [[deprecated]] <Badge text="C++14" />
+
+- "아직 쓸 수는 있지만 권장하지 않음"이라는 표시. 쓰는 곳마다 경고가 나옴 <CppRef path="cpp/language/attributes/deprecated" />
+- 이유를 문자열로 적을 수 있음. 대신 무엇을 써야 하는지 알려 주는 용도
+- 쓰는 곳: 함수를 당장 지우지 않고, 쓰는 사람들이 새 함수로 옮겨 갈 시간을 줄 때
+
+<RunCode client:load code={deprecatedCode} />
+
+### [[likely]], [[unlikely]], [[assume]]
+
+- 셋 다 최적화를 돕는 힌트. 프로그램의 결과는 바뀌지 않음
+- `[[likely]]` / `[[unlikely]]` <Badge text="C++20" />: `if`나 `switch`의 갈래가 자주 실행되는지 드물게 실행되는지 알림 <CppRef path="cpp/language/attributes/likely" />
+  - 쓸 일이 드묾. 요즘 컴파일러와 CPU는 스스로 잘 예측함
+  - 성능이 아주 중요한 코드에서, 측정해 보고 효과가 있을 때만 사용
+- `[[assume(식)]]` <Badge text="C++23" />: 그 식이 참이라고 가정해도 된다고 알림 <CppRef path="cpp/language/attributes/assume" />
+  - 컴파일러가 그 식을 실제로 검사하지는 않음
+  - 가정이 틀리면 프로그램이 어떻게 동작할지 알 수 없음. 확실할 때만 사용
+  - 예: 음수가 아니라고 가정하면 32로 나누는 코드를 비트 5칸 오른쪽 시프트 하나로 바꿀 수 있음
+
+<RunCode client:load code={likelyAssumeCode} />
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| `auto` 반환 타입 추론 | C++14 | 반환 타입을 직접 적음 |
+| `__func__`, `[[noreturn]]` | C++11 | 그대로 사용 |
+| `[[deprecated]]` | C++14 | 없음. 주석으로 알리거나 컴파일러 전용 문법 사용 |
+| `[[nodiscard]]` | C++17 | 없음. 컴파일러 전용 문법 사용 (GCC: `__attribute__((warn_unused_result))`) |
+| `[[maybe_unused]]` | C++17 | 쓰지 않는 매개변수의 이름을 지움: `int area(int width, int)` |
+| `[[likely]]`, `[[assume]]` | C++20, C++23 | 없음. 없어도 동작은 같음 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={functionsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 매개변수와 인수
+  - 매개변수: 함수를 만들 때 적는 변수 (`int price`)
+  - 인수: 함수를 부를 때 넘기는 값 (`4500`)
+- 반환 타입이 다르다고 오버로딩이 되지는 않음
+  - `int get();`과 `double get();`을 함께 둘 수 없음
+- 어트리뷰트는 강제가 아님
+  - `[[nodiscard]]`를 붙여도 경고일 뿐 컴파일은 됨
+  - 컴파일러가 모르는 어트리뷰트는 무시됨
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| 선언과 정의 | 선언은 부르는 방법, 정의는 본문 | |
+| `void` | 돌려주는 값이 없음 | |
+| 인수 전달 | 값이 매개변수로 복사됨 | |
+| `auto` 반환 타입 | `return` 식에서 타입을 추론. 모든 `return`이 같은 타입 | C++14 |
+| `__func__` | 지금 실행 중인 함수의 이름 | C++11 |
+| 함수 오버로딩 | 이름이 같고 매개변수가 다른 함수들 | |
+| `[[nodiscard]]` | 반환값을 버리면 경고 | C++17 |
+| `[[maybe_unused]]` | 쓰지 않아도 경고하지 않음 | C++17 |
+| `[[noreturn]]` | 돌아오지 않는 함수 | C++11 |
+| `[[deprecated]]` | 권장하지 않음 | C++14 |
+| `[[likely]]`, `[[unlikely]]`, `[[assume]]` | 최적화 힌트 | C++20, C++23 |
+
+## 복습 질문
+
+<details>
+<summary>함수의 선언과 정의는 무엇이 다른가요?</summary>
+
+- 선언: 이름, 매개변수, 반환 타입만 알림. 본문이 없음
+- 정의: 실행되는 본문까지 포함
+
+</details>
+
+<details>
+<summary>`void change(int value) { value = 10; }`를 `int n{ 5 }; change(n);`으로 호출한 뒤 `n`의 값은?</summary>
+
+- 5
+- 인수의 값이 매개변수로 복사되므로 함수 안에서 바꾼 것은 복사본
+
+</details>
+
+<details>
+<summary>`int area(int w, int h);`와 `double area(int w, int h);`를 함께 둘 수 있나요?</summary>
+
+- 없음
+- 매개변수가 같고 반환 타입만 다른 것은 오버로딩이 아님
+
+</details>
+
+<details>
+<summary>오류 코드를 돌려주는 함수에 붙이면 좋은 어트리뷰트는?</summary>
+
+- `[[nodiscard]]`
+- 호출한 쪽이 반환값을 확인하지 않고 버리면 컴파일러가 경고함
+
+</details>
+
+<details>
+<summary>`auto` 반환 타입 함수에서 `return 1;`과 `return 2.5;`를 함께 쓰면 어떻게 되나요?</summary>
+
+- 컴파일 오류
+- 모든 `return` 문의 타입이 정확히 같아야 함. `int`와 `double`은 다른 타입
+
+</details>

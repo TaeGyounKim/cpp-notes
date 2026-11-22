@@ -1,0 +1,341 @@
+---
+title: 'shared_ptr와 weak_ptr'
+description: 소유를 나눠 갖는 shared_ptr와 참조 횟수, 맨 포인터와 섞을 때의 함정, 형변환과 별칭, 소유하지 않고 지켜보는 weak_ptr와 순환 참조, 스마트 포인터를 함수에 넘기고 돌려받는 법을 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import sharedCountViz from '../../../../data/ch07/shared-count.js';
+import basicsCode from '../../../../examples/ch07/shared-basics.cpp?raw';
+import twoOwnersCode from '../../../../examples/ch07/shared-two-owners.cpp?raw';
+import aliasCastCode from '../../../../examples/ch07/shared-alias-cast.cpp?raw';
+import weakCode from '../../../../examples/ch07/weak-ptr.cpp?raw';
+import cycleCode from '../../../../examples/ch07/shared-cycle.cpp?raw';
+import passingCode from '../../../../examples/ch07/smart-passing.cpp?raw';
+import outPtrCode from '../../../../examples/ch07/out-ptr.cpp?raw';
+import outPtrCpp11Code from '../../../../examples/ch07/out-ptr-cpp11.cpp?raw';
+
+- 다루는 것: 여러 곳이 같은 자원을 함께 소유해야 할 때의 스마트 포인터, 그리고 스마트 포인터를 주고받는 규칙
+- 이 글에서 배우는 요소: `std::shared_ptr`, 참조 횟수, 사용자 정의 삭제자, 맨 포인터와 섞을 때의 함정, 형변환 함수, 별칭, `std::weak_ptr`, 순환 참조, 함수에 넘기기와 돌려받기, `enable_shared_from_this`, C 함수와 잇기(`out_ptr`), 7장 정리
+
+## shared_ptr
+
+- 여러 객체나 코드가 같은 포인터를 각자 가지고 있어야 할 때가 있음. `unique_ptr`는 복사할 수 없으니 쓸 수 없음
+- `std::shared_ptr` <CppRef path="cpp/memory/shared_ptr" />: 소유를 **나눠 갖는** 스마트 포인터. 복사할 수 있음
+- 같은 자원을 가리키는 `shared_ptr`가 여럿이면, 언제 자원을 풀어야 하는지 어떻게 아는가? **참조 횟수**로 앎
+
+### 만들고 쓰기
+
+- `unique_ptr`와 비슷하게 씀. 만들 때는 `std::make_shared<T>(인수...)` <CppRef path="cpp/memory/shared_ptr/make_shared" />
+  - `shared_ptr`를 생성자로 직접 만드는 것보다 효율적임(객체와 참조 횟수를 한 번에 잡음)
+  - CTAD는 `shared_ptr`에도 쓸 수 없으므로 타입을 적어야 함
+  - 값 초기화. 원하지 않으면 `make_shared_for_overwrite` <Badge text="C++20" />
+  - C 스타일 배열도 담을 수 있음(`make_shared<int[]>(n)`, <Badge text="C++20" />). 그래도 컨테이너를 권함
+
+:::caution
+`shared_ptr`는 언제나 `make_shared()`로 만든다.
+:::
+
+| 멤버 | 하는 일 |
+| --- | --- |
+| `get()` | 맨 포인터를 꺼냄. 소유는 그대로 |
+| `reset()` | 이 `shared_ptr`만 손을 뗌. 자원은 **마지막** 주인이 손을 뗄 때만 풀림 |
+| `use_count()` | 같은 자원을 나눠 가진 `shared_ptr`의 수 |
+| `release()` | **없음**. 나눠 가진 소유를 혼자 포기하고 꺼낼 방법은 없음 |
+
+<RunCode client:load code={basicsCode} />
+
+- 볼 것
+  - 복사하면 횟수가 늘고, 하나가 사라지거나 `reset`하면 줄어듦
+  - `[-] Intro`는 마지막 주인 `c`가 `reset`하는 순간에야 나옴. "c.reset() 하기 직전"과 "끝" 사이
+
+### 사용자 정의 삭제자
+
+- 기본은 `new`/`delete`(배열이면 `new[]`/`delete[]`)
+- `unique_ptr`보다 쉬움: 삭제자의 타입을 템플릿 인수로 적을 필요가 없음
+
+```cpp
+std::shared_ptr<Connection> connection{ open_connection(7), close_connection };
+```
+
+- 메모리가 아닌 자원에도 씀. 예: C 스타일 파일 함수(`fopen`/`fclose`)로 연 파일을 범위를 벗어나면 저절로 닫게 함. 다만 C++에는 파일을 스스로 닫는 입출력 스트림 클래스가 있음(13장). 이 방법은 대안이 없는 C 라이브러리를 감쌀 때 유용함
+
+## 참조 횟수
+
+- **참조 횟수** (reference count): 어떤 객체를 몇 곳이 쓰고 있는지 세는 기법
+  - 참조 횟수를 세는 스마트 포인터는 하나의 실제 객체를 가리키는 스마트 포인터가 몇 개인지 기록함
+  - 복사할 때마다 횟수를 1 늘림. 하나가 범위를 벗어나거나 `reset`되면 1 줄임
+  - 0이 되면 주인이 더 없으므로 자원을 풂
+- `shared_ptr`는 이 정보를 **제어 블록** (control block)이라는 별도의 작은 메모리에 둠. `make_shared`는 객체와 제어 블록을 한 번에 잡음
+
+<StepViz client:load data={sharedCountViz} />
+
+- 볼 것
+  - 2단계: 복사는 객체를 늘리지 않음. 주인만 늘어남
+  - 3단계: `weak_ptr`는 주인의 수에 들어가지 않음(아래 `weak_ptr` 절)
+  - 5단계: 객체가 지워지는 정확한 순간은 use가 0이 되는 그 줄
+
+### 두 번 지우기를 막아 줌
+
+- 맨 포인터 둘이 같은 메모리를 가리키면, 둘 다 `delete`할 때 두 번 지우기가 됨
+  - 실제로는 함수 호출이 여러 겹이어서, 한 함수가 지운 것을 다른 함수가 또 지우는 식으로 생김
+- `shared_ptr`를 **복사해서** 나눠 가지면 마지막 하나가 사라질 때 딱 한 번만 지워짐
+
+### 맨 포인터와 섞으면 깨짐
+
+- 위의 보장은 맨 포인터가 끼지 않을 때만 성립함
+- 같은 맨 포인터로 `shared_ptr`를 **따로** 두 개 만들면, 둘은 서로를 모르고 각자 참조 횟수 1을 가짐. 둘 다 사라질 때 각자 지움
+
+<RunCode client:load code={twoOwnersCode} flags="-std=c++23 -Wall -Wextra -fsanitize=address -g" />
+
+- 볼 것
+  - 표준 오류의 첫 줄 `1 1`: 둘 다 "주인은 나 하나"라고 앎
+  - `attempting double-free`: 범위가 끝날 때 두 번 지움
+  - `unique_ptr`도 같은 실수를 하면 같은 결과
+- 같은 메모리를 여러 `shared_ptr`가 가리키게 하는 안전한 방법은 **`shared_ptr`를 복사하는 것** 하나뿐
+
+:::caution
+요즘 C++ 코드에서 맨 포인터는 소유가 걸리지 않은 곳에만 쓴다. 소유가 걸리면 기본은 `unique_ptr`, 나눠 가져야 하면 `shared_ptr`. 그리고 `make_unique()`와 `make_shared()`로 만든다. 그러면 `new`를 직접 부를 일이 거의 없고, `delete`를 부를 일은 전혀 없다.
+:::
+
+## 형변환과 별칭
+
+### shared_ptr 형변환
+
+- 맨 포인터를 다른 타입의 포인터로 바꾸듯 `shared_ptr`도 바꿀 수 있음. 모든 변환이 허용되지는 않음
+
+| 함수 | 대응하는 일반 형변환 (10장) |
+| --- | --- |
+| `std::static_pointer_cast` | `static_cast` |
+| `std::dynamic_pointer_cast` | `dynamic_cast` |
+| `std::const_pointer_cast` | `const_cast` |
+| `std::reinterpret_pointer_cast` | `reinterpret_cast` |
+
+- 결과도 `shared_ptr`이고 **같은 소유**를 나눠 가짐(참조 횟수가 늘어남) <CppRef path="cpp/memory/shared_ptr/pointer_cast" />
+- `shared_ptr`에만 있고 `unique_ptr`에는 없음
+
+### 별칭
+
+- **별칭** (aliasing): `shared_ptr`가 한 객체(소유하는 포인터)의 소유를 다른 `shared_ptr`와 나누면서, 실제로는 **다른 객체**(저장된 포인터)를 가리키게 하는 기능
+  - 쓰임: 어떤 객체를 소유하면서 그 객체의 멤버를 가리키기
+  - 참조 횟수에는 소유하는 포인터가 쓰이고, 역참조나 `get()`은 저장된 포인터를 돌려줌
+
+```cpp
+auto profile{ std::make_shared<Profile>() };
+std::shared_ptr<int> age{ profile, &profile->age };   // Profile을 소유, age를 가리킴
+```
+
+<RunCode client:load code={aliasCastCode} />
+
+- 볼 것
+  - 별칭: `profile` 변수가 범위를 벗어나도 `age`가 `Profile` 전체를 붙잡고 있음. `age.reset()`에서야 "Profile 소멸"
+  - 형변환: `dynamic_pointer_cast`로 얻은 `circle`도 주인이 되어 횟수가 2
+
+## weak_ptr
+
+- `std::weak_ptr` <CppRef path="cpp/memory/weak_ptr" />: `shared_ptr`가 관리하는 자원을 가리키되 **소유하지 않는** 스마트 포인터
+  - 소유하지 않으므로 `shared_ptr`가 자원을 푸는 것을 막지 않음
+  - 자신이 사라져도 자원을 지우지 않음
+  - 대신 그 자원이 아직 살아 있는지 알아볼 수 있음
+- 만들 때는 `shared_ptr`나 다른 `weak_ptr`를 넘김
+- 가리키는 것을 쓰려면 `shared_ptr`로 바꿔야 함
+
+| 방법 | 자원이 이미 사라졌다면 |
+| --- | --- |
+| `weak.lock()` | 빈 `shared_ptr`(`nullptr`)를 돌려줌 |
+| `std::shared_ptr<T> p{ weak };` | `std::bad_weak_ptr` 예외를 던짐 |
+
+- `expired()`: 자원이 이미 사라졌는지 확인
+- `weak_ptr`도 C 스타일 배열을 지원함
+
+<RunCode client:load code={weakCode} />
+
+- 볼 것
+  - `watcher`를 만들어도 참조 횟수는 1. 주인으로 세지 않음
+  - `session.reset()`에서 세션이 바로 끝남. `watcher`가 있어도 막지 못함
+  - 그 뒤 `lock()`은 빈 포인터를 돌려줘 "이미 사라짐"
+
+### 순환 참조를 끊기
+
+- `shared_ptr`끼리 서로를 가리키면 **순환 참조** (reference cycle)가 생김
+  - A가 B를 소유하고 B가 A를 소유하면, 바깥의 주인이 모두 사라져도 서로가 서로를 붙잡아 참조 횟수가 0이 되지 않음. 누수
+- 해결: 거꾸로 가리키는 쪽(대개 "부모"를 가리키는 "자식" 쪽)을 `weak_ptr`로
+
+<RunCode client:load code={cycleCode} />
+
+- 볼 것
+  - 순환: 블록이 끝나도 아무 소멸자도 불리지 않음
+  - 고친 판: `FixedMember`가 팀을 `weak_ptr`로 가리켜 순환이 끊김. 둘 다 정상 소멸
+
+## 함수에 넘기기와 돌려받기
+
+### 넘기기
+
+- 스마트 포인터를 매개변수로 받는 것은 **소유를 넘기거나 나눌 때만**
+
+| 함수가 하려는 일 | 매개변수 |
+| --- | --- |
+| 쓰기만 함(소유와 상관없음) | `T&` 또는 `const T&`. `nullptr`이 올 수 있으면 맨 포인터 `T*` |
+| 소유를 나눠 가짐 | `std::shared_ptr<T>`를 **값으로** |
+| 소유를 넘겨받음 | `std::unique_ptr<T>`를 **값으로**. 부르는 쪽은 `std::move`로 넘김 |
+
+- `const std::shared_ptr<T>&`나 `const std::unique_ptr<T>&` 같은 매개변수는 거의 의미가 없음. 소유를 다루지 않을 거라면 그냥 `const T&`로 받음
+
+### 돌려받기
+
+- 스마트 포인터는 **값으로** 쉽고 효율적으로 돌려줄 수 있음
+  - 복사 생략(1장)과 이동 의미론(9장) 덕분. 자세한 원리는 몰라도 됨
+  - `std::unique_ptr<T> create()`처럼 만들어서 돌려주는 함수가 흔함
+
+### 자기 자신의 shared_ptr: enable_shared_from_this
+
+- 멤버 함수 안에서 "나를 가리키는 `shared_ptr`"를 돌려줘야 할 때가 있음
+- 클래스가 `std::enable_shared_from_this<T>`를 물려받으면 두 멤버 함수가 생김 <CppRef path="cpp/memory/enable_shared_from_this" />
+
+| 멤버 함수 | 하는 일 |
+| --- | --- |
+| `shared_from_this()` | 이 객체의 소유를 나눠 갖는 `shared_ptr` |
+| `weak_from_this()` <Badge text="C++17" /> | 이 객체를 지켜보는 `weak_ptr` |
+
+- 조건: 객체가 **이미** `shared_ptr`에 담겨 있어야 함
+  - 그렇지 않은 객체에서 `shared_from_this()`를 부르면 `std::bad_weak_ptr` 예외 (C++17부터)
+  - `weak_from_this()`는 언제나 부를 수 있지만 그런 경우 빈 `weak_ptr`
+- 완전히 틀린 구현: `return std::shared_ptr<Track>(this);`
+  - `this`로 새 `shared_ptr`를 만들면 기존 주인과 따로 노는 **두 번째** 소유 집단이 생김. 위 "맨 포인터와 섞으면 깨짐"과 같은 두 번 지우기
+
+<RunCode client:load code={passingCode} />
+
+- 볼 것
+  - `play`: 참조로 받아 횟수가 변하지 않음
+  - `queue.add(song)`: 값으로 받아 소유를 나눔. 횟수 2
+  - `getShared()`: `shared_from_this()`로 같은 소유 집단에 들어감. 횟수 3
+  - `archive(load("Demo"))`: 함수가 돌려준 `unique_ptr`를 그대로 넘겨 소유가 옮겨 감
+
+## C 함수와 스마트 포인터 잇기: out_ptr
+
+- C 방식 함수는 흔히 반환값으로 오류 코드를 돌려주고, 결과는 **출력 매개변수**(포인터의 포인터)로 내보냄
+
+```cpp
+ErrorCode create_buffer(int size, int** out);
+```
+
+- C++23 이전에는 스마트 포인터를 이 자리에 바로 넘길 수 없었음. 맨 포인터로 받은 뒤 `reset`으로 옮겨 담아야 했음
+- `std::out_ptr()`, `std::inout_ptr()` <Badge text="C++23" /> <CppRef path="cpp/memory/out_ptr_t/out_ptr" />: 스마트 포인터를 "포인터의 포인터" 자리에 넘기게 해 줌. 함수가 돌아오면 받은 포인터를 스마트 포인터에 담아 줌. 헤더 `<memory>`
+  - `out_ptr`: 스마트 포인터가 비어 있을 때. 결과를 받기만 함
+  - `inout_ptr`: 스마트 포인터가 이미 무언가를 가지고 있고, C 함수가 그것을 풀고 새 값을 넣는 경우
+
+<RunCode client:load code={outPtrCode} />
+
+## auto_ptr는 쓰지 말 것
+
+- C++11 이전 표준 라이브러리에는 `std::auto_ptr`라는 간단한 스마트 포인터가 있었음
+- 심각한 결함이 있었음. 하나는 `vector` 같은 표준 컨테이너 안에서 제대로 동작하지 않는 것(복사하면 소유가 몰래 옮겨 감)
+- C++11에서 폐기 권고, C++17에서 표준 라이브러리에서 아예 삭제됨. `unique_ptr`와 `shared_ptr`가 대신함
+- 오래된 코드에서 보면 알아볼 수 있게 소개할 뿐. 절대 쓰지 말 것
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `shared_ptr`, `weak_ptr`, `make_shared`, `enable_shared_from_this`, 형변환 함수 | C++11 | Boost 라이브러리의 같은 이름의 클래스 |
+| `weak_from_this`, `reinterpret_pointer_cast`, `shared_ptr`의 배열 지원 | C++17 | `weak_ptr`를 멤버로 두고 직접 관리 |
+| `make_shared<T[]>`, `make_shared_for_overwrite` | C++20 | `std::shared_ptr<T[]>(new T[n])` |
+| `std::out_ptr`, `std::inout_ptr` | C++23 | 맨 포인터로 받은 뒤 `reset` (아래 코드) |
+| `std::println` | C++23 | `std::cout <<` |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={outPtrCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `shared_ptr`를 복사하면 객체도 복사된다?
+  - 객체는 하나 그대로. 주인(참조 횟수)만 늘어남
+- `reset()`을 하면 객체가 지워진다?
+  - 그 `shared_ptr` 하나만 손을 뗌. 다른 주인이 남아 있으면 객체는 살아 있음
+- 같은 맨 포인터로 `shared_ptr`를 여러 개 만들어도 참조 횟수가 맞게 세어진다?
+  - 따로 만든 `shared_ptr`는 서로를 모름. 각자 1이고 각자 지움. 나눠 가지려면 `shared_ptr`를 복사함
+- `weak_ptr`가 있으면 객체가 지워지지 않는다?
+  - `weak_ptr`는 주인이 아님. 마지막 `shared_ptr`가 사라지면 지워짐. `lock()`으로 살아 있는지 확인하고 씀
+- `shared_ptr`면 누수가 절대 없다?
+  - 서로를 소유하는 순환이 생기면 누수. 한쪽을 `weak_ptr`로
+- 무조건 `shared_ptr`를 쓰면 편하다?
+  - 소유가 흐려지고, 참조 횟수를 세는 비용이 듦. 기본은 `unique_ptr`
+
+## 7장을 마치며
+
+- 동적 메모리 문제를 피하는 열쇠 둘 (검사 도구와 신중한 코딩 말고도)
+  - 포인터가 속에서 어떻게 동작하는지 이해하기: 메모리를 보는 두 관점, 스택과 자유 저장소, 배열과 포인터의 관계
+  - 소유가 걸린 곳에 맨 포인터와 오래된 C 방식을 쓰지 않기: `std::string`, `std::vector`, 스마트 포인터처럼 메모리를 스스로 관리하는 객체를 쓰기
+- 7장에서 다룬 것: 동적 메모리와 `new`/`delete`, 배열, 포인터와 배열의 관계, 포인터 산술, 흔한 메모리 실수와 도구, `unique_ptr`, `shared_ptr`, `weak_ptr`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `shared_ptr` | 공동 소유. 마지막 주인이 손을 뗄 때 자원을 풂 |
+| 참조 횟수 | 복사하면 +1, 사라지거나 `reset`하면 −1, 0이면 풂 |
+| 만들기 | `std::make_shared<T>(인수)` |
+| 맨 포인터와 섞기 | 같은 맨 포인터로 따로 만들면 두 번 지우기. 복사로만 나눔 |
+| 형변환 / 별칭 | `*_pointer_cast`, `shared_ptr<U>{ 소유자, 멤버 주소 }` |
+| `weak_ptr` | 소유하지 않고 지켜봄. `lock()`, `expired()`. 순환 참조를 끊음 |
+| 넘기기 | 쓰기만: `T&`. 나눔: `shared_ptr` 값. 넘김: `unique_ptr` 값 |
+| 돌려받기 | 스마트 포인터를 값으로 |
+| `out_ptr` | C 함수의 출력 매개변수에 스마트 포인터를 바로 |
+
+## 복습 질문
+
+<details>
+<summary>`auto a{ std::make_shared<int>(1) }; auto b{ a }; a.reset();` 뒤 `b.use_count()`와 정수 객체의 상태는?</summary>
+
+- `b.use_count()`는 1
+- 정수 객체는 살아 있음. `b`가 마지막 주인
+
+</details>
+
+<details>
+<summary>`int* raw{ new int{ 1 } }; std::shared_ptr<int> p{ raw }; std::shared_ptr<int> q{ raw };`의 문제와 고치는 법은?</summary>
+
+- `p`와 `q`가 서로 모르는 두 소유 집단. 각자 참조 횟수 1이고, 범위가 끝나면 두 번 지움
+- `auto p{ std::make_shared<int>(1) }; auto q{ p };`처럼 복사로 나눔
+
+</details>
+
+<details>
+<summary>캐시가 객체를 가리키되, 객체가 다른 곳에서 모두 버려지면 캐시도 그것을 붙잡지 않게 하려면?</summary>
+
+- 캐시에 `weak_ptr`를 둠
+- 쓸 때 `lock()`으로 `shared_ptr`를 얻고, 비어 있으면 이미 사라진 것으로 처리함
+
+</details>
+
+<details>
+<summary>부모 노드가 자식들을 `shared_ptr`로 소유하고, 자식도 부모를 `shared_ptr`로 가리킨다. 무엇이 문제이고 어떻게 고치는가?</summary>
+
+- 순환 참조. 바깥에서 모두 놓아도 서로 붙잡아 참조 횟수가 0이 되지 않아 누수
+- 자식이 부모를 가리키는 쪽을 `weak_ptr`로 바꿈
+
+</details>
+
+<details>
+<summary>객체를 그리기만 하는 함수의 매개변수로 `const std::shared_ptr<Shape>&`보다 나은 것은?</summary>
+
+- `const Shape&`
+- 소유와 상관없는 함수는 스마트 포인터를 받을 이유가 없음. 스마트 포인터를 쓰지 않는 쪽에서도 부를 수 있게 됨
+
+</details>
+
+<details>
+<summary>`enable_shared_from_this`를 쓰지 않고 `return std::shared_ptr<Node>(this);`로 자기 자신을 돌려주면?</summary>
+
+- 기존 주인과 따로 노는 새 소유 집단이 생겨, 둘 다 사라질 때 같은 객체를 두 번 지움
+- `std::enable_shared_from_this<Node>`를 물려받고 `shared_from_this()`를 씀
+
+</details>

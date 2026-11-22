@@ -1,0 +1,182 @@
+---
+title: static·const 멤버 함수와 mutable
+description: 객체가 아니라 클래스에 속하는 static 멤버 함수, 객체를 바꾸지 않겠다고 약속하는 const 멤버 함수, const 함수 안에서도 바꿀 수 있는 mutable 데이터 멤버를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import staticConstCode from '../../../../examples/ch09/static-const-mutable.cpp?raw';
+import staticConstCpp11Code from '../../../../examples/ch09/static-const-cpp11.cpp?raw';
+
+- 다루는 것: 멤버 함수에 붙는 여러 선택지 가운데 `static`과 `const`, 그리고 그와 짝을 이루는 `mutable`
+- 이 글에서 배우는 요소: `static` 멤버 함수, `const` 멤버 함수, `mutable` 데이터 멤버
+
+## static 멤버 함수
+
+- 데이터 멤버처럼 멤버 함수도 객체 하나하나가 아니라 **클래스 전체**에 속할 때가 있음 <CppRef path="cpp/language/static" />
+- 예: 8장의 `Temperature`에 있던 도우미 `format()`, `parse()`
+  - 특정 객체의 데이터를 쓰지 않고 받은 값만으로 일함. 그러니 `static`이 될 수 있음
+
+```cpp
+class Temperature
+{
+    // ...
+private:
+    static std::string format(double value);
+    static double parse(std::string_view text);
+};
+```
+
+- 정의는 앞과 같음. 클래스 밖에서 정의할 때는 `static`을 다시 적지 않음
+- `static` 멤버 함수의 성질
+  - 특정 객체에 대해 불리지 않으므로 **`this` 포인터가 없음**. 비`static` 멤버에 그냥 접근할 수 없음
+    - 접근하면 오류: `invalid use of member 'Temperature::m_celsius' in static member function`
+  - 사실상 보통 함수와 같음. 다른 점은 클래스의 `private`·`protected` `static` 멤버에 접근할 수 있다는 것
+  - 같은 타입의 객체를 매개변수(참조나 포인터)로 받으면, 그 객체의 `private`·`protected` 비`static` 멤버에도 접근할 수 있음
+- 부르는 법
+  - 클래스의 멤버 함수 안에서는 보통 멤버 함수처럼 부름: `format(m_celsius)`
+  - 클래스 밖에서는 클래스 이름과 범위 지정 연산자로: `Temperature::toFahrenheit(100.0)`. 접근 제어는 똑같이 적용됨
+
+:::note
+`format()`과 `parse()`를 `private static` 멤버 함수로 만든 것은 `static` 멤버 함수를 보이려는 예다. 둘 다 특정 객체의 데이터를 쓰지 않으므로, 클래스 밖 구현 파일의 이름 없는 네임스페이스(11장)에 보통 함수로 두어도 된다.
+:::
+
+## const 멤버 함수
+
+- `const` 객체: 값을 바꿀 수 없는 객체
+- `const` 객체, `const` 참조, `const` 객체를 가리키는 포인터로는 **데이터 멤버를 바꾸지 않는다고 보장한 멤버 함수만** 부를 수 있음 <CppRef path="cpp/language/member_functions" />
+- 보장하는 법: 멤버 함수에 `const`를 붙임. 8장에서 이미 해 왔음
+
+```cpp
+class Temperature
+{
+public:
+    double celsius() const;
+    std::string text() const;
+    // ...
+};
+
+double Temperature::celsius() const   // 정의에도 const를 적어야 함
+{
+    return m_celsius;
+}
+```
+
+- `const`는 멤버 함수 원형의 일부. 선언과 정의 모두에 적음
+- 의미: "이 함수 안에서 객체의 내부 값을 바꾸지 않는다"는 사용자와의 약속
+  - 함수 안에서는 모든 데이터 멤버가 `const` 참조처럼 보임. 바꾸려 하면 컴파일 오류: `assignment of member 'Temperature::m_celsius' in read-only object`
+- `static` 멤버 함수에는 `const`를 붙일 수 없음. 특정 객체에 대해 일하지 않으니 바꿀 객체도 없어 의미가 없음
+  - 오류: `static member function ... cannot have cv-qualifier`
+
+| 객체 | 부를 수 있는 멤버 함수 |
+| --- | --- |
+| 비`const` 객체 | `const`, 비`const` 모두 |
+| `const` 객체, `const` 참조·포인터 | `const`만 |
+
+- `const` 참조로 비`const` 함수를 부르면 오류: `passing 'const Temperature' as 'this' argument discards qualifiers`
+
+:::tip
+객체를 바꾸지 않는 멤버 함수는 모두 `const`로 선언하는 습관을 들인다. 그래야 프로그램에서 `const` 참조를 자유롭게 쓸 수 있다.
+:::
+
+- `const` 객체도 소멸됨. 소멸자는 불리지만, 소멸자 자체를 `const`로 선언할 수는 없음(`destructors may not be cv-qualified`)
+
+## mutable 데이터 멤버
+
+- **논리적으로는** `const`인데 데이터 멤버를 하나 바꾸는 멤버 함수가 있음
+  - 사용자에게 보이는 값에는 영향이 없지만, 기술적으로는 변경이라 컴파일러가 `const`를 허락하지 않음
+- 예: 값을 얼마나 자주 읽는지 세고 싶음. `celsius()`, `text()`가 불릴 때마다 카운터를 올림
+  - 그러면 두 함수가 컴파일러 눈에 비`const`가 됨. 원하는 것이 아님
+- 해법: 카운터를 `mutable`로 선언 <CppRef path="cpp/language/cv" />
+  - `const` 멤버 함수 안에서도 이 멤버는 바꿔도 된다고 컴파일러에게 알림
+
+```cpp
+class Temperature
+{
+    // ...
+private:
+    double m_celsius;
+    mutable unsigned m_reads{ 0 };
+};
+
+double Temperature::celsius() const
+{
+    ++m_reads;   // const 함수지만 mutable 멤버는 바꿀 수 있음
+    return m_celsius;
+}
+```
+
+<RunCode client:load code={staticConstCode} />
+
+- 볼 것
+  - `show()`는 `const` 참조를 받으므로 `text()`, `celsius()`처럼 `const` 함수만 부를 수 있음
+  - 읽은 횟수가 4: `show()`가 두 번 불리고, 매번 `text()`와 `celsius()`가 각각 한 번씩 셈
+  - `Temperature::toFahrenheit()`는 객체 없이 클래스 이름으로 부름
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 클래스 안 멤버 초기화 `mutable unsigned m_reads{ 0 };` | C++11 | 생성자 초기화 목록에서 초기화 |
+| `std::string_view`, `std::from_chars` | C++17 | `const std::string&`, `std::strtod` |
+| `std::format` | C++20 | `std::ostringstream` |
+| `std::println` | C++23 | `std::cout <<` |
+
+- `static` 멤버 함수, `const` 멤버 함수, `mutable`은 처음 표준(C++98)부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={staticConstCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `static` 멤버 함수 안에서도 `this`를 쓸 수 있다?
+  - `this`가 없음. 비`static` 멤버를 쓰려면 객체를 매개변수로 받아야 함
+- 클래스 밖에서 `static` 멤버 함수를 정의할 때도 `static`을 적는다?
+  - 선언에만 적음. 정의에는 적지 않음
+- `const`는 선언에만 적으면 된다?
+  - 원형의 일부라 정의에도 적어야 함. 빠뜨리면 선언과 맞는 함수가 없다는 컴파일 오류(`no declaration matches`)
+- `const` 객체로는 아무 멤버 함수도 부를 수 없다?
+  - `const` 멤버 함수는 부를 수 있음
+- `mutable`을 쓰면 `const`가 의미 없어진다?
+  - 사용자에게 보이지 않는 내부 기록(카운터, 캐시 등)에만 쓰는 것. 보이는 값을 바꾸는 데 쓰면 약속을 어기는 것
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `static` 멤버 함수 | 클래스에 속함. `this` 없음. 밖에서는 `클래스::함수()` |
+| `const` 멤버 함수 | 객체를 바꾸지 않음. 선언과 정의 모두에 `const` |
+| `const` 객체 | `const` 멤버 함수만 부를 수 있음 |
+| `static`에 `const` | 불가. 바꿀 객체가 없음 |
+| `mutable` | `const` 멤버 함수 안에서도 바꿀 수 있는 멤버. 보이지 않는 내부 기록용 |
+
+## 복습 질문
+
+<details>
+<summary>`static double toKelvin(double c) { return c + m_offset; }`가 컴파일되지 않는 이유는? (`m_offset`은 비`static` 데이터 멤버)</summary>
+
+- `static` 멤버 함수에는 `this`가 없어 어떤 객체의 `m_offset`인지 알 수 없음
+- 객체를 매개변수로 받거나, `m_offset`을 `static`으로 바꾸거나, 함수를 비`static`으로 바꿈
+
+</details>
+
+<details>
+<summary>`void print(const Temperature& t)` 안에서 `t.celsius()`가 오류라면 무엇을 빠뜨렸는가?</summary>
+
+- `celsius()`를 `const` 멤버 함수로 선언하지 않았음
+- `const` 참조로는 `const` 멤버 함수만 부를 수 있음
+
+</details>
+
+<details>
+<summary>`const` 멤버 함수 안에서 캐시 멤버를 채우고 싶다면?</summary>
+
+- 캐시 멤버를 `mutable`로 선언함
+- 사용자에게 보이는 값이 바뀌지 않으니 논리적으로는 여전히 `const`
+
+</details>
