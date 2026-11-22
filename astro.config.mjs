@@ -42,6 +42,7 @@ const parts = [
 		items: [
 			chapter('7장. 메모리 관리', 'part3/ch07'),
 			chapter('8장. 클래스와 객체 익히기', 'part3/ch08'),
+			chapter('9장. 클래스와 객체 다루기', 'part3/ch09'),
 		],
 	},
 ];
