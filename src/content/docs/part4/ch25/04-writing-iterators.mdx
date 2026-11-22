@@ -1,0 +1,263 @@
+---
+title: 반복자 만들기
+description: directed_graph의 양방향 const 반복자를 만들기 위한 반복자 특성(iterator_category 등 다섯 별칭), 역참조·증감·비교 연산자, friend로 그래프와 연결하기, begin·end·cbegin·cend, bidirectional_iterator 콘셉트로 검사하기, 반복자를 쓰도록 insert·erase·find를 표준 방식으로 바꾸기를 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import giCode from '../../../../examples/ch25/graph-iterator.cpp?raw';
+import giCpp11Code from '../../../../examples/ch25/graph-iterator-cpp11.cpp?raw';
+
+- 다루는 것: 3편에서 정한 대로 `directed_graph`의 반복자를 만들고, 반복자를 중심으로 멤버 함수를 표준 방식으로 고치기
+- 이 글에서 배우는 요소: 반복자 특성 다섯, `operator*`/`->`/`++`/`--`/`==`, `begin`/`end`, `insert`가 돌려주는 `pair<iterator, bool>`, `erase(pos)`, `find`
+
+## 반복자 클래스
+
+- 반복자는 특정 그래프 타입 하나에 딸림(`directed_graph<int>`의 반복자, `directed_graph<string>`의 반복자)
+  - 여기서는 `directed_graph` 안의 **중첩 클래스** `const_iterator`로 둠. 그러면 그래프의 `T`를 그대로 씀
+  - 다른 방법: 그래프 타입을 템플릿 매개변수로 받는 별도 클래스 템플릿으로 만들기
+- 반복자처럼 동작하면 반복자임. 특정 클래스를 상속할 필요는 없음
+- 그러나 표준 알고리즘이 쓰려면 반복자의 **특성** (traits)을 알려야 함
+
+### 반복자 특성
+
+- `iterator_traits<It>`(17장)는 반복자마다 타입 별칭 다섯을 정의함. 기본 구현은 반복자 클래스 **안에 있는** 같은 이름의 별칭을 가져옴 <CppRef path="cpp/iterator/iterator_traits" />
+- 그래서 반복자 클래스 안에 다섯 별칭을 직접 둠
+
+```cpp
+class const_iterator {
+public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using value_type = T;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const T*;
+    using reference = const T&;
+    // ...
+};
+```
+
+- `iterator_category`: 반복자의 종류를 나타내는 태그 <CppRef path="cpp/iterator/iterator_tags" />
+  - `input_iterator_tag`, `output_iterator_tag`, `forward_iterator_tag`, `bidirectional_iterator_tag`, `random_access_iterator_tag`, `contiguous_iterator_tag`
+  - **연속 반복자** (contiguous iterator): 이웃한 원소가 메모리에서도 이웃한 임의 접근 반복자 <Badge text="C++20" />
+- `pointer`, `reference`가 `const`인 것은 값을 바꿀 수 없게 하려는 것
+
+### 데이터 멤버와 생성자
+
+- 감싼 `vector` 반복자 하나: `typename std::vector<node>::const_iterator m_it`
+- 생성자
+  - **기본 생성자**: 사용자가 초기화 없이 반복자 변수를 선언할 수 있게. 아무것도 가리키지 않고, 이 상태로 연산하면 결과는 정의되지 않아도 됨
+  - `vector` 반복자를 받는 생성자: 그래프만 쓰도록 `private`에 두고, 그래프를 `friend`로 지정 <CppRef path="cpp/language/friend" />
+
+```cpp
+const_iterator() = default;
+private:
+    friend class directed_graph;
+    explicit const_iterator(node_iter it) : m_it{ it } {}
+    node_iter m_it{};
+```
+
+- 그래프도 반복자의 `m_it`를 꺼내야 하므로(인덱스 계산, `erase`) `friend`가 필요함. 중첩 클래스라 자기를 감싼 클래스의 `private`에는 원래 접근할 수 있음
+- 복사 생성자, 대입 연산자, 소멸자는 기본 동작으로 충분해 쓰지 않음
+
+### 연산자
+
+- `operator*`와 `operator->`는 비대칭(15장)
+  - `*`: 실제 값의 참조. 여기서는 노드의 값
+  - `->`: 다시 `->`를 적용할 수 있는 것을 돌려줌. 여기서는 값의 포인터
+
+```cpp
+reference operator*() const { return m_it->value; }
+pointer operator->() const { return &m_it->value; }
+```
+
+- 증감: 감싼 반복자를 옮김. 후위형은 옮기기 전 사본을 돌려줌
+
+```cpp
+const_iterator& operator++() { ++m_it; return *this; }
+const_iterator operator++(int)
+{
+    auto old{ *this };
+    ++m_it;
+    return old;
+}
+// --도 같은 모양
+```
+
+- 비교: `operator==`를 `= default`로. 데이터 멤버(`m_it`)를 비교함 <Badge text="C++20" />. `!=`는 자동으로 됨
+
+### 그래프에 연결하기
+
+- 그래프의 타입 별칭과 `begin`/`end` 계열
+
+```cpp
+using iterator = const_iterator;   // 값을 바꿀 수 없으므로 둘 다 const
+
+iterator begin() const noexcept { return iterator{ m_nodes.begin() }; }
+iterator end() const noexcept { return iterator{ m_nodes.end() }; }
+const_iterator cbegin() const noexcept { return begin(); }
+const_iterator cend() const noexcept { return end(); }
+```
+
+- 표준 요건에는 `const`가 아닌 `begin()`, `end()` 오버로드도 있음. 둘 다 `const` 반복자를 돌려주므로 여기서는 `const` 판 하나로 둘 다 처리
+  - 요건을 글자 그대로 지키려면 `const`가 아닌 판을 따로 선언해도 됨
+- 이제 `begin()`부터 `end()`까지 `vector` 순서, 즉 노드를 넣은 순서로 훑음
+
+### 콘셉트로 검사하기
+
+- 직접 만든 반복자가 요건을 채웠는지 `static_assert`로 컴파일 시간에 확인 <Badge text="C++20" /> <CppRef path="cpp/iterator/bidirectional_iterator" />
+
+```cpp
+using graph_it = directed_graph<int>::const_iterator;
+static_assert(std::bidirectional_iterator<graph_it>);
+```
+
+- 기본 생성자가 없거나, 후위 `++`가 반복자를 돌려주지 않거나, `difference_type`이 없으면 이 검사가 실패함. 범위 알고리즘(`std::ranges::...`)도 같은 콘셉트로 검사함
+
+## 반복자를 쓰도록 멤버 함수 고치기
+
+### insert
+
+- 표준 컨테이너처럼 `std::pair<iterator, bool>`을 돌려줌
+  - `bool`: 실제로 넣었으면 `true`, 이미 있었으면 `false`
+  - `iterator`: 새로 넣은 원소, 또는 이미 있던 원소
+
+```cpp
+std::pair<iterator, bool> insert(T value)
+{
+    if (auto it{ find(value) }; it != end()) { return { it, false }; }
+    m_nodes.push_back(node{ std::move(value), {} });
+    return { std::prev(end()), true };
+}
+```
+
+- 위치 **힌트**를 받는 오버로드: `vector` 기반이라 힌트는 쓸모가 없으므로 무시하고 위 함수에 넘김
+  - 이 오버로드가 있어야 `std::insert_iterator`(17장)가 동작함. `insert_iterator`는 `c.insert(pos, value)`를 부름 <CppRef path="cpp/iterator/insert_iterator" />
+- **반복자 범위**를 받는 오버로드: 멤버 함수 템플릿. `std::copy`와 `std::inserter`로 구현 <CppRef path="cpp/iterator/inserter" />
+
+```cpp
+template <std::input_iterator It>
+void insert(It first, It last)
+{
+    // end()는 무시되는 힌트
+    std::copy(first, last, std::inserter(*this, end()));
+}
+```
+
+### erase
+
+- 값 대신 반복자를 받아 지우고, **지운 원소 다음** 원소의 반복자를 돌려줌(`vector::erase`처럼)
+
+```cpp
+iterator erase(const_iterator pos);
+iterator erase(const_iterator first, const_iterator last);   // [first, last)
+```
+
+- 구현은 2편의 노드 삭제(인덱스 당기기)를 인덱스로 부름
+  - 범위 삭제는 뒤에서부터 지움. 앞에서부터 지우면 남은 인덱스가 계속 당겨져 계산이 어긋남
+  - 반환할 반복자도 인덱스로 다시 만듦. 지운 뒤 `vector`의 반복자는 무효화되었기 때문
+
+### find
+
+- 값으로 찾아 반복자를 돌려줌. 없으면 `end()`. `std::set::find`와 같은 모양
+
+```cpp
+iterator find(const T& value) const
+{
+    return iterator{ std::ranges::find(m_nodes, value, &node::value) };
+}
+```
+
+## 반복자 쓰기
+
+- 범위 `for`, 표준 알고리즘, 반복자 쌍으로 다른 컨테이너 만들기가 모두 됨
+
+```cpp
+for (const auto& v : graph) { std::println("{}", v); }
+auto n{ std::ranges::count_if(graph, pred) };
+std::vector<std::string> copy(graph.begin(), graph.end());
+auto last{ *std::prev(graph.end()) };    // 양방향이라 --가 됨
+```
+
+<RunCode client:load code={giCode} />
+
+- 볼 것
+  - `insert`가 돌려준 `pair`를 구조적 바인딩으로 받음. 이미 있으면 `second`가 `false`
+  - 범위 삽입이 `insert_iterator`로 힌트판 `insert`를 부름
+  - 범위 `for`, `ranges::count_if`, `vector` 생성자, `std::prev`
+  - `erase(pos)`가 다음 원소(`incheon`)의 반복자를 돌려줌. 범위 삭제 뒤에도 간선 `seoul → busan`은 유지됨
+  - 파일 맨 위의 `static_assert`가 통과해야 컴파일됨
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 반복자 콘셉트, `contiguous_iterator_tag`, `== default` | C++20 | `iterator_traits` 특성만, `==`/`!=` 직접 |
+| `if` 초기화문, 구조적 바인딩 | C++17 | 변수를 밖에 선언, `.first`/`.second` |
+| `std::prev`, `std::next`, `using` 별칭 | C++11 | `--it` 직접, `typedef` |
+| 반복자 특성과 태그 | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨(반복자 부분만 간단히)
+
+<RunCode client:load code={giCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 반복자는 표준 클래스를 상속해야 한다?
+  - 상속할 필요 없음. 특성 별칭과 연산자만 갖추면 됨(예전의 `std::iterator` 기반 클래스는 C++17에서 폐기 예정)
+- `operator->`도 값의 참조를 돌려준다?
+  - 포인터를 돌려줌. `->`가 다시 적용되기 때문
+- 후위 `++`는 `*this`의 참조를 돌려준다?
+  - 옮기기 **전** 사본을 값으로 돌려줌
+- 반복자 범위를 지울 때 앞에서부터 지운다?
+  - 인덱스가 당겨지므로 뒤에서부터. 또는 지울 때마다 다시 계산
+- `insert`의 힌트판은 쓸모없으니 빼도 된다?
+  - `insert_iterator`, `std::inserter`가 그 판을 부름
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 특성 | `iterator_category`, `value_type`, `difference_type`, `pointer`, `reference` |
+| 표현 | `vector` 반복자를 감쌈. 기본 생성자, `private` 생성자 + `friend` |
+| 연산자 | `*`, `->`, 전위·후위 `++`/`--`, `==`(`!=` 자동) |
+| 그래프 | `iterator`/`const_iterator` 별칭, `begin`/`end`/`cbegin`/`cend` |
+| 검사 | `static_assert(std::bidirectional_iterator<...>)` |
+| 멤버 함수 | `insert` → `pair<iterator, bool>`, 힌트판, 범위판. `erase(pos)`, `erase(first, last)`, `find` |
+
+## 복습 질문
+
+<details>
+<summary>`directed_graph<int>`에서 짝수 노드를 모두 지우는 코드를 반복자로 쓰려면?</summary>
+
+```cpp
+for (auto it{ g.begin() }; it != g.end();) {
+    if (*it % 2 == 0) { it = g.erase(it); }   // 다음 원소로
+    else { ++it; }
+}
+```
+
+- `erase`가 돌려준 반복자를 받아야 함. 지운 뒤 기존 반복자는 무효
+
+</details>
+
+<details>
+<summary>반복자에 `using iterator_concept = std::bidirectional_iterator_tag;`를 따로 두는 경우는?</summary>
+
+- C++20 콘셉트가 보는 종류(`iterator_concept`)와 예전 특성(`iterator_category`)을 다르게 알리고 싶을 때. 예: 역참조가 참조를 돌려주지 않아 예전 기준으로는 입력 반복자지만, C++20 기준으로는 임의 접근인 반복자
+- 이 그래프 반복자는 둘이 같으므로 `iterator_category` 하나로 충분
+
+</details>
+
+<details>
+<summary>`std::ranges::sort(graph)`는 왜 컴파일되지 않는가?</summary>
+
+- `sort`는 임의 접근 반복자와 원소를 바꿀 수 있는(쓸 수 있는) 반복자를 요구함
+- 그래프 반복자는 양방향이고 `const`라 둘 다 채우지 못함. 정렬된 사본이 필요하면 `vector`로 복사한 뒤 정렬
+
+</details>
