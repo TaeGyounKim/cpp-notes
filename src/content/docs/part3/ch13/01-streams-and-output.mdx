@@ -1,0 +1,276 @@
+---
+title: 스트림과 출력
+description: 스트림이라는 비유, 표준 스트림 cin·cout·cerr·clog, 버퍼링과 플러시, 출력 연산자와 put·write, 스트림 상태와 오류 처리, 출력 조작자로 서식 바꾸기를 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import outputCode from '../../../../examples/ch13/stream-output.cpp?raw';
+import outputCpp11Code from '../../../../examples/ch13/stream-output-cpp11.cpp?raw';
+
+- 다루는 것: C++의 입출력 스트림. 이 장의 앞부분은 스트림, 뒷부분은 파일 시스템 라이브러리
+- 이 글에서 배우는 요소: 스트림의 개념, 표준 스트림, 버퍼링과 `flush()`, `<<`, `put()`, `write()`, 스트림 상태, 출력 조작자
+
+:::tip
+이 사이트의 예제는 대부분 `std::print()`와 `std::println()`으로 콘솔에 출력한다. 표준 출력에 쓸 때는 스트림보다 이쪽이 읽기 쉽고 짧고 빠르므로 이쪽을 권한다. 그래도 스트림을 쓰는 코드는 반드시 만나게 되므로 동작을 알아야 한다.
+:::
+
+## 스트림이란
+
+- 처음에는 `printf()` 같은 C 스타일 입출력보다 복잡해 보임. 뒤에 있는 비유가 더 깊어서일 뿐, 예를 몇 개 보면 익숙해짐
+- **스트림** (stream): 데이터가 흘러가는 통로 <CppRef path="cpp/io" />
+  - 1장에서 `cout`을 데이터를 던져 넣는 통로에 비유했음. 넣은 것이 화면(콘솔)에 써짐
+  - 스트림마다 **방향**과 연결된 **원천** 또는 **목적지**가 다름
+  - `cout`: 방향은 출력, 목적지는 콘솔. `c`는 콘솔이 아니라 문자(character) 기반 스트림이라는 뜻
+  - `cin`: 방향은 입력, 원천은 콘솔
+- `<iostream>`에 미리 정의된 스트림(모두 `std` 네임스페이스)
+
+| 스트림 | 설명 |
+| --- | --- |
+| `cin` | 입력 스트림. "입력 콘솔"에서 읽음 |
+| `cout` | 버퍼가 있는 출력 스트림. "출력 콘솔"에 씀 |
+| `cerr` | 버퍼가 없는 출력 스트림. "오류 콘솔"에 씀(흔히 출력 콘솔과 같음) |
+| `clog` | `cerr`의 버퍼 있는 판 |
+
+- `std::print()`, `std::println()`은 기본으로 `cout`에 쓰지만, 첫 인수로 다른 스트림을 줄 수 있음: `std::println(std::cerr, "오류")`
+- `wchar_t`용 넓은 문자 판도 있음: `wcin`, `wcout`, `wcerr`, `wclog`(21장)
+
+### 버퍼링
+
+- **버퍼가 있는** (buffered) 스트림은 받은 데이터를 바로 보내지 않고 모아 두었다가 덩어리로 보냄
+- **버퍼가 없는** (unbuffered) 스트림은 바로 보냄
+- 버퍼링은 보통 성능 때문. 파일처럼 한 번에 크게 쓸 때 빠른 목적지가 있음
+- `flush()`로 버퍼에 모인 데이터를 강제로 보낼 수 있음
+
+### 위치
+
+- 모든 입력 스트림에는 원천이, 모든 출력 스트림에는 목적지가 연결됨
+- 스트림에는 데이터 말고도 **현재 위치**가 있음. 다음 읽기나 쓰기가 일어날 곳
+
+:::note
+GUI 프로그램에는 보통 콘솔이 없다. `cout`에 써도 사용자에게 보이지 않는다. 라이브러리를 만든다면 `cout`, `cin`, `cerr`, `clog`가 있다고 가정하지 않는다. 콘솔 프로그램에서 쓰일지 GUI 프로그램에서 쓰일지 모르기 때문이다.
+:::
+
+## 스트림의 원천과 목적지
+
+- 데이터를 받거나 내보내는 것이라면 무엇에든 스트림 개념을 쓸 수 있음(네트워크, MIDI 악기 등)
+- C++에서 흔한 원천·목적지는 넷: 콘솔, 파일, 문자열, 고정 크기 버퍼 배열 <Badge text="C++23" />
+  - **콘솔 스트림**: 실행 중에 사용자 입력을 받고 결과를 보여 줌
+  - **파일 스트림**: 파일 시스템에서 읽고 씀. C의 `fprintf()`, `fwrite()`, `fputs()`, `fscanf()`, `fread()`, `fgets()`를 대신함(4편)
+  - **문자열 스트림**: 문자열에 스트림 비유를 적용함. C의 `sprintf()`, `sscanf()` 등을 대신함(3편)
+  - **고정 버퍼 배열 스트림**: 어떻게 할당했든 메모리 블록 위에서 스트림을 씀(3편)
+- 프린터, 네트워크 같은 다른 스트림은 플랫폼에 따라 달라 여기서 다루지 않음
+
+## 스트림으로 출력하기
+
+### 기본
+
+- 출력 스트림은 `<ostream>`에 정의됨. `<iostream>`은 입력과 출력을 모두 포함하고 미리 정의된 스트림 객체도 선언함 <CppRef path="cpp/io/basic_ostream" />
+- `<<` 연산자: 가장 간단한 출력 방법. `int`, 포인터, `double`, 문자 같은 기본 타입, `std::string`, C 스타일 문자열을 출력할 수 있음
+- `<<`를 **이어 쓸** 수 있음. `operator<<`가 스트림의 참조를 돌려주므로 바로 같은 스트림에 `<<`를 또 쓸 수 있음
+
+```cpp
+int count{ 11 };
+std::cout << "개수는 " << count << "개" << '\n';
+```
+
+- `'\n'`과 `std::endl`의 차이
+  - `'\n'`은 줄만 바꿈
+  - `std::endl`은 줄을 바꾸고 **버퍼도 비움**
+
+:::caution
+`std::endl`은 버퍼를 비우므로 성능이 중요한 코드(촘촘한 반복문 등)에서는 아껴 쓴다. 보통은 `'\n'`이면 된다.
+:::
+
+### put()과 write()
+
+- 서식 없이 날 것 그대로 출력하는 멤버 함수
+  - `put()`: 문자 하나
+  - `write()`: 문자 배열과 길이
+
+```cpp
+const char* text{ "raw" };
+std::cout.write(text, std::strlen(text));
+std::cout.put('!');
+```
+
+### flush()
+
+- 출력 스트림은 보통 데이터를 바로 쓰지 않고 모아 둠. 다음 경우에 모인 데이터를 내보냄(**플러시**, flush)
+  - `std::endl` 조작자를 만났을 때
+  - 스트림이 범위를 벗어나 소멸될 때
+  - 버퍼가 찼을 때
+  - 명시적으로 비우라고 할 때
+  - 연결된 입력 스트림에서 입력을 요청할 때(`cin`을 쓰면 `cout`이 비워짐. 연결하는 법은 4편)
+- 명시적으로 비우기: `std::cout.flush();`
+- 모든 출력 스트림에 버퍼가 있는 것은 아님. `cerr`는 버퍼가 없음
+
+## 출력 오류 처리
+
+- 출력 오류는 여러 상황에서 생김: 없는 파일을 열려 할 때, 디스크가 가득 차 쓰기가 실패할 때 등
+- 지금까지의 예는 간결하려고 오류를 무시했지만, 실제로는 반드시 처리해야 함
+- 스트림 상태를 묻는 멤버 함수 <CppRef path="cpp/io/basic_ios" />
+
+| 멤버 | 참이 되는 때 |
+| --- | --- |
+| `good()` | 정상적으로 쓸 수 있는 상태 |
+| `bad()` | 치명적인 오류가 남(파일 끝 같은 치명적이지 않은 상태와 구별) |
+| `fail()` | 가장 최근 연산이 실패함. 다음 연산이 성공할지는 모름 |
+| `eof()` | 파일 끝에 닿음 |
+
+- 스트림은 `bool`로 바꿀 수 있음. 결과는 `!fail()`과 같음
+
+```cpp
+std::cout.flush();
+if (!std::cout) {
+    std::println(std::cerr, "표준 출력을 비우지 못함");
+}
+```
+
+- 파일 끝에 닿으면 `good()`과 `fail()` 모두 거짓. 관계는 `good() == (!fail() && !eof())`
+- 실패하면 **예외**를 던지게 할 수도 있음
+  - `exceptions()`로 어떤 상태에서 던질지 정함
+  - `std::ios_base::failure`를 잡고 `what()`(설명), `code()`(오류 코드)를 봄. 얼마나 쓸모 있는 정보인지는 표준 라이브러리 구현에 따라 다름
+
+```cpp
+std::cout.exceptions(std::ios::failbit | std::ios::badbit | std::ios::eofbit);
+try {
+    std::cout << "안녕\n";
+} catch (const std::ios_base::failure& ex) {
+    std::println(std::cerr, "예외: {}, 코드 {}", ex.what(), ex.code().value());
+}
+```
+
+- 오류 상태를 되돌리기: `std::cout.clear();`
+- 콘솔 출력보다는 파일 입출력에서 오류를 더 자주 검사함. 여기의 멤버 함수는 다른 스트림에도 그대로 쓰임
+
+## 출력 조작자
+
+- **조작자** (manipulator): 데이터 대신, 또는 데이터와 함께 스트림에 넣어 스트림의 **동작을 바꾸는** 객체 <CppRef path="cpp/io/manip" />
+- 이미 본 `std::endl`도 조작자. 줄바꿈 출력과 버퍼 비우기를 묶은 것
+- 자주 쓰는 조작자(대부분 `<ios>`, `<iomanip>`)
+
+| 조작자 | 하는 일 |
+| --- | --- |
+| `boolalpha` / `noboolalpha` | `bool`을 `true`·`false`로 / `1`·`0`으로(기본) |
+| `hex`, `oct`, `dec` | 16진수, 8진수, 10진수 |
+| `fixed`, `scientific`, `defaultfloat` | 소수를 고정 소수점, 지수 표기, 기본 서식으로 |
+| `setprecision(n)` | `fixed`·`scientific`이면 소수점 아래 자릿수, 아니면 전체 유효 숫자 수 |
+| `setw(n)` | 다음 출력의 필드 폭 |
+| `setfill(c)` | `setw`의 폭을 채울 문자 |
+| `showpoint` / `noshowpoint` | 소수 부분이 없는 부동소수점에도 소수점을 늘 / 안 보임 |
+| `put_money(값)` | 금액을 서식에 맞춰 씀 |
+| `put_time(시각, 서식)` | 시각을 서식에 맞춰 씀 |
+| `quoted(문자열)` <Badge text="C++14" /> | 따옴표로 감싸고 안의 따옴표를 이스케이프함 |
+
+- `setprecision`, `setw`, `setfill`, `put_money`, `put_time`, `quoted`는 인수를 받는 **매개변수가 있는 조작자**
+- 한 번 넣은 조작자는 되돌릴 때까지 계속 적용됨. **`setw`만 예외**로 바로 다음 출력 한 번에만 적용됨
+- `std::println`의 서식 지정과 비교
+
+```cpp
+std::println("[{:6}]", 42);                                   // [    42]
+std::cout << '[' << std::setw(6) << 42 << "]\n";              // 같음
+std::println("[{:0>6}]", 42);                                 // [000042]
+std::cout << '[' << std::setfill('0') << std::setw(6) << 42 << "]\n";
+```
+
+- 지역 설정에 따른 서식, 금액, 시각 출력
+
+```cpp
+std::cout.imbue(std::locale{ "" });            // 지금 지역 설정을 따름(21장)
+std::cout << 1234567 << '\n';                  // 예: 1,234,567
+std::cout << std::put_money("120000") << '\n'; // 지역에 따라 금액 서식
+
+std::time_t now{ std::time(nullptr) };
+std::tm local{ *std::localtime(&now) };
+std::cout << std::put_time(&local, "%c") << '\n';   // 지역의 날짜·시각 서식
+```
+
+- 결과는 실행 환경의 지역 설정에 따라 다르므로 정적 코드로만 보임. Microsoft Visual C++에서는 `localtime()`에 보안 경고가 날 수 있음(`localtime_s()`를 쓰거나 경고를 끔)
+
+### 조작자 대신 멤버 함수
+
+- 조작자 없이도 대부분 같은 일을 하는 멤버 함수가 있음. 예: `precision()`
+- 멤버 함수는 **이전 값을 돌려주므로** 되돌리기 쉬움
+
+```cpp
+auto old{ std::cout.precision(4) };   // 바꾸고 이전 값을 받아 둠
+std::cout << 1.23456789 << '\n';      // 1.235
+std::cout.precision(old);             // 되돌림
+```
+
+<RunCode client:load code={outputCode} />
+
+- 볼 것
+  - `setw(6)`은 다음 출력 한 번에만 적용됨
+  - `setprecision(3)`이 기본 서식에서는 유효 숫자 3자리(1.23), `fixed`에서는 소수점 아래 3자리(1.235)
+  - `quoted`가 안의 따옴표를 `\"`로 이스케이프함
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::print`, `std::println` | C++23 | `std::cout`과 조작자, 또는 `printf()` |
+| `std::format` 서식 문자열 | C++20 | `setw`, `setfill` 등 조작자 |
+| `std::quoted` | C++14 | 따옴표와 이스케이프를 직접 처리 |
+| `defaultfloat`, `put_money`, `put_time` | C++11 | `std::cout.unsetf(std::ios::floatfield)`, `strftime()` 등 |
+| 고정 버퍼 배열 스트림 | C++23 | `std::strstream`(C++98부터 권장하지 않음) |
+
+- 스트림, `<<`, `put()`·`write()`·`flush()`, 상태 함수, 대부분의 조작자는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={outputCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `cout`의 `c`는 콘솔이다?
+  - 문자(character)
+- `'\n'`과 `std::endl`은 같다?
+  - `std::endl`은 버퍼도 비움. 반복문 안에서는 성능을 해칠 수 있음
+- `setw`는 한 번 넣으면 계속 적용된다?
+  - 다음 출력 한 번만. 다른 조작자는 되돌릴 때까지 계속
+- `setprecision(3)`은 언제나 소수점 아래 3자리다?
+  - `fixed`·`scientific`일 때만. 기본 서식에서는 전체 유효 숫자 수
+- `good()`이 거짓이면 오류가 난 것이다?
+  - 파일 끝(`eof()`)에 닿아도 거짓. 실패 여부는 `fail()`이나 `bool` 변환으로
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 스트림 | 방향과 원천·목적지가 있는 데이터 통로, 현재 위치가 있음 |
+| 표준 스트림 | `cin`, `cout`(버퍼), `cerr`(버퍼 없음), `clog`(버퍼) |
+| 원천·목적지 | 콘솔, 파일, 문자열, 고정 버퍼 배열(C++23) |
+| 출력 | `<<` 이어 쓰기, `put()`, `write()` |
+| 플러시 | `endl`, 소멸, 버퍼 가득, `flush()`, 연결된 입력 |
+| 상태 | `good()`, `bad()`, `fail()`, `eof()`, `bool` 변환은 `!fail()`, `clear()` |
+| 조작자 | `boolalpha`, `hex`, `fixed`, `setprecision`, `setw`(한 번만), `setfill`, `quoted` |
+
+## 복습 질문
+
+<details>
+<summary>`std::cout << std::setw(5) << 1 << 2;`의 출력은?</summary>
+
+- 공백 4개 뒤에 `12`. `setw(5)`는 바로 다음 출력 `1`에만 적용되어 폭 5에 오른쪽 정렬되고, 그 뒤 `2`는 폭 없이 바로 붙음
+
+</details>
+
+<details>
+<summary>프로그램이 갑자기 죽을 수 있는 곳에서 로그를 남긴다. `cout`과 `cerr` 중 무엇이 안전한가?</summary>
+
+- `cerr`. 버퍼가 없어 쓰는 즉시 내보냄. `cout`은 버퍼에 남은 채로 죽으면 내용이 사라질 수 있음
+
+</details>
+
+<details>
+<summary>잠깐 `precision`을 바꿨다가 원래대로 되돌리려면?</summary>
+
+- `auto old{ std::cout.precision(n) };`으로 이전 값을 받아 두고, 나중에 `std::cout.precision(old);`
+
+</details>
