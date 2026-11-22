@@ -1,0 +1,186 @@
+---
+title: 범위 팩토리와 입력 스트림 뷰
+description: 필요할 때 값을 만들어 내는 범위 팩토리(iota, repeat 등), 입력 스트림을 뷰로 다루는 istream_view, C++23에서 범위를 컨테이너로 바꾸는 ranges::to와 from_range 생성자, 컨테이너의 범위 멤버 함수를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import facCode from '../../../../examples/ch17/factories.cpp?raw';
+import facCpp11Code from '../../../../examples/ch17/factories-cpp11.cpp?raw';
+
+- 다루는 것: 컨테이너 없이 값을 만들어 내는 뷰, 표준 입력을 뷰로 읽기, 뷰를 다시 컨테이너로 모으기
+- 이 글에서 배우는 요소: 범위 팩토리, 무한 범위, `istream_view`, `ranges::to`, `from_range`, 범위 멤버 함수
+
+## 범위 팩토리
+
+- **범위 팩토리** (range factory) <Badge text="C++20" />: 원소를 필요할 때 **게으르게** 만들어 내는 뷰를 만듦 <CppRef path="cpp/ranges/iota_view" />
+
+| 클래스(`std::ranges`) | 팩토리 함수(`std::views`) | 만드는 뷰 |
+| --- | --- | --- |
+| `empty_view` | `views::empty<T>` | 빈 뷰 |
+| `single_view` | `views::single(값)` | 원소 하나 |
+| `iota_view` | `views::iota(시작)`, `views::iota(시작, 끝)` | 시작값부터 1씩 늘어나는 원소. 끝이 없으면 무한, 있으면 [시작, 끝) |
+| `repeat_view` <Badge text="C++23" /> | `views::repeat(값)`, `views::repeat(값, n)` | 같은 값을 끝없이 / n번 되풀이 |
+| `basic_istream_view`, `istream_view` | `views::istream<T>(스트림)` | 입력 스트림에서 `>>`로 읽은 원소 |
+
+- 앞 글의 범위 어댑터처럼 클래스 생성자로 만들거나 팩토리 함수를 씀. 다음 둘은 같음: 10, 11, 12, …의 무한 뷰
+
+```cpp
+std::ranges::iota_view{ 10 }
+std::views::iota(10)
+```
+
+### 무한 범위
+
+- `views::iota(100)`은 끝이 없는 범위. 그래도 거르고 변환하고 처음 몇 개만 가질 수 있음
+  - 모든 연산이 게으르게, 원소를 훑을 때만 일어나기 때문
+
+```cpp
+auto ids{ std::views::iota(100)
+          | std::views::filter([](int n) { return n % 7 == 0; })
+          | std::views::take(4) };   // 105, 112, 119, 126
+```
+
+- 단, `take` 없이 무한 범위를 출력하거나 `for`로 끝까지 훑으면 **끝나지 않음**. 위의 `iota(100)`이나 `filter`까지만 한 중간 뷰를 출력하면 안 됨
+
+## 입력 스트림을 뷰로
+
+- `std::ranges::istream_view<T>{ 스트림 }` 또는 `std::views::istream<T>(스트림)`: 입력 스트림에서 `operator>>`로 읽은 원소의 뷰 <CppRef path="cpp/ranges/basic_istream_view" />
+- 표준 입력을 다른 뷰와 이어 붙일 수 있음
+
+```cpp
+// 음수가 나올 때까지 읽음
+for (int r : std::ranges::istream_view<int>{ std::cin }
+             | std::views::take_while([](int r) { return r >= 0; })) {
+    readings.push_back(r);
+}
+```
+
+- 스트림이 끝나거나 읽기가 실패해도 멈춤(2편의 `istream_iterator`와 같음)
+
+## 범위를 컨테이너로
+
+- <Badge text="C++23" /> 전에는 범위를 컨테이너로 바꾸기가 쉽지 않았음
+- **`std::ranges::to`**: 범위를 컨테이너로 바꿈 <CppRef path="cpp/ranges/to" />
+  - 뷰도 범위이므로 뷰의 원소를 컨테이너에 모을 수 있음
+  - 컨테이너도 범위이므로 컨테이너를 다른 (원소 타입이 다를 수도 있는) 컨테이너로 바꿀 수 있음
+
+```cpp
+auto s1{ std::ranges::to<std::set>(vec) };                // 원소 타입은 추론
+auto s2{ vec | std::ranges::to<std::set<double>>() };     // 파이프로, 타입 지정
+auto v2{ std::views::iota(10, 15)
+         | std::views::transform([](int v) { return v / 2.0; })
+         | std::ranges::to<std::vector<double>>() };      // 5, 5.5, 6, 6.5, 7
+```
+
+- **`std::from_range`** 생성자: 모든 표준 컨테이너에 첫 인수로 `std::from_range` 태그를 받는 생성자가 생김 <CppRef path="cpp/ranges/from_range" />
+
+```cpp
+std::set<double> s3{ std::from_range, vec };
+std::string word{ std::from_range, part };   // split한 부분 범위를 문자열로
+```
+
+- 쓰임새: `views::split`으로 나눈 각 부분을 `std::string`으로 바꾸고 `ranges::to<std::vector>()`로 단어 벡터를 만듦
+
+### 컨테이너의 범위 멤버 함수
+
+- <Badge text="C++23" /> 컨테이너와 범위를 잇는 `xyz_range()` 꼴의 멤버 함수
+  - `insert_range`, `append_range`, `prepend_range`, `assign_range`, `replace_range`(문자열), `push_range`(어댑터), `push_front_range`, `push_back_range`
+  - 어느 컨테이너가 무엇을 지원하는지는 컨테이너마다 다름(18장)
+
+```cpp
+std::vector<int> log;
+log.append_range(std::views::iota(1, 4));                 // 1, 2, 3
+log.insert_range(log.begin(), std::views::repeat(0, 2));  // 0, 0, 1, 2, 3
+```
+
+<RunCode client:load code={facCode} stdin="5 8 3 8 -1 9" />
+
+- 볼 것
+  - 무한한 `iota(100)`에서 7의 배수 넷만 꺼냄
+  - 입력 칸의 `-1`에서 읽기를 멈추므로 `9`는 읽지 않음. 입력을 바꿔 다시 실행해 볼 것
+  - `ranges::to<std::set>`과 `from_range` 생성자는 같은 결과
+  - `split` → `from_range`로 문자열 → `ranges::to<std::vector>`로 단어 벡터
+  - `append_range`, `insert_range`로 뷰를 컨테이너에 바로 넣음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `views::repeat`, `ranges::to`, `from_range`, `append_range` 등 | C++23 | 반복문, 반복자 범위 생성자, 반복자 범위를 받는 `insert` |
+| `views::iota`, `istream_view` 등 범위 팩토리 | C++20 | `std::iota` 알고리즘(C++11)으로 채운 컨테이너, `while (std::cin >> x)` |
+
+- 무한 수열은 뷰 없이는 만들 수 없어, 필요한 개수를 셀 때까지 도는 반복문으로 씀
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={facCpp11Code} flags="-std=c++11 -Wall -Wextra" stdin="5 8 3 8 -1 9" />
+
+## 헷갈리기 쉬운 점
+
+- `views::iota(1, 5)`는 1부터 5까지다?
+  - 끝은 포함하지 않음. 1, 2, 3, 4
+- `views::iota(100)`을 출력해 보면 된다?
+  - 무한 범위라 끝나지 않음. `take` 등으로 끝을 정한 뒤 훑음
+- `std::ranges::to<std::set>(v)`에는 원소 타입을 꼭 적어야 한다?
+  - `std::set`처럼 템플릿 이름만 주면 원소 타입을 추론함. 다른 타입으로 바꿀 때만 `std::set<double>`처럼 적음
+- 뷰를 변수에 담으면 원소가 저장된다?
+  - 저장하려면 `ranges::to`로 컨테이너를 만듦
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 범위 팩토리 | `views::empty`, `single`, `iota`, `repeat`(C++23), `istream` |
+| 무한 범위 | `iota(n)`, `repeat(v)`. 게으르므로 가능. `take` 등으로 끝냄 |
+| `istream_view` | 입력 스트림을 뷰로. 다른 어댑터와 이음 |
+| `ranges::to` | 범위를 컨테이너로(C++23). `ranges::to<std::vector>()` |
+| `from_range` | 컨테이너의 범위 생성자(C++23) |
+| 범위 멤버 함수 | `append_range`, `insert_range` 등(C++23) |
+
+## 복습 질문
+
+<details>
+<summary>10부터 100까지의 수를 제곱해 5로 나누어떨어지는 것을 빼고 문자열로 바꾼 `std::vector<std::string>`을 만들려면?</summary>
+
+```cpp
+auto result{ std::views::iota(10, 101)
+             | std::views::transform([](int n) { return n * n; })
+             | std::views::filter([](int n) { return n % 5 != 0; })
+             | std::views::transform([](int n) { return std::to_string(n); })
+             | std::ranges::to<std::vector>() };
+```
+
+</details>
+
+<details>
+<summary>표준 입력에서 `-1`이 나올 때까지 정수를 읽어 벡터에 담는 것을 반복문 없이 쓰려면?</summary>
+
+```cpp
+auto values{ std::views::istream<int>(std::cin)
+             | std::views::take_while([](int x) { return x != -1; })
+             | std::ranges::to<std::vector>() };
+```
+
+</details>
+
+<details>
+<summary>`views::repeat(0, 3)`과 `views::repeat(0)`의 차이는?</summary>
+
+- 앞은 0을 3번 되풀이하는 유한 뷰, 뒤는 0을 끝없이 되풀이하는 무한 뷰
+
+</details>
+
+## 17장을 마치며
+
+- 반복자: 컨테이너의 구조를 몰라도 원소를 훑게 하는 추상화
+  - 출력 스트림 반복자는 표준 출력을 반복자 기반 알고리즘의 대상으로, 입력 스트림 반복자는 표준 입력을 데이터 원본으로 씀
+  - 삽입·역방향·이동 반복자 어댑터로 다른 반복자를 바꿔 씀
+- 범위 라이브러리: 어떻게가 아니라 **무엇을** 하고 싶은지 쓰는 함수형 스타일
+  - 범위의 원소에 적용할 연산을 이어 붙인 파이프라인은 게으르게 실행됨. 결과 뷰를 훑기 전에는 아무것도 하지 않음
+- 다음 장(18장): 표준 라이브러리 컨테이너
