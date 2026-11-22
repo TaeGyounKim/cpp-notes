@@ -1,0 +1,257 @@
+---
+title: directed_graph 설계와 기본 연산
+description: 표준 라이브러리 규칙을 따르는 컨테이너를 만드는 순서, 방향 그래프와 인접 리스트 표현, directed_graph의 인터페이스, 노드·간선의 삽입과 삭제(인덱스 당기기), 비교, swap, 인접 노드 얻기를 직접 구현하며 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import eraseViz from '../../../../data/ch25/graph-erase.js';
+import gbCode from '../../../../examples/ch25/graph-basic.cpp?raw';
+import gbCpp11Code from '../../../../examples/ch25/graph-basic-cpp11.cpp?raw';
+
+- 다루는 것: 표준 라이브러리에 없는 자료 구조인 방향 그래프를 컨테이너로 만들기. 이 글은 그 첫 단계인 기본 구현
+- 이 글에서 배우는 요소: 인접 리스트, `directed_graph`의 인터페이스, 노드·간선 삽입과 삭제, 비교, `swap`
+
+## 컨테이너를 만드는 순서
+
+- 표준 라이브러리는 모든 컨테이너가 지켜야 할 **요건**을 정해 둠 <CppRef path="cpp/named_req/Container" />
+  - 순차 컨테이너(`vector` 같은), 정렬 연관 컨테이너(`map` 같은), 비정렬 연관 컨테이너(`unordered_map` 같은)가 되려면 추가 요건도 지켜야 함
+- 권하는 순서
+  1. 클래스 템플릿으로 만드는 등 일반 규칙만 따르는 **기본 컨테이너**를 먼저 만듦. 세부 요건은 아직 신경 쓰지 않음
+  2. **반복자**를 붙여 표준 라이브러리와 함께 동작하게 함(4편)
+  3. 기본 컨테이너 요건의 **멤버 함수와 타입 별칭**을 채움(3편)
+  4. 추가 요건이 있으면 채움
+- 이 장은 이 순서로 **방향 그래프** (directed graph, digraph)를 만듦
+
+## 방향 그래프
+
+- 표준 라이브러리의 일부 컨테이너가 내부 구현에 그래프를 쓸 수는 있지만, 사용자가 쓸 그래프 자료 구조는 없음
+- 구성
+  - **노드** (node, 정점 vertex)의 집합
+  - 노드를 잇는 **간선** (edge). 간선마다 **방향**이 있음(화살표). 그래서 "방향" 그래프
+- 메모리에 담는 방법: 간선 목록, 인접 행렬, **인접 리스트** (adjacency list) 등. 여기서는 인접 리스트
+  - 노드를 `vector`에 담고, 노드마다 자기에게서 나가는 간선이 가리키는 이웃 노드 목록을 가짐
+
+| 노드 | 인접 리스트 |
+| --- | --- |
+| A | B, C |
+| B | C |
+| C | A |
+| D | C |
+
+- 표의 한 줄이 `vector`의 원소 하나: 노드의 값과 그 인접 리스트
+- 노드 `T`의 값은 그래프 안에서 서로 달라야 함
+- 가장 빠른 구현을 만드는 것이 목적이 아님. **표준 라이브러리 방식대로 자료 구조를 만드는 과정**을 따라가는 것이 목적
+
+## 노드 표현
+
+- 노드 하나: 값과, 이웃 노드의 **인덱스** 집합
+  - `std::set<std::size_t>`: 같은 이웃이 두 번 들어가지 않음 <CppRef path="cpp/container/set" />
+- 사용자가 직접 쓸 것이 아니므로 `directed_graph` 안에 비공개로 둠
+
+```cpp
+template <typename T>
+class directed_graph {
+    // ...
+private:
+    struct node {
+        T value;
+        std::set<std::size_t> targets;   // 나가는 간선이 가리키는 노드의 인덱스
+    };
+    std::vector<node> m_nodes;
+};
+```
+
+- 인덱스로 이웃을 찾아야 하므로 노드는 인덱스로 접근할 수 있는 `vector`에 담음
+- `T`에는 제약을 걸지 않음. `vector`처럼, 원소에 필요한 요건은 실제로 쓰는 연산에 따라 달라짐
+
+## 인터페이스
+
+- 기본 연산 셋(삽입, 삭제, 찾기)과 교환
+
+```cpp
+template <typename T>
+class directed_graph {
+public:
+    bool insert(T value);
+    bool erase(const T& value);
+    bool insert_edge(const T& from, const T& to);
+    bool erase_edge(const T& from, const T& to);
+    void clear() noexcept;
+    std::size_t size() const noexcept;
+    const T& operator[](std::size_t index) const;
+    std::set<T> adjacent_values(const T& value) const;
+    bool operator==(const directed_graph& rhs) const;
+    void swap(directed_graph& other) noexcept;
+};
+```
+
+- 복사·이동 생성자, 대입 연산자, 소멸자를 직접 정의하지 않음. **0의 규칙**(9장): 데이터 멤버 `vector`가 알아서 함
+- 바뀌는 연산은 그래프가 실제로 바뀌었는지를 `bool`로 돌려줌
+
+## 구현
+
+### 찾기 도우미
+
+- 삽입과 삭제 모두 "이 값의 노드가 어디 있나"가 필요하므로 비공개 도우미를 둠
+- 값으로 노드의 인덱스를 찾고, 없으면 빈 `optional`
+
+```cpp
+std::optional<std::size_t> index_of(const T& value) const
+{
+    auto it{ std::ranges::find(m_nodes, value, &node::value) };   // 프로젝션
+    if (it == m_nodes.end()) { return std::nullopt; }
+    return static_cast<std::size_t>(it - m_nodes.begin());
+}
+```
+
+:::note
+도우미가 `typename std::vector<node>::iterator`처럼 템플릿 매개변수에 의존하는 타입을 클래스 밖에서 반환 타입으로 쓰면, 그 앞에 `typename`을 붙여야 한다(12장). 멤버 함수를 클래스 안에서 정의하거나 `auto` 반환 타입을 쓰면 이런 긴 이름을 줄일 수 있다.
+:::
+
+### 노드와 간선 삽입
+
+- `insert(T value)`: 같은 값이 없을 때만 `vector` 끝에 노드를 추가
+  - 값으로 받아 `std::move`로 넣음. 인수를 넘기는 최적의 방법(9장)
+- `insert_edge(from, to)`: 두 노드가 모두 있으면 `from`의 인덱스 집합에 `to`의 인덱스를 넣음
+  - `set::insert()`는 `pair<iterator, bool>`을 돌려줌(18장). `.second`가 실제로 넣었는지
+  - 그래프가 바뀐 경우에만 `true`
+
+```cpp
+bool insert_edge(const T& from, const T& to)
+{
+    auto f{ index_of(from) };
+    auto t{ index_of(to) };
+    if (!f || !t) { return false; }
+    return m_nodes[*f].targets.insert(*t).second;
+}
+```
+
+### 노드 삭제
+
+- 두 단계
+  1. 모든 노드의 인접 집합에서 지울 노드의 인덱스를 없앰
+  2. `vector`에서 노드를 지움
+- 문제: 노드를 지우면 **뒤의 노드들이 한 칸씩 앞으로** 와 인덱스가 바뀜
+  - 그래서 1단계에서 지울 노드보다 큰 인덱스는 **하나씩 줄여야** 함
+  - `set`의 원소는 고칠 수 없으므로(정렬 순서가 깨짐) 새 집합을 만들어 바꿔 끼움
+
+```cpp
+for (node& n : m_nodes) {
+    std::set<std::size_t> shifted;
+    for (std::size_t i : n.targets) {
+        if (i < k) { shifted.insert(i); }
+        else if (i > k) { shifted.insert(i - 1); }   // i == k는 버림
+    }
+    n.targets = std::move(shifted);
+}
+m_nodes.erase(m_nodes.begin() + k);
+```
+
+<StepViz client:load data={eraseViz} />
+
+- 간선 삭제는 간단함: 두 노드가 있으면 `from`의 집합에서 `to`의 인덱스를 지움
+
+### 나머지
+
+- `clear()`: `m_nodes.clear()`
+- `swap()`: 데이터 멤버가 `vector` 하나뿐이므로 그것만 교환. `noexcept`
+  - 표준 컨테이너처럼 비멤버 `swap(a, b)`도 두고 멤버 `swap`에 넘김
+- `operator[]`: 인덱스로 노드 값에 접근. `vector`처럼 범위를 검사하지 않음. 값은 바꾸면 안 되므로 `const T&`만 돌려줌
+  - 값을 바꾸면 "값이 서로 다름"이라는 불변식이 깨질 수 있음
+- `size()`: 노드 수
+- `adjacent_values(value)`: 그 노드의 이웃 인덱스를 값으로 바꾼 `set<T>`. 노드가 없으면 빈 집합
+
+### 비교
+
+- 두 그래프는 같은 노드 집합과 같은 간선 집합을 가지면 같음
+- 노드를 넣은 순서가 다를 수 있으므로 `m_nodes`를 바로 비교하면 안 됨
+  - 크기가 다르면 다름
+  - 한쪽의 각 노드에 대해, 다른 쪽에 같은 값의 노드가 있고 이웃의 **값** 집합이 같은지 봄(인덱스는 그래프마다 다르므로 값으로 비교)
+
+<RunCode client:load code={gbCode} />
+
+- 볼 것
+  - 같은 값을 다시 넣거나, 없는 노드로 간선을 만들면 `false`
+  - `B`를 지운 뒤 `C`, `D`의 인덱스가 당겨졌지만, 값으로 본 간선은 그대로
+  - `h`는 노드를 다른 순서로 넣었지만 같은 그래프라 `g == h`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `ranges::find`의 프로젝션, `ranges::all_of` | C++20 | 반복문, `std::find_if` |
+| `==`만 정의하면 `!=`도 됨 | C++20 | `operator!=`도 정의 |
+| `optional` | C++17 | "없음"을 나타내는 특별한 인덱스(`size()`) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨(삽입, 간선, 이웃만)
+
+<RunCode client:load code={gbCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 노드를 지우면 그 노드의 인덱스만 집합에서 빼면 된다?
+  - 뒤 노드들의 인덱스가 당겨지므로, 더 큰 인덱스도 모두 하나씩 줄여야 함
+- `set`의 원소를 반복자로 바로 고친다?
+  - `set`의 원소는 `const`. 새 집합을 만들어 바꿈
+- 두 그래프의 `m_nodes`가 같아야 같은 그래프다?
+  - 넣은 순서가 다를 수 있음. 값과 이웃의 값으로 비교
+- 복사 생성자와 소멸자를 직접 써야 한다?
+  - 0의 규칙. `vector`와 `set`이 알아서 복사·이동·해제
+- `operator[]`로 노드 값을 바꿀 수 있게 한다?
+  - 값이 겹치면 그래프가 깨짐. `const T&`만
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 만드는 순서 | 기본 구현 → 반복자 → 컨테이너 요건 → 추가 요건 |
+| 표현 | `vector<node>`, 노드는 값 + 이웃 인덱스 `set` |
+| `insert`, `insert_edge` | 없을 때만 넣고, 바뀌었으면 `true` |
+| `erase` | 모든 집합에서 인덱스 제거·당기기 → `vector`에서 지우기 |
+| `==` | 크기, 노드 값, 이웃 값 집합으로 비교 |
+| 그 밖 | `clear`, `size`, `operator[]`(`const`), 멤버·비멤버 `swap`, 0의 규칙 |
+
+## 복습 질문
+
+<details>
+<summary>노드 `X`로 들어오는 간선(`X`를 이웃으로 가진 노드)의 값을 모두 구하는 멤버 함수를 쓰려면?</summary>
+
+```cpp
+std::set<T> sources_of(const T& value) const
+{
+    std::set<T> result;
+    auto k{ index_of(value) };
+    if (!k) { return result; }
+    for (const node& n : m_nodes) {
+        if (n.targets.contains(*k)) { result.insert(n.value); }
+    }
+    return result;
+}
+```
+
+- `set::contains`는 C++20. 그 전에는 `count(*k) != 0`
+
+</details>
+
+<details>
+<summary>노드가 n개일 때 `erase()`가 느린 이유는?</summary>
+
+- 모든 노드의 인접 집합을 다시 만들고(간선 수에 비례), `vector` 중간을 지워 뒤 원소를 모두 옮김
+- 노드 삭제가 잦다면 인덱스 대신 안정적인 식별자를 쓰는 등 다른 표현을 고려
+
+</details>
+
+<details>
+<summary>`insert_edge("A", "A")`는 무엇을 하는가?</summary>
+
+- 자기 자신으로 가는 간선(자기 루프)이 생김. 이 구현은 막지 않음. 막으려면 `*f == *t`일 때 `false`를 돌려줌
+
+</details>
