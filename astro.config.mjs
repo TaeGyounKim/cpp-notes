@@ -41,6 +41,7 @@ const parts = [
 		link: '/part3/ch07/01-dynamic-memory/',
 		items: [
 			chapter('7장. 메모리 관리', 'part3/ch07'),
+			chapter('8장. 클래스와 객체 익히기', 'part3/ch08'),
 		],
 	},
 ];
