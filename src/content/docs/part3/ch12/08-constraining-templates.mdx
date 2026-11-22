@@ -1,0 +1,325 @@
+---
+title: 콘셉트로 템플릿 제약하기
+description: 표준 콘셉트, 타입 제약을 건 auto, 함수 템플릿에 제약을 거는 네 가지 문법, 더 구체적인 제약을 고르는 포섭, 클래스 템플릿과 멤버 함수의 제약, 제약 기반 오버로드, 콘셉트를 쓸 때의 원칙을 익힙니다.
+sidebar:
+  order: 8
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import constrainedCode from '../../../../examples/ch12/constrained.cpp?raw';
+import constrainedCpp11Code from '../../../../examples/ch12/constrained-cpp11.cpp?raw';
+
+- 다루는 것: 7편에서 정의한 콘셉트를 실제 템플릿에 거는 법
+- 이 글에서 배우는 요소: 표준 콘셉트, 타입 제약을 건 `auto`, requires 절, 뒤에 오는 requires 절, 템플릿 매개변수 자리의 타입 제약, 제약 포섭, 클래스 템플릿과 멤버 함수의 제약, 제약 기반 오버로드
+
+## 표준 콘셉트
+
+- 표준 라이브러리에는 100개가 넘는 콘셉트가 미리 정의되어 있음 <Badge text="C++20" /> <CppRef path="cpp/concepts" />
+- `<concepts>`에 있는 것(모두 `std` 네임스페이스)
+
+| 분류 | 예 |
+| --- | --- |
+| 언어 핵심 | `same_as`, `derived_from`, `convertible_to`, `integral`, `floating_point`, `copy_constructible` |
+| 비교 | `equality_comparable`, `totally_ordered` |
+| 객체 | `movable`, `copyable` |
+| 호출 | `invocable`, `predicate` |
+
+- `<iterator>`에는 반복자 관련 콘셉트: `random_access_iterator`, `forward_iterator`, `incrementable`, `indirectly_copyable`, `indirectly_swappable` 등
+  - `indirectly_copyable`은 반복자 자체가 아니라 반복자가 **가리키는 원소**가 복사 가능한지 봄. 그래서 "indirectly"
+  - 알고리즘 요구 사항도 있음: `mergeable`, `sortable`, `permutable`
+- 범위(ranges) 라이브러리에도 표준 콘셉트가 있음. 반복자와 범위는 17장, 알고리즘은 20장
+- 필요한 것이 있으면 직접 만들지 말고 그대로 씀
+
+```cpp
+template <typename T>
+concept IsDevice = std::derived_from<T, Device>;   // Device에서 파생
+
+template <typename T>
+concept ToBool = std::convertible_to<T, bool>;     // bool로 바뀜
+
+template <typename T>
+concept DefaultAndCopy =                           // 결합
+    std::default_initializable<T> && std::copy_constructible<T>;
+```
+
+:::tip
+의미까지 완전하고 올바른 콘셉트를 쓰기는 쉽지 않다. 되도록 표준 콘셉트나 그 조합으로 타입을 제약한다.
+:::
+
+## 타입 제약을 건 auto
+
+- 타입 제약은 `auto`에도 걸 수 있음
+  - `auto`로 추론한 변수, 반환 타입 추론, 축약 함수 템플릿의 매개변수, 제네릭 람다(19장)의 매개변수 등
+- 장점
+  - 코드가 스스로 설명함
+  - 제약을 어기면 오류가 나중에 지원하지 않는 연산을 쓰는 곳이 아니라 **변수 정의**를 가리킴
+
+```cpp
+Incrementable auto counter{ 10 };              // int: 문제없음
+Incrementable auto label{ std::string{ "a" } }; // 컴파일 오류
+```
+
+- 두 번째 줄 GCC: `deduced initializer does not satisfy placeholder constraints`. `std::string`에는 `++`가 없음
+
+## 함수 템플릿에 제약 걸기
+
+### requires 절
+
+```cpp
+template <typename T> requires 제약-식
+void process(const T& t);
+```
+
+- 제약 식은 콘셉트 정의의 제약 식과 같음. `bool`이 되는 상수 식, 또는 그 `&&`·`||`
+- 무엇이든 올 수 있음. 아래 각 줄 뒤에 `void process(const T& t);`가 온다고 보면 됨
+
+```cpp
+template <typename T> requires Incrementable<T>                // 콘셉트 식
+template <typename T> requires std::convertible_to<T, bool>    // 표준 콘셉트
+template <typename T> requires requires(T x) { x++; ++x; }     // requires 식
+template <typename T> requires (sizeof(T) == 4)                // 상수 식
+template <typename T> requires Incrementable<T> && Decrementable<T>
+template <typename T> requires std::is_arithmetic_v<T>         // 타입 특성(26장)
+```
+
+- requires 식을 쓸 때는 `requires`가 두 번 나옴. 앞은 requires **절**, 뒤는 requires **식**
+
+### 뒤에 오는 requires 절
+
+- 함수 머리 **뒤**에 둘 수도 있음
+
+```cpp
+template <typename T>
+void process(const T& t) requires Incrementable<T>;
+```
+
+### 템플릿 매개변수 자리에 타입 제약
+
+- `typename`(또는 `class`) 대신 타입 제약을 씀
+
+```cpp
+template <Incrementable T>
+void process(const T& t);
+
+// requires std::convertible_to<T, bool>와 같음
+template <std::convertible_to<bool> T>
+void process(const T& t);
+```
+
+- 7편 복합 요구 사항의 타입 제약과 같으므로, 템플릿 타입 인수가 하나 적음. `T`가 첫째 인수로 들어감
+
+### 축약 함수 템플릿에 타입 제약
+
+- 가장 짧고 깔끔한 문법. 템플릿 머리가 없어도 여전히 함수 템플릿
+
+```cpp
+void process(const Incrementable auto& t);
+```
+
+### 오류 메시지
+
+- 제약을 어기면 오류가 꽤 읽기 쉬움. `++`가 없는 타입으로 부르면 GCC는
+
+```text
+error: no matching function for call to 'bumpC(main()::P&)'
+note: candidate 1: 'template<class T>  requires  Incrementable<T> void bumpC(T&)'
+note: constraints not satisfied
+note: the required expression '(x ++)' is invalid
+```
+
+### 뒤에 오는 requires 절만 되는 경우
+
+- 문법은 취향대로 고르면 되지만, 다음 두 경우는 뒤에 오는 requires 절만 됨
+  - 제약에 함수의 **매개변수 이름**을 쓸 때. 앞쪽에서는 매개변수 이름이 아직 보이지 않음
+  - 클래스 템플릿 본문 **안에서 정의**한 멤버 함수에 제약을 걸 때. 그런 멤버에는 템플릿 머리가 없음
+
+:::note
+타입 제약이 생긴 이상, 제약 없는 템플릿 타입 매개변수는 과거의 것이어야 한다. 구현에서 그 타입으로 무엇을 하든 어떤 요구 사항이 따르기 마련이다. 그것을 타입 제약으로 적어 컴파일러가 검사하게 한다.
+:::
+
+## 제약 포섭
+
+- 제약이 다른 함수 템플릿으로 **오버로드**할 수 있음
+- 컴파일러는 언제나 **가장 구체적인** 제약을 가진 템플릿을 고름. 더 구체적인 제약이 덜 구체적인 제약을 **포섭한다** (subsume)고 함 <CppRef path="cpp/language/constraints" />
+
+```cpp
+template <typename T> requires std::integral<T>
+void kind(const T&) { std::println("정수"); }
+
+template <typename T> requires (std::integral<T> && sizeof(T) == 4)
+void kind(const T&) { std::println("4바이트 정수"); }
+
+kind(1);           // int(보통 4바이트): "4바이트 정수"
+kind(short{ 2 });  // short(보통 2바이트): "정수"
+```
+
+- 컴파일러는 먼저 제약 식을 **정규화**함
+  - 콘셉트 식을 정의로 재귀적으로 펼쳐, `bool` 상수 식들의 `&&`·`||`로 된 하나의 식으로 만듦
+  - 한 정규화된 식이 다른 식을 함의한다고 증명할 수 있으면 포섭함. `&&`와 `||`만 따지고 부정(`!`)은 따지지 않음
+- **문법적으로만** 따짐. 의미는 보지 않음
+  - `sizeof(T) > 4`는 의미상 `sizeof(T) >= 4`보다 구체적이지만, 문법적으로는 포섭하지 않음
+- 타입 특성(`std::is_arithmetic_v` 등)은 정규화 때 펼쳐지지 않음
+  - 같은 일을 하는 콘셉트와 타입 특성이 둘 다 있으면 콘셉트를 씀. 예: `std::is_integral_v` 대신 `std::integral`
+
+## 클래스 템플릿에 제약 걸기
+
+- 함수 템플릿과 비슷한 문법
+- 예: `Device`에서 파생한 타입만 담는 `Slot`
+
+```cpp
+template <std::derived_from<Device> T>
+class Slot { /* ... */ };
+
+// 또는
+template <typename T> requires std::derived_from<T, Device>
+class Slot { /* ... */ };
+```
+
+- 클래스 밖 멤버 정의도 같은 템플릿 머리를 씀(아래 `put()` 예)
+- 어기면 GCC: ``template constraint failure for ... class Slot``, `'Device' is not a base of 'int'`
+
+### 멤버 함수에 따로 제약
+
+- 클래스 템플릿의 특정 멤버 함수에만 제약을 더 걸 수 있음
+
+```cpp
+template <std::derived_from<Device> T>
+class Slot
+{
+public:
+    void put(T item) requires std::copyable<T>;
+    // ...
+};
+
+template <std::derived_from<Device> T>
+void Slot<T>::put(T item) requires std::copyable<T> { /* ... */ }
+```
+
+- 클래스 밖 정의에서도 requires 절을 다시 씀
+- 선택적 인스턴스화(2편) 덕분에, 복사할 수 없는 타입으로도 `put()`을 부르지 않는 한 `Slot`을 쓸 수 있음
+
+## 제약 기반 특수화와 오버로드
+
+- 특수화와 오버로드를 특정 타입 하나가 아니라 **제약을 만족하는 타입 묶음**에 대해 만들 수 있음
+- 예: 6편의 `indexOf()`는 `==`로 비교함. 부동소수점은 `==`로 비교하지 말고 오차를 허용하는 비교(엡실론 비교)를 쓰는 것이 좋음
+
+```cpp
+template <std::floating_point T>
+std::optional<std::size_t> indexOf(const T& v, const T* arr, std::size_t n)
+{
+    for (std::size_t i{ 0 }; i < n; ++i) {
+        if (nearlyEqual(arr[i], v)) { return i; }
+    }
+    return {};
+}
+```
+
+- `nearlyEqual()`도 `std::floating_point`로 제약함. 기계 엡실론을 값의 크기에 맞게 늘려 비교함(수학적 설명은 이 글의 범위 밖)
+
+```cpp
+template <std::floating_point T>
+bool nearlyEqual(T x, T y, int ulps = 2)
+{
+    return std::fabs(x - y)
+               <= std::numeric_limits<T>::epsilon() * std::fabs(x + y) * ulps
+        || std::fabs(x - y) < std::numeric_limits<T>::min();   // 비정규 수
+}
+```
+
+<RunCode client:load code={constrainedCode} />
+
+- 볼 것
+  - 네 가지 문법의 `bump` 함수가 모두 같은 제약으로 동작해 `n`이 5
+  - `kind(1)`은 더 구체적인 판, `kind(short{ 2 })`는 덜 구체적인 판
+  - `0.1 + 0.2 == 0.3`은 거짓이지만, `indexOf(0.3, ...)`는 부동소수점 판이 골라져 2를 찾음
+  - 주석을 풀어 `Slot<std::string>`을 만들면 제약 실패
+
+## 콘셉트를 쓸 때의 원칙
+
+- 직접 쓰기보다 **표준 콘셉트**나 그 조합을 씀. 완전하고 올바른 콘셉트를 쓰는 데는 시간이 많이 듦
+- 직접 쓴다면 **의미**를 모델링함
+  - 코드가 기술적으로 `==`와 `<`만 쓴다고 해서 그 둘만 요구하는 콘셉트를 쓰지 않음. 문법적 제약일 뿐
+  - 대신 "순서를 매길 수 있음"을 요구함. 의미적 제약
+- 처음부터 의미적 요구 사항을 쓰면 나중에 요구를 더할 일이 적음
+  - `==`와 `<`만 요구했다가 나중에 `>`를 더하면 기존 코드가 깨질 수 있음. 처음부터 순서 콘셉트를 썼다면 깨지지 않음
+- requires 식의 매개변수를 바꾸지 않을 것이라면 `const`로 표시해 그 요구까지 담음
+- 새 클래스 템플릿과 함수 템플릿의 모든 템플릿 타입 매개변수에 알맞은 타입 제약을 검. 제약 없는 템플릿 타입 매개변수는 과거의 것
+- `auto` 추론에도 타입 제약을 쓸 수 있음을 기억함
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 콘셉트, requires 절, 타입 제약 | C++20 | `std::enable_if`와 타입 특성으로 후보에서 빼기(SFINAE, 26장) |
+| 제약 포섭 | C++20 | 조건이 겹치지 않게 직접 나눔 |
+| 클래스 템플릿 제약 | C++20 | `static_assert`와 `std::is_base_of` 등 |
+| `std::floating_point` | C++20 | `std::is_floating_point` |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. `std::enable_if`로 템플릿을 고르고, 클래스 템플릿 안의 `static_assert`로 제약을 흉내 냄
+
+<RunCode client:load code={constrainedCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `requires requires(T x) { ... }`는 오타다?
+  - 앞은 requires 절, 뒤는 requires 식. 맞는 문법
+- `template <std::convertible_to<bool> T>`에서 인수가 하나 빠졌다?
+  - 첫째 인수로 `T`가 자동으로 들어감
+- 포섭은 의미까지 따진다?
+  - 문법적으로만. `sizeof(T) > 4`가 `sizeof(T) >= 4`를 포섭하지 않음
+- 타입 특성과 콘셉트는 포섭에서 똑같이 다뤄진다?
+  - 타입 특성은 펼쳐지지 않음. 콘셉트를 씀
+- 멤버 함수에 제약을 걸면 그 클래스 템플릿 전체를 쓸 수 없게 된다?
+  - 그 멤버를 부르지 않는 한 쓸 수 있음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 표준 콘셉트 | `<concepts>`, `<iterator>`, 범위 라이브러리. 직접 만들기 전에 찾아봄 |
+| 제약 건 `auto` | `Incrementable auto x{ ... };` |
+| requires 절 | `template <typename T> requires 제약` |
+| 뒤에 오는 requires 절 | `void f(T) requires 제약`. 매개변수 이름 사용, 클래스 안 정의 멤버 |
+| 타입 제약 매개변수 | `template <Incrementable T>` |
+| 축약 + 제약 | `void f(const Incrementable auto& t)` |
+| 포섭 | 더 구체적인 제약이 골라짐. 문법적, `&&`·`\|\|`만 |
+| 클래스·멤버 제약 | `template <std::derived_from<Device> T>`. 멤버에는 뒤에 `requires` |
+
+## 복습 질문
+
+<details>
+<summary>`void f(const auto& x)`를 정수 타입만 받게 가장 짧게 바꾸면?</summary>
+
+- `void f(const std::integral auto& x)`
+
+</details>
+
+<details>
+<summary>`requires std::integral<T>`인 판과 `requires (std::integral<T> && std::signed_integral<T>)`인 판이 있을 때 `f(5u)`는 어느 쪽인가?</summary>
+
+- `unsigned int`는 `signed_integral`을 만족하지 않으므로 둘째 판은 후보가 아님. 첫째 판이 불림
+- `f(5)`라면 둘 다 맞지만 둘째가 더 구체적이라 둘째가 불림
+
+</details>
+
+<details>
+<summary>클래스 템플릿 안에서 바로 정의하는 멤버 함수에 `std::totally_ordered<T>` 제약을 걸려면?</summary>
+
+- 뒤에 오는 requires 절: `T max() const requires std::totally_ordered<T> { ... }`. 클래스 안에서 정의한 멤버에는 템플릿 머리가 없기 때문
+
+</details>
+
+## 12장을 마치며
+
+- 클래스 템플릿과 함수 템플릿으로 제네릭 코드를 쓰는 법을 다룸
+  - 템플릿 매개변수(타입, 타입이 아닌 것, 기본값), 인수 추론과 추론 가이드
+  - 멤버 함수 템플릿, 특수화, 상속, 별칭 템플릿
+  - 축약 함수 템플릿, 변수 템플릿
+  - 콘셉트로 템플릿 매개변수에 요구 사항을 걸기
+- 템플릿은 표준 라이브러리의 바탕이기도 함. 표준 라이브러리의 컨테이너와 알고리즘을 다루는 장들에서 계속 쓰이고, 26장에서 더 깊이 다룸
+- 다음 장(13장): C++의 입출력 자세히 보기
