@@ -1,0 +1,199 @@
+---
+title: 사용자 정의 리터럴
+description: 표준 라이브러리의 리터럴(s, sv, min, i 등)과 이를 쓰는 네임스페이스, 밑줄로 시작하는 사용자 정의 리터럴, 해석된 값을 받는 조리된 리터럴 연산자와 글자 그대로 받는 날 리터럴 연산자를 익힙니다.
+sidebar:
+  order: 8
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import litCode from '../../../../examples/ch15/literals.cpp?raw';
+import litCpp11Code from '../../../../examples/ch15/literals-cpp11.cpp?raw';
+
+- 다루는 것: `1.2_km`, `"hello"_up`처럼 리터럴에 접미사를 붙여 객체를 만드는 법
+- 이 글에서 배우는 요소: 표준 리터럴, 리터럴 네임스페이스, 사용자 정의 리터럴, 조리된 리터럴 연산자, 날 리터럴 연산자
+
+## 리터럴
+
+- C++에는 코드에 쓸 수 있는 기본 리터럴이 여럿 있음
+  - `'a'`: 문자
+  - `"문자열"`: 0으로 끝나는 문자 나열(C 스타일 문자열)
+  - `3.14f`: `float`(단정밀도 부동소수점)
+  - `0xabc`: 16진수
+- C++에서는 리터럴을 **직접 정의**할 수도 있음 <Badge text="C++11" />. 표준 라이브러리도 그렇게 해서 표준 라이브러리 객체를 만드는 리터럴을 제공함
+
+## 표준 라이브러리의 리터럴
+
+- 표준 리터럴은 **밑줄로 시작하지 않음**
+
+| 리터럴 | 만드는 것 | 예 | 네임스페이스 |
+| --- | --- | --- | --- |
+| `s` | `std::string` | `"안녕"s` | `string_literals` |
+| `sv` | `std::string_view` | `"안녕"sv` | `string_view_literals` |
+| `h` `min` `s` `ms` `us` `ns` | `std::chrono::duration`(22장) | `42min` | `chrono_literals` |
+| `y` `d` | `std::chrono::year`, `day`(22장) | `2026y` | `chrono_literals` |
+| `i` `il` `if` | `std::complex`의 `double`, `long double`, `float` 판 | `1.3i` | `complex_literals` |
+
+- 모두 `std::literals`의 하위 네임스페이스에 정의됨. 예: `std::literals::string_literals`
+- `literals`와 `string_literals` 등은 **인라인 네임스페이스**라 내용이 부모 네임스페이스에서도 보임. 그래서 `s` 리터럴을 쓰려면 다음 중 아무거나 씀
+
+```cpp
+using namespace std;
+using namespace std::literals;
+using namespace std::string_literals;
+using namespace std::literals::string_literals;
+```
+
+- `s`가 문자열 뒤에서는 `std::string`, 수 뒤에서는 초(`std::chrono::seconds`)로 쓰이는 것도 오버로드 덕분
+
+## 사용자 정의 리터럴
+
+- 사용자 정의 리터럴은 **밑줄 하나로 시작**해야 함. 예: `_i`, `_s`, `_km`, `_miles`, `_K` <CppRef path="cpp/language/user_literal" />
+  - 밑줄로 시작하지 않는 접미사는 표준이 앞으로 쓸 수 있게 예약되어 있음. GCC는 표준용으로 예약되었다는 경고(`-Wliteral-suffix`)를 냄
+- **리터럴 연산자**로 구현함. 두 방식이 있음
+  - **조리된 모드** (cooked mode): 이미 해석된 특정 타입의 값을 받음
+  - **날 모드** (raw mode): 글자 나열을 받음
+- 예: 리터럴 `123`을 날 연산자는 `'1'`, `'2'`, `'3'`으로, 조리된 연산자는 정수 123으로 받음. `0x23`은 날 연산자에게 `'0'`, `'x'`, `'2'`, `'3'`, 조리된 연산자에게 35. `3.14`는 날 연산자에게 `'3'`, `'.'`, `'1'`, `'4'`, 조리된 연산자에게 부동소수점 3.14
+
+### 조리된 리터럴 연산자
+
+- 매개변수 형태
+  - 수를 처리하려면: `unsigned long long`, `long double`, `char`, `wchar_t`, `char8_t`, `char16_t`, `char32_t` 중 하나를 받는 매개변수 하나
+  - 문자열을 처리하려면: C 스타일 문자열과 그 길이를 받는 매개변수 둘. 예: `(const char* str, std::size_t len)`
+- 예: 길이를 늘 미터로 저장하는 `Length`
+
+```cpp
+class Length
+{
+public:
+    long double meters() const { return m_meters; }
+    friend Length operator""_km(long double d);
+    friend Length operator""_m(long double d);
+
+private:
+    explicit Length(long double meters) : m_meters{ meters } {}   // 리터럴로만
+    long double m_meters;
+};
+
+Length operator""_km(long double d) { return Length{ d * 1000 }; }   // 미터로
+Length operator""_m(long double d) { return Length{ d }; }
+
+Length a{ 1.2_km };   // 1200m
+auto b{ 3.5_m };      // 3.5m
+```
+
+- 생성자를 `private`로 두어 쓰는 쪽은 리터럴로만 `Length`를 만들게 함. 그래서 리터럴 연산자를 `friend`로
+- `operator""`와 밑줄 사이에 **공백을 두지 않음**
+  - 예전 문법 `operator"" _km`(공백 있음)도 있지만 C++23에서 권장하지 않게 됨(GCC 경고 `-Wdeprecated-literal-operator`)
+- 문자열용 조리된 연산자 예: 대문자로 바꾼 `std::string`을 만듦
+
+```cpp
+std::string operator""_up(const char* text, std::size_t length)
+{
+    std::string result{ text, length };
+    // 소문자를 대문자로 바꿈(생략)
+    return result;
+}
+
+auto shout{ "hello"_up };   // std::string
+auto plain{ "hello" };      // 접미사가 없으면 const char*
+```
+
+### 날 리터럴 연산자
+
+- `const char*` 하나(0으로 끝나는 C 스타일 문자열)를 받음
+
+```cpp
+Length operator""_cm(const char* raw)
+{
+    // raw는 "125" 같은 글자 나열. 직접 해석해 Length를 만듦
+}
+
+auto c{ 125_cm };   // 쓰는 법은 조리된 판과 같음
+```
+
+:::note
+날 리터럴 연산자는 문자열이 아닌 리터럴에만 쓸 수 있다. `125_cm`은 날 연산자로 구현할 수 있지만 `"125"_cm`은 안 된다. 문자열 리터럴에는 문자열과 길이를 받는 조리된 연산자가 필요하다.
+:::
+
+<RunCode client:load code={litCode} />
+
+- 볼 것
+  - `1.2_km`는 조리된 연산자가 `long double` 1.2를 받아 1200m
+  - `125_cm`는 날 연산자가 글자 `"125"`를 받아 직접 해석해 1.25m
+  - `"hello"_up`의 타입은 `std::string`
+  - 표준 리터럴: `"센서"s`, `"센서"sv`(UTF-8로 6바이트), `90min + 30s`(5430초), `1.5i`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 사용자 정의 리터럴 | C++11 | 도우미 함수(예: `km(1.2)`) |
+| 표준 리터럴 `s`, `min` 등, `i` | C++14 | `std::string("…")`, `std::chrono::minutes(90)` |
+| `sv` | C++17 | `std::string_view` 없음 |
+| `y`, `d` | C++20 | 없음 |
+| `operator""` 뒤 공백 없는 문법 권장 | C++23에서 공백 있는 문법이 권장하지 않음으로 | 공백 있는 문법이 흔했음 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={litCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 사용자 정의 리터럴도 `km`처럼 밑줄 없이 써도 된다?
+  - 밑줄로 시작해야 함. 밑줄 없는 것은 표준용으로 예약됨
+- 조리된 연산자에 `double`을 받아도 된다?
+  - 부동소수점은 `long double`, 정수는 `unsigned long long`처럼 정해진 타입만
+- 날 연산자로 문자열 리터럴도 처리할 수 있다?
+  - 수 같은 문자열이 아닌 리터럴만. 문자열은 포인터와 길이를 받는 조리된 연산자
+- `using namespace std::string_literals;`가 없으면 `"a"s`는 안 된다?
+  - `std::literals`, `std` 등 바깥 네임스페이스를 쓰면 됨(인라인 네임스페이스)
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 표준 리터럴 | `s`, `sv`, `h` `min` `s` …, `y` `d`, `i` `il` `if`. 밑줄 없음. `std::literals`의 인라인 네임스페이스 |
+| 사용자 정의 리터럴 | `_`로 시작. `operator""_이름` |
+| 조리된 모드 | 해석된 값(`unsigned long long`, `long double`, 문자 타입) 또는 (문자열, 길이) |
+| 날 모드 | `const char*` 하나. 문자열이 아닌 리터럴만 |
+
+## 복습 질문
+
+<details>
+<summary>`5_deg`가 `Radian` 객체를 만들게 하려면 어떤 리터럴 연산자를 쓰는가? `5.0_deg`도 되게 하려면?</summary>
+
+- 정수용과 부동소수점용 조리된 연산자를 둘 다 둠
+
+```cpp
+Radian operator""_deg(unsigned long long d);   // 5_deg
+Radian operator""_deg(long double d);          // 5.0_deg
+```
+
+</details>
+
+<details>
+<summary>`auto x{ "abc" };`와 `auto y{ "abc"s };`의 타입은?</summary>
+
+- `x`는 `const char*`, `y`는 `std::string`(`std::string_literals` 등을 쓴 경우)
+
+</details>
+
+<details>
+<summary>`0x1F_bits`처럼 16진수 표기를 그대로 받아 해석하고 싶다면 어느 모드를 쓰는가?</summary>
+
+- 날 모드 `operator""_bits(const char* raw)`. `"0x1F"` 글자를 그대로 받음. 조리된 모드라면 이미 31로 해석된 값을 받음
+
+</details>
+
+## 15장을 마치며
+
+- 연산자를 오버로드하는 이유와, 여러 부류의 연산자를 오버로드하는 법을 다룸
+  - 원칙과 선택지, 참고표
+  - 산술·스트림·첨자·함수 호출·역참조·변환·메모리 할당 연산자, 사용자 정의 리터럴
+- 연산자 오버로딩은 추상화와 쓰기 쉬운 클래스 인터페이스를 만드는 데 두루 쓰임
+- 다음 장(16장): C++ 표준 라이브러리 둘러보기. 이어지는 장들에서 표준 라이브러리의 기능을 깊이 다룸
