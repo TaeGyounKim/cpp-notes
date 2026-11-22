@@ -1,0 +1,302 @@
+---
+title: 예외 던지기와 잡기
+description: try/catch와 throw의 동작, 표준 예외 invalid_argument와 runtime_error, 예외로 던질 수 있는 타입, const 참조로 잡는 이유, 여러 예외를 나눠 잡기, 모든 예외를 잡는 catch(...)를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import tcCode from '../../../../examples/ch14/throw-catch.cpp?raw';
+import tcCpp11Code from '../../../../examples/ch14/throw-catch-cpp11.cpp?raw';
+
+- 다루는 것: 예외를 실제로 던지고 잡는 문법과 규칙
+- 이 글에서 배우는 요소: `try`/`catch`, `throw`, `std::exception`, `std::invalid_argument`, `std::runtime_error`, `what()`, 예외 타입, `const` 참조로 잡기, 여러 `catch`, `catch (...)`
+
+## 오류 처리가 없는 코드
+
+- 파일 입출력에서는 예외적인 상황이 자주 생김. 예: 파일에서 정수 목록을 읽는 함수
+
+```cpp
+std::vector<int> readNumbers(const std::string& file)
+{
+    std::ifstream in{ file };
+    std::vector<int> numbers;
+    int value;
+    while (in >> value) { numbers.push_back(value); }
+    return numbers;
+}
+```
+
+- `while (in >> value)`는 파일 끝에 닿거나 오류가 날 때까지 읽음. `>>`가 오류를 만나면 실패 비트가 켜지고 `bool` 변환이 거짓이 되어 반복이 끝남(13장)
+- 파일을 열지 못했는지, 중간에 숫자가 아닌 것이 있었는지 전혀 알리지 않음. 오류 처리가 없음
+
+## 던지고 잡기
+
+- 예외를 쓰려면 두 부분이 필요함 <CppRef path="cpp/language/try" />
+  - 예외를 처리하는 `try`/`catch` 구문
+  - 예외를 던지는 `throw` 문
+- 많은 경우 `throw`는 라이브러리(C++ 런타임 포함) 깊은 곳에서 일어나 직접 보이지 않지만, 그래도 `try`/`catch`로 대응해야 함
+
+```cpp
+try {
+    // 예외를 던질 수 있는 코드
+} catch (예외타입1 이름) {
+    // 타입1 예외에 대응하는 코드
+} catch (예외타입2 이름) {
+    // 타입2 예외에 대응하는 코드
+}
+// 남은 코드
+```
+
+- `try` 블록 안의 코드는 직접 `throw`할 수도, 예외를 던지는 함수를(몇 단계를 거쳐서든) 부를 수도 있음
+- 예외가 **없으면**: `catch` 블록은 실행되지 않고, `try` 블록의 마지막 문장 다음에 "남은 코드"가 이어짐
+- 예외가 **나면**: `throw` 다음이나 예외를 일으킨 호출 다음의 코드는 실행되지 않고, 예외 타입에 맞는 `catch` 블록으로 바로 감
+  - `catch` 블록이 제어를 다른 곳으로 옮기지 않으면(함수에서 돌아가기, 새 예외 던지기, 잡은 예외 다시 던지기 등) 그 블록이 끝난 뒤 "남은 코드"가 실행됨
+- `try`/`catch`는 일종의 거창한 `if`문으로 볼 수 있음: `try` 블록에서 예외가 나면 `catch` 블록을 실행하고, 아니면 모든 `catch` 블록을 건너뜀
+
+### 가장 간단한 예
+
+```cpp
+double safeDivide(double num, double den)
+{
+    if (den == 0) { throw std::invalid_argument{ "0으로 나눔" }; }
+    return num / den;
+}
+
+try {
+    std::println("{}", safeDivide(5, 2));    // 2.5
+    std::println("{}", safeDivide(10, 0));   // 예외: 아래 줄로 가지 않음
+    std::println("{}", safeDivide(3, 3));
+} catch (const std::invalid_argument& e) {
+    std::println("예외: {}", e.what());      // 예외: 0으로 나눔
+}
+```
+
+- `throw`: 예외를 던지는 유일한 방법. 키워드 <CppRef path="cpp/language/throw" />
+- `std::invalid_argument`: `<stdexcept>`에 있는 표준 예외 중 하나
+  - 표준 라이브러리의 예외는 모두 하나의 계층을 이룸(4편)
+  - 계층의 모든 클래스에 `what()` 멤버 함수가 있음. 생성자에 넘긴 설명 문자열을 `const char*`로 돌려줌
+  - 반환 타입이 `const char*`이지만 UTF-8로 인코딩하면 유니코드 문자열도 담을 수 있음(21장)
+
+### 파일 열기 실패에 던지기
+
+- `readNumbers()`에서 가장 일어나기 쉬운 문제는 파일 열기 실패. 예외를 던지기에 딱 맞는 상황
+
+```cpp
+std::ifstream in{ file };
+if (in.fail()) {
+    throw std::exception{};        // <exception>의 기본 예외
+}
+```
+
+- `throw` 문이 실행되면 함수의 나머지는 건너뛰고 가장 가까운 예외 처리기로 감
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (const std::exception& e) {
+    std::println(std::cerr, "{}을(를) 열 수 없음", file);
+    return 1;
+}
+```
+
+:::tip
+함수가 던질 수 있는 예외를 그 함수의 문서(주석)에 늘 적는다. 함수를 쓰는 사람이 어떤 예외를 처리해야 하는지 알아야 하기 때문이다.
+:::
+
+:::note
+스트림은 기본으로 예외를 던지지 않는다. `exceptions()`로 던지게 할 수 있지만(13장), 많은 컴파일러가 스트림 예외에 쓸모 있는 정보를 담지 않는다. 그런 환경에서는 스트림 상태를 직접 확인하는 편이 낫다. 이 사이트는 스트림 예외를 쓰지 않는다.
+:::
+
+## 예외 타입
+
+- 어떤 타입이든 던질 수 있음. 객체가 아니어도 됨 <CppRef path="cpp/language/throw" />
+
+```cpp
+throw 5;                              // int
+// ...
+} catch (int code) {
+    std::println(std::cerr, "오류 코드 {}", code);
+}
+```
+
+```cpp
+throw "파일을 열 수 없음";            // const char*
+// ...
+} catch (const char* message) {
+    std::println(std::cerr, "{}", message);
+}
+```
+
+:::tip
+예외로는 기본 타입보다 **객체**를 던진다. 이유는 둘이다.
+- 클래스 이름 자체가 정보를 전한다.
+- 예외를 설명하는 문자열을 비롯해 어떤 정보든 담을 수 있다.
+
+표준 라이브러리에는 미리 정의된 예외 클래스 계층이 있고, 직접 만든 예외 클래스를 그 계층에 끼워 넣을 수도 있다(4편).
+:::
+
+## const 참조로 잡기
+
+- 위 예들은 `catch (const std::exception& e)`처럼 `const` 참조로 잡았지만, 꼭 그래야 하는 것은 아님
+  - 값으로: `catch (std::exception e)`
+  - `const`가 아닌 참조로: `catch (std::exception& e)`
+  - 포인터로: 포인터를 던졌다면(`const char*` 예처럼)
+
+:::caution
+예외는 늘 **객체**로 던지고, 늘 **`const` 참조**로 잡는다. 값으로 잡으면 객체 잘림(10장)이 생길 수 있다. 잡은 예외는 보통 고치지 않으므로 `const`가 아닌 참조도 권하지 않는다.
+:::
+
+## 여러 예외를 나눠 잡기
+
+- 파일 열기 말고 데이터를 읽는 것도 실패할 수 있음. 형식이 잘못되었을 때
+- `std::runtime_error`: `std::exception`에서 파생. 생성자에 설명 문자열을 받음. `<stdexcept>`
+
+```cpp
+std::vector<int> readNumbers(const std::string& file)
+{
+    std::ifstream in{ file };
+    if (in.fail()) {
+        throw std::invalid_argument{ "파일을 열 수 없음: " + file };
+    }
+    std::vector<int> numbers;
+    int value{ 0 };
+    while (in >> value) { numbers.push_back(value); }
+    if (!in.eof()) {   // 파일 끝 전에 멈췄다면 읽기 중 오류
+        throw std::runtime_error{ "읽기 오류: " + file };
+    }
+    return numbers;
+}
+```
+
+- 둘 다 `std::exception`에서 파생하므로 `catch (const std::exception& e)` 하나로 잡고 `what()`으로 구별할 수도 있음
+- 서로 다른 타입을 던졌으니 `catch` 블록을 둘로 나눌 수도 있음
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (const std::invalid_argument& e) {
+    std::println(std::cerr, "{}", e.what());
+    return 1;
+} catch (const std::runtime_error& e) {
+    std::println(std::cerr, "{}", e.what());
+    return 2;
+}
+```
+
+- `try` 블록에서 예외가 나면 그 타입을 `catch` 처리기들과 **차례로** 맞춰 봄
+- `invalid_argument`와 `runtime_error`에는 공개 기본 생성자가 없고 문자열을 받는 생성자만 있음. 늘 문자열을 넘겨야 함
+
+### 일치와 const
+
+- 잡을 타입의 `const`는 일치 여부에 영향을 주지 않음. 아래 둘은 모두 모든 `runtime_error`와 맞음
+
+```cpp
+} catch (const std::runtime_error& e) {
+} catch (std::runtime_error& e) {
+```
+
+- 그래도 `const` 참조로 잡기를 권함
+
+## 모든 예외 잡기
+
+- `catch (...)`: 어떤 예외 타입이든 맞는 처리기 <CppRef path="cpp/language/catch" />
+  - 점 세 개는 오타가 아니라 모든 예외 타입과 맞는 와일드카드
+
+```cpp
+try {
+    numbers = readNumbers(file);
+} catch (...) {
+    std::println(std::cerr, "{}을(를) 열거나 읽는 중 오류", file);
+    return 1;
+}
+```
+
+- 단점: 잡은 예외에 대해 아무것도 알 수 없음
+  - 문서가 부실한 코드를 부를 때 모든 예외를 잡아 두는 데는 쓸모가 있을 수 있음
+  - 하지만 모르는 예외에서 무엇을 해서 되살릴 수 있겠는가?
+- 쓸모 있는 쓰임: 예외가 났다고 기록한 뒤 **다시 던지기**
+  - `catch` 블록 안에서 인수 없는 `throw;`는 지금 잡은 예외를 다시 던짐(5편에서 자세히)
+
+```cpp
+try {
+    // 예외를 던질 수 있는 코드
+} catch (const std::invalid_argument& e) {
+    // invalid_argument 처리
+} catch (const std::runtime_error& e) {
+    // runtime_error 처리
+} catch (...) {
+    // 그 밖의 모든 예외: 기록하고
+    throw;   // 다시 던짐
+}
+```
+
+- 던져질 예외를 모두 알고 있다면 `catch (...)`는 권하지 않음. 모든 예외를 똑같이 처리하기 때문. 예외 타입을 명시적으로 맞추고 알맞게 대응하는 편이 나음
+
+<RunCode client:load code={tcCode} />
+
+- 볼 것
+  - 실행 환경에 `good.txt`와 `bad.txt`를 만들고 읽음. 없는 `missing.txt`는 열기 실패
+  - `bad.txt`는 `x`에서 읽기가 멈춰 `eof()`가 거짓이므로 `runtime_error`
+  - 예외 종류마다 다른 `catch`가 다른 결과 값을 돌려줌
+  - `int`도 던지고 잡을 수 있고, `catch (...)`는 무엇이든 잡음
+
+## 이전 표준에서는
+
+- `try`, `catch`, `throw`, `catch (...)`, 표준 예외 클래스는 C++98부터 같음
+- 이 글에서 C++11 이후에 들어온 것은 `std::println`(C++23)과 범위 기반 `for`(C++11) 정도
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={tcCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 예외가 나도 `try` 블록의 나머지는 실행된다?
+  - 던진 곳(또는 던진 함수를 부른 곳) 다음은 실행되지 않고 `catch`로 감
+- `catch` 블록이 끝나면 프로그램이 끝난다?
+  - 제어를 옮기지 않으면 `try`/`catch` 다음의 코드가 이어서 실행됨
+- 예외는 값으로 잡아도 똑같다?
+  - 파생 예외를 기반 타입 값으로 잡으면 잘려서 정보를 잃음. `const` 참조로
+- `catch`는 가장 잘 맞는 것을 고른다?
+  - 위에서부터 차례로 맞춰 처음 맞는 것이 잡음(4편에서 순서 문제)
+- `catch (...)`면 충분하다?
+  - 무엇이 났는지 모름. 기록하고 다시 던지는 데 주로 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `try`/`catch` | 예외가 나면 맞는 `catch`로, 없으면 모든 `catch`를 건너뜀 |
+| `throw` | 예외를 던지는 유일한 방법. 다음 코드는 실행되지 않음 |
+| `what()` | 표준 예외의 설명 문자열 |
+| `invalid_argument`, `runtime_error` | `<stdexcept>`. 문자열 생성자만 있음 |
+| 예외 타입 | 무엇이든 던질 수 있지만 객체를 던짐 |
+| 잡는 법 | `const` 참조로. `const` 여부는 일치에 영향 없음 |
+| `catch (...)` | 모든 예외. 정보 없음. 기록 후 `throw;`로 다시 던지기 |
+
+## 복습 질문
+
+<details>
+<summary>`try { f(); g(); } catch (...) { h(); } k();`에서 `f()`가 예외를 던지면 어떤 함수들이 실행되는가?</summary>
+
+- `f()` 다음으로 `h()`, 그다음 `k()`. `g()`는 실행되지 않음
+
+</details>
+
+<details>
+<summary>`catch (std::exception e)`로 `std::runtime_error{ "디스크 가득" }`을 잡으면 무엇이 문제인가?</summary>
+
+- 값으로 잡아 `std::exception` 부분만 복사됨(객체 잘림). 파생 클래스의 정보를 잃을 수 있음. `const std::exception&`로 잡음
+
+</details>
+
+<details>
+<summary>파일 열기 실패와 형식 오류를 다르게 처리하려면 어떻게 던지고 잡는가?</summary>
+
+- 서로 다른 예외 타입을 던지고(예: `invalid_argument`, `runtime_error`), 타입별 `catch` 블록을 둠
+
+</details>
