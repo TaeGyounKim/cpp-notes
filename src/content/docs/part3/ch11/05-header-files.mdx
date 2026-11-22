@@ -1,0 +1,196 @@
+---
+title: 헤더 파일과 기능 검사 매크로
+description: 선언과 정의, 단일 정의 규칙, 포함 가드와 #pragma once로 중복 정의 막기, 앞쪽 선언으로 순환 의존 끊기, __has_include, 언어 기능 검사 매크로를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import featureTestCode from '../../../../examples/ch11/feature-test.cpp?raw';
+import featureTestCpp11Code from '../../../../examples/ch11/feature-test-cpp11.cpp?raw';
+
+- 다루는 것: 모듈 이전에 인터페이스를 제공하던 **헤더 파일**의 까다로운 부분. 기존 코드에서 반드시 만나게 됨
+- 이 글에서 배우는 요소: 선언과 정의, 단일 정의 규칙, 포함 가드, `#pragma once`, 앞쪽 선언, `__has_include`, 기능 검사 매크로
+
+## 헤더 파일
+
+- C++20의 모듈 이전에는 **헤더 파일**(헤더)이 하위 시스템이나 코드 조각의 인터페이스를 제공했음
+- 가장 흔한 쓰임: 다른 곳에서 정의할 함수를 **선언**함
+  - **선언** (declaration): 어떤 이름의 것(함수, 변수 등)이 있다고 컴파일러에게 알림. 함수라면 매개변수 개수와 타입, 반환 타입으로 부르는 방법을 알려 줌
+  - **정의** (definition): 있다고 알리면서 그것 자체를 만듦. 함수라면 실제 코드를 담음
+  - 모든 정의는 선언이지만, 모든 선언이 정의는 아님
+- 선언(클래스 정의도 선언의 일종, 8장)은 보통 헤더(`.h`)에, 정의(인라인이 아닌 클래스 멤버의 정의 포함)는 보통 소스 파일(`.cpp`)에 둠
+- 이 사이트는 모듈을 쓰는 것을 기본으로 하지만, 기존 코드 때문에 헤더의 까다로운 점을 알아야 함
+
+## 단일 정의 규칙
+
+- **단일 정의 규칙** (one definition rule, ODR) <CppRef path="cpp/language/definition" />
+  - 번역 단위 하나에는 변수, 함수, 클래스 타입, 열거형, 콘셉트, 템플릿의 정의가 **정확히 하나**만 있을 수 있음. 어떤 것은 선언이 여럿이어도 되지만 정의는 하나
+  - 인라인이 아닌 함수와 변수의 정의는 **프로그램 전체에** 정확히 하나
+- 헤더를 쓰면 이 규칙을 어겨 중복 정의를 만들기 쉬움
+- 모듈끼리는 어기기 어려움
+  - 모듈에서 내보내지 않은 것은 모듈 링크라 다른 모듈에서 접근할 수 없음. 여러 모듈이 같은 이름의 내보내지 않는 것을 각자 정의해도 문제없음
+  - 모듈이 아닌 소스 파일에서는 그 파일 안에서만 쓰려던 함수도 기본이 외부 링크(4편). 다른 파일의 같은 이름과 부딪칠 수 있음
+  - 물론 한 모듈 안에서는 여전히 규칙을 지켜야 함
+
+## 중복 정의 막기
+
+- `a.h`와 `b.h`가 둘 다 `Logger` 클래스를 정의한 `logger.h`를 포함하고, `app.cpp`가 `a.h`와 `b.h`를 모두 포함하면?
+  - `logger.h`가 두 번 들어와 `Logger` 클래스가 두 번 정의됨: `redefinition of 'class Logger'`
+- 해법: **포함 가드** (include guard, 헤더 가드라고도 함)
+
+```cpp
+#ifndef LOGGER_H
+#define LOGGER_H
+
+class Logger { /* ... */ };
+
+#endif // LOGGER_H
+```
+
+- 헤더 맨 앞의 `#ifndef`가 어떤 키가 정의되지 않았는지 확인함
+  - 이미 정의되어 있으면 짝이 맞는 `#endif`(보통 파일 끝)로 건너뜀
+  - 정의되어 있지 않으면 그 키를 정의하고 계속함. 같은 파일을 다시 포함하면 건너뛰게 됨
+- 대안: 요즘 거의 모든 컴파일러가 지원하는 **`#pragma once`**. 헤더 맨 앞에 두면 한 번만 포함됨
+
+```cpp
+#pragma once
+
+class Logger { /* ... */ };
+```
+
+:::note
+포함 가드와 `#pragma once`가 막는 것은 한 번역 단위 안에서 헤더가 여러 번 포함되어 생기는 단일 정의 규칙 위반뿐이다. 여러 번역 단위 사이의 위반은 막지 못한다(예: 헤더에 인라인이 아닌 함수를 정의하면 그 헤더를 포함한 소스 파일마다 정의가 생겨 링크 오류).
+:::
+
+## 순환 의존 끊기
+
+- 헤더 문제를 피하는 다른 도구: **앞쪽 선언** (forward declaration)
+- 어떤 클래스를 가리켜야 하는데 그 헤더를 포함할 수 없을 때(예: 그 클래스가 지금 쓰는 클래스에 크게 의존할 때)
+  - 정식 정의 없이 "이런 클래스가 있다"고만 컴파일러에게 알림
+  - 컴파일러는 그 클래스에 대해 아무것도 모르므로 실제로 쓸 수는 없음
+  - 그러나 그 클래스의 **포인터와 참조**는 쓸 수 있음
+  - 그 클래스를 값으로 돌려주거나 값으로 받는 함수를 **선언**할 수도 있음. 물론 그 함수를 정의하는 코드와 부르는 코드는 제대로 된 헤더를 포함해야 함
+- 예: `Logger`가 사용자 설정을 담는 `Preferences`를 쓰고, `Preferences`도 `Logger`를 씀
+  - 포함 가드로도 풀리지 않는 **순환 의존**
+  - `Logger.h`는 `Preferences`를 앞쪽 선언만 하고 헤더를 포함하지 않음
+
+```cpp
+#pragma once
+#include <string_view>
+
+class Preferences;   // 앞쪽 선언
+
+class Logger
+{
+public:
+    void setPreferences(const Preferences& preferences);
+    void logError(std::string_view error);
+};
+```
+
+- 헤더에서는 다른 헤더를 포함하는 대신 되도록 앞쪽 선언을 쓰는 것을 권함
+  - 헤더 사이의 의존이 끊겨 컴파일·재컴파일 시간이 줄어듦
+  - 물론 구현 파일은 앞쪽 선언한 타입의 헤더를 제대로 포함해야 컴파일됨
+
+## 헤더가 있는지 묻기
+
+- `__has_include("파일이름")` 또는 `__has_include(<파일이름>)` <Badge text="C++17" />: 헤더가 있으면 1, 없으면 0인 전처리기 상수 식 <CppRef path="cpp/preprocessor/include" />
+- 예: `<optional>`이 C++17에 정식으로 들어오기 전, 일부 컴파일러는 `<experimental/optional>`에 미리 넣어 두었음. 어느 쪽이 있는지 확인할 수 있음
+
+```cpp
+#if __has_include(<optional>)
+    #include <optional>
+#elif __has_include(<experimental/optional>)
+    #include <experimental/optional>
+#endif
+```
+
+## 헤더에는 import를 넣지 않음
+
+- 헤더 파일에는 모듈 `import` 선언을 넣지 않음
+- 표준 규정: `import` 선언은 파일 맨 앞, 다른 선언보다 앞에 있어야 하고, 헤더를 포함하거나 매크로를 펼쳐서 나와서는 안 됨
+  - 그래야 빌드 시스템이 모듈 의존을 찾아 모듈을 빌드할 순서를 정하기 쉬움
+
+## 언어 기능 검사 매크로
+
+- **기능 검사 매크로** (feature-test macro) <Badge text="C++20" />: 컴파일러가 어떤 언어 기능을 지원하는지 알아냄 <CppRef path="cpp/feature_test" />
+  - 모두 `__cpp_` 또는 `__has_cpp_`로 시작함
+  - 예: `__cpp_range_based_for`, `__cpp_binary_literals`, `__cpp_char8_t`, `__cpp_generic_lambdas`, `__cpp_consteval`, `__cpp_coroutines`, `__has_cpp_attribute(이름)`
+- 값은 그 기능이 들어오거나 바뀐 **연월**(YYYYMM)
+  - 예: `__cpp_binary_literals`는 201304(2013년 4월, 2진 리터럴이 들어온 때)
+  - `__has_cpp_attribute(nodiscard)`는 201603이거나 201907. 2019년 7월에 `[[nodiscard("이유")]]`처럼 이유를 적을 수 있게 바뀜
+- 언어 기능 검사 매크로는 헤더를 포함하지 않아도 쓸 수 있음
+- 표준 라이브러리 기능에도 비슷한 매크로가 있음(16장)
+
+<RunCode client:load code={featureTestCode} />
+
+- 볼 것: `[[nodiscard]]`가 201907로, 이유를 적을 수 있는 판까지 지원함
+
+:::note
+기능 검사 매크로는 여러 플랫폼·여러 컴파일러용 코드를 쓸 때가 아니면 거의 필요 없다. 그런 코드라면 컴파일러가 어떤 기능을 지원하는지 알아내 없을 때 대신할 코드를 넣을 수 있다. 크로스 플랫폼 개발은 34장에서 다룬다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `__has_include` | C++17 | 빌드 시스템에서 헤더 유무를 검사해 매크로로 넘김 |
+| 기능 검사 매크로(표준화) | C++20 | 컴파일러별로 이미 정의하던 것(GCC는 C++11 모드에서도 일부 정의) 또는 컴파일러 버전 매크로 |
+
+- 포함 가드, 앞쪽 선언은 처음부터 있음. `#pragma once`는 표준은 아니지만 거의 모든 컴파일러가 지원함
+- 아래 코드는 C++11 옵션으로 컴파일됨. GCC는 C++11 모드에서도 그 표준에 있는 기능의 매크로(`__cpp_range_based_for`)는 정의하고, 이후 표준의 기능(`__cpp_consteval`)은 정의하지 않음
+
+<RunCode client:load code={featureTestCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 선언과 정의는 같은 말이다?
+  - 정의는 선언이면서 그것을 만듦. 선언은 있다고 알리기만 함
+- 포함 가드가 있으면 헤더에 함수를 정의해도 된다?
+  - 한 번역 단위 안의 중복만 막음. 여러 소스 파일이 포함하면 링크 오류. 헤더에 정의하는 함수는 `inline`으로
+- 앞쪽 선언만 하면 그 클래스의 멤버도 쓸 수 있다?
+  - 포인터·참조와 선언까지만. 멤버를 쓰려면 정의(헤더)가 필요함
+- 기능 검사 매크로의 값은 표준 버전이다?
+  - 그 기능이 들어오거나 바뀐 연월
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 선언 / 정의 | 있다고 알림 / 알리면서 만듦 |
+| 단일 정의 규칙 | 번역 단위마다 정의 하나. 인라인 아닌 함수·변수는 프로그램 전체에 하나 |
+| 포함 가드 | `#ifndef X` `#define X` … `#endif` |
+| `#pragma once` | 표준은 아니지만 거의 모든 컴파일러가 지원 |
+| 앞쪽 선언 | `class X;`. 포인터·참조 사용, 순환 의존 끊기, 재컴파일 줄이기 |
+| `__has_include` | 헤더 유무를 검사(C++17) |
+| 기능 검사 매크로 | `__cpp_...`, `__has_cpp_attribute`. 값은 YYYYMM |
+
+## 복습 질문
+
+<details>
+<summary>포함 가드가 없는 `logger.h`를 `a.h`와 `b.h`가 포함하고, `app.cpp`가 둘을 모두 포함하면?</summary>
+
+- `Logger` 클래스가 한 번역 단위에 두 번 정의되어 `redefinition of 'class Logger'` 오류
+- `logger.h`에 포함 가드나 `#pragma once`를 넣음
+
+</details>
+
+<details>
+<summary>`Logger.h`에서 `Preferences`의 헤더를 포함하지 않고 `const Preferences&` 매개변수를 쓰려면?</summary>
+
+- `class Preferences;`로 앞쪽 선언함. 참조는 정의 없이도 쓸 수 있음
+
+</details>
+
+<details>
+<summary>컴파일러가 `consteval`을 지원할 때만 어떤 코드를 넣으려면?</summary>
+
+- `#ifdef __cpp_consteval` … `#endif`로 감쌈
+
+</details>
