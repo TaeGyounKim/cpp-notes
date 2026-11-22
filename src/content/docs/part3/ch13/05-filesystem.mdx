@@ -1,0 +1,258 @@
+---
+title: 파일 시스템 라이브러리
+description: std::filesystem의 path로 경로를 만들고 나누고 잇기, directory_entry로 실제 파일 정보 얻기, 도우미 함수들, recursive_directory_iterator와 directory_iterator로 디렉터리 훑기를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import fsCode from '../../../../examples/ch13/filesystem.cpp?raw';
+import fsCpp11Code from '../../../../examples/ch13/filesystem-cpp11.cpp?raw';
+
+- 다루는 것: 경로, 디렉터리, 파일을 이식성 있게 다루는 표준 라이브러리. 스트림의 입출력을 잘 보완함
+- 이 글에서 배우는 요소: `std::filesystem::path`, `directory_entry`, 도우미 함수, `recursive_directory_iterator`, `directory_iterator`
+
+## 파일 시스템 라이브러리
+
+- **파일 시스템 라이브러리** (filesystem library) <Badge text="C++17" />: `<filesystem>`, `std::filesystem` 네임스페이스 <CppRef path="cpp/filesystem" />
+- 할 수 있는 일
+  - 무엇이 디렉터리인지 파일인지 묻기
+  - 디렉터리 내용 훑기
+  - 경로 조작
+  - 파일의 크기, 확장자, 만든 시각 등 정보 얻기
+- 가장 중요한 두 부품: **경로**와 **디렉터리 항목**
+- 이름이 길어서 흔히 별칭을 둠: `namespace fs = std::filesystem;`
+
+## 경로
+
+- `path`: 라이브러리의 기본 부품 <CppRef path="cpp/filesystem/path" />
+  - 절대 경로일 수도 상대 경로일 수도 있고, 파일 이름을 포함할 수도 있음
+  - 백슬래시를 이스케이프하지 않으려면 원시 문자열 리터럴(2장)을 씀
+
+```cpp
+fs::path p1{ R"(D:\Data\Logs)" };
+fs::path p2{ "D:/Data/Logs" };
+fs::path p3{ "D:/Data/Logs/day01.txt" };
+fs::path p4{ R"(..\Other)" };
+fs::path p5{ "/usr/lib" };
+```
+
+- `string()`: 실행 중인 시스템의 기본 형식 문자열로 바꿈
+  - Windows는 `/`와 `\`를 모두 지원하므로 `p1`은 `D:\Data\Logs`, `p2`는 `D:/Data/Logs` 그대로 나옴
+  - 어느 시스템에서나 `/`로 된 형식을 원하면 `generic_string()`
+
+### 잇기: /=와 +=
+
+| 방법 | 구분자 |
+| --- | --- |
+| `append()`, `/=`, `/` | 플랫폼에 맞는 경로 구분자를 **넣어** 덧붙임 |
+| `concat()`, `+=` | 구분자 **없이** 문자열을 이어 붙임 |
+
+```cpp
+fs::path dir{ "/data" };
+dir /= "logs";          // /data/logs
+fs::path name{ "day" };
+name += "01.txt";       // day01.txt
+fs::path full{ dir / name };   // /data/logs/day01.txt
+```
+
+:::caution
+`append()`와 `/=`는 플랫폼에 맞는 경로 구분자를 자동으로 넣지만, `concat()`과 `+=`는 넣지 않는다. Windows에서 `D:\Data`에 `+= "Logs"`를 하면 `D:\DataLogs`가 된다.
+:::
+
+### 구성 요소
+
+- 범위 기반 `for`로 경로의 구성 요소를 하나씩 훑을 수 있음
+
+```cpp
+fs::path p{ "/data/sensors/room.csv" };
+for (const auto& part : p) { std::print("[{}]", part.string()); }
+```
+
+- 출력(Linux): `[/][data][sensors][room.csv]`
+- Windows에서 `C:\Data\Logs`라면 `[C:][\][Data][Logs]`(로컬 MinGW GCC로 확인)
+
+- 경로를 나누고 바꾸는 멤버들
+
+| 멤버 | `/data/sensors/room.csv`의 결과 |
+| --- | --- |
+| `root_name()` | (Linux에서는 비어 있음. Windows `C:\...`라면 `C:`) |
+| `parent_path()` | `/data/sensors` |
+| `filename()` | `room.csv` |
+| `stem()` | `room` |
+| `extension()` | `.csv` |
+
+- 그 밖에 `remove_filename()`, `replace_filename()`, `replace_extension()`, `has_extension()`, `is_absolute()`, `is_relative()` 등
+
+## 디렉터리 항목
+
+- `path`는 디렉터리나 파일을 **나타낼** 뿐. 없는 디렉터리나 파일을 가리킬 수도 있음
+- 실제 파일 시스템의 디렉터리나 파일을 물으려면 `path`로 `directory_entry`를 만듦 <CppRef path="cpp/filesystem/directory_entry" />
+  - `exists()`, `is_directory()`, `is_regular_file()`, `file_size()`, `last_write_time()` 등
+
+```cpp
+fs::directory_entry entry{ "/etc/hostname" };
+if (entry.exists() && entry.is_regular_file()) {
+    std::println("크기 {}바이트", entry.file_size());
+}
+```
+
+## 도우미 함수
+
+- `std::filesystem`에는 도우미 함수가 많음
+
+| 함수 | 하는 일 |
+| --- | --- |
+| `copy()` | 파일이나 디렉터리 복사 |
+| `create_directory()`, `create_directories()` | 디렉터리 하나 / 중간 디렉터리까지 모두 만들기 |
+| `exists()` | 디렉터리나 파일이 있는지 |
+| `file_size()` | 파일 크기 |
+| `last_write_time()` | 마지막으로 고친 시각 |
+| `remove()`, `remove_all()` | 하나 지우기 / 안의 것까지 모두 지우고 지운 개수 반환 |
+| `temp_directory_path()` | 임시 파일을 두기 알맞은 디렉터리 |
+| `space()` | 파일 시스템의 전체·남은 공간 |
+| `relative()` | 기준 경로에 대한 상대 경로 |
+
+```cpp
+fs::space_info info{ fs::space("/") };
+std::println("전체 {}, 남음 {}", info.capacity, info.free);
+```
+
+## 디렉터리 훑기
+
+### recursive_directory_iterator
+
+- 디렉터리 아래의 모든 파일과 하위 디렉터리를 **재귀적으로** 훑음 <CppRef path="cpp/filesystem/recursive_directory_iterator" />
+  - 시작 반복자: 훑을 디렉터리의 경로로 `recursive_directory_iterator`를 만듦
+  - 끝 반복자: 기본 생성한 `recursive_directory_iterator`
+  - `*`로 반복자가 가리키는 `directory_entry`에 접근하고, `++`로 끝 반복자에 닿을 때까지 나아감
+  - 끝 반복자는 유효한 항목을 가리키지 않으므로 역참조하면 안 됨
+  - `depth()`: 지금 항목이 시작 디렉터리에서 몇 단계 아래인지
+
+```cpp
+void printTree(const fs::path& p)
+{
+    if (!fs::exists(p)) { return; }
+    for (fs::recursive_directory_iterator it{ p }, end; it != end; ++it) {
+        const std::string spacer(it.depth() * 2, ' ');
+        const auto& entry{ *it };
+        if (entry.is_regular_file()) {
+            std::println("{}파일 {} ({}바이트)", spacer,
+                         entry.path().string(), entry.file_size());
+        } else if (entry.is_directory()) {
+            std::println("{}폴더 {}", spacer, entry.path().string());
+        }
+    }
+}
+```
+
+### directory_iterator
+
+- 디렉터리 한 단계의 내용만 훑음. 재귀는 직접 구현함 <CppRef path="cpp/filesystem/directory_iterator" />
+- 범위 기반 `for`에 바로 쓸 수 있음
+
+```cpp
+void printTree(const fs::path& p, unsigned level = 0)
+{
+    if (!fs::exists(p)) { return; }
+    const std::string spacer(level * 2, ' ');
+    if (fs::is_regular_file(p)) {
+        std::println("{}파일 {} ({}바이트)", spacer, p.string(), fs::file_size(p));
+    } else if (fs::is_directory(p)) {
+        std::println("{}폴더 {}", spacer, p.string());
+        for (const auto& entry : fs::directory_iterator{ p }) {
+            printTree(entry.path(), level + 1);
+        }
+    }
+}
+```
+
+:::note
+디렉터리를 훑는 순서는 정해져 있지 않다. 운영체제와 파일 시스템에 따라 다르다. 정해진 순서로 보이려면 모아서 정렬한다.
+:::
+
+<RunCode client:load code={fsCode} />
+
+- 볼 것
+  - 경로 조작은 실제 파일이 없어도 됨
+  - `/=`는 구분자를 넣고, `+=`는 그냥 이어 붙임
+  - 실행 환경(Linux)의 임시 디렉터리 아래에 폴더 둘과 파일 둘을 만들고, 훑고, 지움. `remove_all()`이 지운 항목 수 5는 `fs-demo`, `a`, `b`, 파일 둘
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `<filesystem>` 전체 | C++17 | Boost.Filesystem(표준 라이브러리의 바탕이 된 라이브러리), 운영체제 API(POSIX `opendir()`·`stat()`, Windows `FindFirstFile()` 등) |
+| 경로 나누기 | C++17 | 문자열의 `find_last_of()`, `substr()`로 직접 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 경로 문자열을 직접 나눔
+
+<RunCode client:load code={fsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `path`를 만들면 그 파일이 있는지 검사된다?
+  - 경로를 나타낼 뿐. 있는지는 `exists()`나 `directory_entry`로
+- `+=`도 `/=`처럼 구분자를 넣는다?
+  - `+=`는 그냥 이어 붙임. 구분자는 `/=`, `/`, `append()`
+- `filename()`과 `stem()`은 같다?
+  - `stem()`은 확장자를 뺀 이름
+- 디렉터리를 훑으면 이름 순서로 나온다?
+  - 순서가 정해져 있지 않음
+- `remove()`로 비어 있지 않은 디렉터리를 지울 수 있다?
+  - 안의 것까지 지우려면 `remove_all()`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `path` | 경로 표현. `string()`, `generic_string()` |
+| 잇기 | `/=`, `/`, `append()`(구분자 넣음) / `+=`, `concat()`(안 넣음) |
+| 나누기 | `parent_path()`, `filename()`, `stem()`, `extension()`, `root_name()` |
+| `directory_entry` | 실제 항목 정보. `exists()`, `is_regular_file()`, `file_size()` |
+| 도우미 | `create_directories()`, `remove_all()`, `copy()`, `space()`, `temp_directory_path()` |
+| 훑기 | `recursive_directory_iterator`(재귀, `depth()`), `directory_iterator`(한 단계) |
+
+## 복습 질문
+
+<details>
+<summary>`fs::path p{ "/logs/2026/app.log" };`에서 확장자만 `.bak`으로 바꾼 경로를 얻으려면?</summary>
+
+- `p.replace_extension(".bak");` 후 `p`는 `/logs/2026/app.bak`
+
+</details>
+
+<details>
+<summary>설정 폴더 `~/.myapp/cache/images`가 없으면 중간 폴더까지 모두 만들려면?</summary>
+
+- `fs::create_directories(path);`. `create_directory()`는 마지막 한 단계만 만듦
+
+</details>
+
+<details>
+<summary>디렉터리 아래 모든 `.csv` 파일의 크기 합을 구하려면?</summary>
+
+```cpp
+std::uintmax_t total{ 0 };
+for (const auto& e : fs::recursive_directory_iterator{ dir }) {
+    if (e.is_regular_file() && e.path().extension() == ".csv") {
+        total += e.file_size();
+    }
+}
+```
+
+</details>
+
+## 13장을 마치며
+
+- 스트림은 데이터를 다루는 유연하고 객체 지향적인 방법
+  - 콘솔, 파일, 문자열, 고정 버퍼에 같은 방식으로 읽고 씀
+  - 출력과 입력의 조작자, 상태와 오류 처리, 위치 옮기기, 연결, 양방향 스트림
+- 콘솔 출력에는 `std::print()`와 `std::println()`을 권하지만, 스트림을 쓰는 기존 코드는 흔함
+- 파일 시스템 라이브러리로 경로, 디렉터리, 파일을 이식성 있게 다룸
+- 다음 장(14장): 오류 처리
