@@ -1,0 +1,279 @@
+---
+title: 날짜와 시간대
+description: year, month, day와 year_month_day 등 달력 타입, / 연산자로 날짜 만들기, 몇째 요일과 마지막 날, ok()로 검증하기, 직렬 타입 sys_days와 필드 타입의 차이, 날짜 출력과 계산에서 years를 더할 때의 함정, 시간대 데이터베이스와 time_zone, zoned_time을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import dzCode from '../../../../examples/ch22/dates-zones.cpp?raw';
+import dzCpp11Code from '../../../../examples/ch22/dates-zones-cpp11.cpp?raw';
+
+- 다루는 것: 달력 날짜를 만들고, 검증하고, 계산하고, 시간대 사이에서 시각을 바꾸는 법 <Badge text="C++20" />
+- 이 글에서 배우는 요소: 달력 타입, `/` 연산자, `ok()`, `sys_days`, 날짜 출력, 날짜 계산, `time_zone`, `zoned_time`
+- 이 글의 기능은 모두 C++20부터. 모두 `std::chrono`
+
+## 달력 타입
+
+- 지금은 **그레고리력**만 지원함
+  - 필요하면 나머지 `<chrono>` 기능과 함께 쓰이는 다른 달력(율리우스력 등)을 직접 만들 수 있음
+- 기능이 아주 많으므로 여기서는 중요한 것만 봄. 전체는 표준 라이브러리 레퍼런스에서
+
+| 클래스 | 나타내는 것 |
+| --- | --- |
+| `year` | 연. 범위 [-32767, 32767]. `is_leap()`으로 윤년인지, 정적 `min()`, `max()` |
+| `month` | 월. 범위 [1, 12]. 이름 있는 상수 `January`부터 `December` |
+| `day` | 일. 범위 [1, 31] |
+| `weekday` | 요일. 범위 [0, 6]이고 0이 일요일. 상수 `Sunday`부터 `Saturday` |
+| `weekday_indexed` | 그 달의 첫째부터 다섯째 요일. `Monday[2]`는 둘째 월요일 |
+| `weekday_last` | 그 달의 마지막 요일. `Friday[last]` |
+
+- 조합 타입
+
+| 클래스 | 나타내는 것 |
+| --- | --- |
+| `month_day`, `month_day_last` | 어떤 달의 날, 어떤 달의 마지막 날(연은 정하지 않음) |
+| `month_weekday`, `month_weekday_last` | 어떤 달의 n째 요일, 마지막 요일 |
+| `year_month` | 어떤 연의 어떤 달 |
+| `year_month_day` | 연, 월, 일. 가장 많이 씀 <CppRef path="cpp/chrono/year_month_day" /> |
+| `year_month_day_last` | 어떤 연·월의 마지막 날 |
+| `year_month_weekday`, `year_month_weekday_last` | 어떤 연·월의 n째 요일, 마지막 요일 |
+
+- 모든 클래스에 **`ok()`**: 값이 유효한 범위면 `true`
+  - `year_month_day`라면 그 달에 그 날이 실제로 있는지까지 봄. 2026-02-30은 `false`
+
+## 날짜 만들기
+
+- 리터럴 `y`(연)와 `d`(일)가 `std::literals::chrono_literals`에 있음 <CppRef path="cpp/chrono/operator%22%22y" />
+- `operator/`로 연, 월, 일을 이어 붙임. 순서 셋이 됨: 연/월/일, 월/일/연, 일/월/연 <CppRef path="cpp/chrono/operator_slash" />
+
+```cpp
+using namespace std::chrono;
+year y{ 2026 };            auto y2{ 2026y };
+month m{ 3 };              auto m2{ March };
+day d{ 14 };               auto d2{ 14d };
+
+year_month_day a{ 2026y, March, 14d };
+auto b{ 2026y / March / 14d };
+auto c{ 14d / March / 2026y };
+auto e{ March / 14d / 2026 };          // 월/일/연. 맨 끝 연은 int도 됨
+```
+
+- `int`는 놓인 자리와 옆 피연산자의 타입으로 연, 월, 일 중 무엇인지 정해짐. 읽기 쉽고 모호하지 않게 되도록 `2026y`, `March`, `14d`처럼 타입 있는 값을 씀
+- 몇째 요일과 마지막 날 <CppRef path="cpp/chrono/weekday_indexed" /> <CppRef path="cpp/chrono/last_spec" />
+
+```cpp
+auto secondMon{ 2026y / June / Monday[2] };      // year_month_weekday
+auto lastDay{ 2026y / June / last };             // year_month_day_last
+auto lastFri{ 2026y / June / Friday[last] };     // year_month_weekday_last
+auto memo{ June / 14d };                         // month_day, 연 없음
+auto withYear{ 2026y / memo };                   // year_month_day
+```
+
+## 직렬 타입과 필드 타입
+
+- `sys_time`: `system_clock`의 `time_point`에 붙은 별칭 템플릿 <CppRef path="cpp/chrono/system_clock" />
+
+```cpp
+template <class Duration>
+using sys_time = time_point<system_clock, Duration>;
+using sys_seconds = sys_time<seconds>;
+using sys_days = sys_time<days>;
+```
+
+- **직렬 타입** (serial-based type): 기점부터의 수 하나만 담음. `sys_days`는 1970-01-01부터 며칠인지
+- **필드 타입** (field-based type): 연, 월, 일을 각각의 필드에 담음. `year_month_day`
+- 날짜 계산을 많이 할 때는 직렬 타입이 빠름
+- 지역 시각용 별칭 `local_time`, `local_seconds`, `local_days`도 있음(시간대 절) <CppRef path="cpp/chrono/local_t" />
+- 오가기
+
+```cpp
+// 오늘(UTC). sys_days
+auto today{ floor<days>(system_clock::now()) };
+// 날짜 → time_point
+system_clock::time_point tp{ sys_days{ 2026y / March / 14d } };
+// time_point → 날짜
+year_month_day ymd{ floor<days>(tp) };
+// 날짜와 시각
+auto when{ sys_days{ 2026y / March / 14d } + 9h + 35min };
+```
+
+- `year_month_weekday`, `year_month_day_last`의 실제 날짜가 필요하면 `sys_days`를 거쳐 `year_month_day`로 바꿈
+
+## 날짜 출력
+
+- `<<`로 스트림에, `println`으로 바로 출력 <CppRef path="cpp/chrono/system_clock/formatter" />
+- `L`을 붙이면 전역 로캘을 따름(요일, 월 이름이 그 언어로)
+- 출력이 예상과 다를 수 있음
+  - `2026y / June / Monday[last]`를 그대로 출력하면 `2026/Jun/Mon[last]`
+  - 실제 날짜를 보려면 `year_month_day{ sys_days{ ... } }`로 바꿔 출력: `2026-06-29`
+- 유효하지 않은 날짜를 출력하면 뒤에 오류 문구가 붙음. `year_month_day`면 `is not a valid date`
+- 서식 지정자 `%A`는 요일의 전체 이름, `%a`는 줄인 이름
+
+```cpp
+std::locale::global(std::locale{ "de_DE.UTF-8" });
+std::println("{:L%A}", Monday);        // Montag
+```
+
+## 날짜 계산
+
+- 직렬 타입에 duration을 더하고 빼면 됨
+
+```cpp
+auto t1{ sys_days{ 2026y / June / 1d } + 9h + 30min };
+auto t2{ t1 + days{ 5 } };
+```
+
+- **함정**: `time_point`에 `years{ 1 }`을 더하면 시각이 바뀜
+  - `years`는 그레고리력의 **평균** 1년: 365.2425일 = 31,556,952초
+  - 365일(31,536,000초)이 아니므로, 2026-06-01 09:30:00 + `years{ 1 }`은 2027-06-01 15:19:12
+- 정확히 연만 1 올리려면 **필드 타입**에서 더함
+
+```cpp
+sys_days d{ floor<days>(t1) };              // 날짜 부분
+auto timeOfDay{ t1 - d };                    // 시각 부분
+year_month_day ymd{ d };                     // 필드 타입으로
+auto next{ sys_days{ ymd + years{ 1 } } + timeOfDay };   // 2027-06-01 09:30:00
+```
+
+- 필드 타입에 `months`, `years`를 더하면 해당 필드만 바뀜
+  - 결과가 없는 날짜일 수 있음: 1월 31일 + 1개월은 2월 31일(`ok()`가 `false`). 직접 처리해야 함
+
+## 시간대
+
+- 표준 라이브러리는 IANA 시간대 데이터베이스의 사본을 가짐
+- `get_tzdb()`: 유일한 `tzdb` 인스턴스의 `const` 참조. `zones`라는 `vector`에 알려진 모든 시간대(`time_zone`)가 있음 <CppRef path="cpp/chrono/tzdb_functions" />
+- `time_zone` <CppRef path="cpp/chrono/time_zone" />
+  - `name()`: 이름. 예: `"Asia/Seoul"`
+  - `to_local(sys_time)`: UTC 시각을 그 지역 시각(`local_time`)으로
+  - `to_sys(local_time)`: 지역 시각을 UTC로
+- 일광 절약 시간 때문에 지역 시각 → UTC 변환이 모호하거나(한 시각이 두 번) 없는(건너뛴 시각) 경우가 있음
+  - 각각 `ambiguous_local_time`, `nonexistent_local_time` 예외를 던짐
+
+```cpp
+for (const auto& zone : std::chrono::get_tzdb().zones) {
+    std::println("{}", zone.name());
+}
+```
+
+- 시간대 찾기 <CppRef path="cpp/chrono/locate_zone" />
+  - `locate_zone(이름)`: 이름으로 찾음. 없으면 `runtime_error`
+  - `current_zone()`: 이 컴퓨터의 현재 시간대
+
+```cpp
+const time_zone* seoul{ locate_zone("Asia/Seoul") };
+auto utc{ sys_days{ 2026y / June / 1d } + 9h + 30min };
+auto local{ seoul->to_local(utc) };          // 2026-06-01 18:30:00
+auto here{ current_zone()->to_local(system_clock::now()) };
+```
+
+### zoned_time
+
+- 시간대 하나와 그 시간대의 시각 하나를 함께 담음 <CppRef path="cpp/chrono/zoned_time" />
+  - `get_local_time()`: 지역 시각, `get_sys_time()`: UTC 시각
+  - 출력하면 시간대 약어(`KST`, `EDT`)가 붙음
+- 다른 시간대의 `zoned_time`으로 만들면 같은 순간을 그 지역 시각으로 바꿈
+
+```cpp
+zoned_time meet{ "Asia/Seoul", local_days{ 2026y / June / 1d } + 22h };
+zoned_time there{ "America/New_York", meet };
+// meet은 22:00 KST, there는 같은 순간인 09:00 EDT
+```
+
+<RunCode client:load code={dzCode} />
+
+- 볼 것
+  - `/` 연산자로 날짜를 만들고, 2월 30일은 `ok()`가 `false`이고 출력에 `is not a valid date`가 붙음
+  - 넷째 목요일, 2월의 마지막 날은 `sys_days`를 거쳐 실제 날짜로
+  - `years{ 1 }`을 직렬 타입에 더하면 `15:19:12`, 필드 타입에 더하면 `09:30:00`
+  - 같은 UTC 시각의 서울, 뉴욕 지역 시각. `zoned_time` 출력에 붙은 약어
+
+:::note
+시간대 데이터베이스는 구현과 운영체제에 따라 다르게 준비된다. 운영체제의 시간대 파일을 읽는 구현도 있고, 라이브러리에 데이터를 넣어 둔 구현도 있다. 어떤 환경에서는 `locate_zone`이 실패하거나 데이터가 오래되었을 수 있다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 달력 타입, `/` 연산자, `sys_days`, `days`, `years` | C++20 | C의 `std::tm`, `std::mktime`, 직접 계산 |
+| 날짜 출력, `%A` 등 | C++20 | `std::strftime`, `std::put_time` |
+| `time_zone`, `zoned_time`, `get_tzdb` | C++20 | 운영체제 API나 외부 라이브러리 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. `std::mktime`이 범위를 넘은 필드를 맞는 날짜로 정규화하는 것을 써서 45일 뒤를 구함
+
+<RunCode client:load code={dzCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `2026y / February / 30d`는 만들 때 오류가 난다?
+  - 만들어지고, `ok()`가 `false`. 직접 검사해야 함
+- `time_point`에 `years{ 1 }`을 더하면 날짜만 1년 뒤가 된다?
+  - 평균 1년(365.2425일)이 더해져 시각도 바뀜. 필드 타입에서 더함
+- `2026y / June / Monday[last]`를 출력하면 날짜가 나온다?
+  - `2026/Jun/Mon[last]`. `sys_days`를 거쳐 `year_month_day`로
+- `weekday`의 0은 월요일이다?
+  - 0이 일요일
+- 지역 시각을 UTC로 바꾸는 `to_sys`는 언제나 성공한다?
+  - 일광 절약 시간 경계에서 한 시각이 두 번 있거나 건너뛰면 예외. 반대 방향 `to_local`은 늘 됨
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 달력 타입 | `year`, `month`, `day`, `weekday`, `year_month_day` 등. `ok()` |
+| 만들기 | `2026y / March / 14d`, `Monday[2]`, `last` |
+| 직렬 타입 | `sys_days`, `sys_seconds`, `local_days`. 계산에 유리 |
+| 필드 타입 | `year_month_day`. 연·월 단위 계산 |
+| 시간대 | `locate_zone`, `current_zone`, `to_local`, `to_sys` |
+| `zoned_time` | 시간대 + 시각. 다른 시간대로 바꾸기 |
+
+## 복습 질문
+
+<details>
+<summary>2027년 1월 1일이 무슨 요일인지 구하려면?</summary>
+
+```cpp
+using namespace std::chrono;
+weekday wd{ sys_days{ 2027y / January / 1d } };
+std::println("{}", wd);   // Fri
+```
+
+</details>
+
+<details>
+<summary>사용자가 입력한 연, 월, 일(`int`)이 실제 날짜인지 검사하려면?</summary>
+
+```cpp
+using namespace std::chrono;
+year_month_day ymd{ year{ y }, month{ static_cast<unsigned>(m) },
+                    day{ static_cast<unsigned>(d) } };
+bool valid{ ymd.ok() };
+```
+
+- `month`와 `day`의 생성자는 `unsigned`를 받음
+
+</details>
+
+<details>
+<summary>서울에서 오전 9시 회의가 런던에서는 몇 시인지 구하려면?</summary>
+
+```cpp
+using namespace std::chrono;
+zoned_time seoul{ "Asia/Seoul", local_days{ 2026y / June / 1d } + 9h };
+zoned_time london{ "Europe/London", seoul };
+std::println("{}", london);   // 2026-06-01 01:00:00 BST
+```
+
+</details>
+
+## 22장을 마치며
+
+- `ratio`로 컴파일 시간 유리수를 정의하고 다루는 법을 봄
+- chrono 라이브러리의 duration, 시계, time point, 날짜, 시간대를 다룸
+- 다음 장(23장): 표준 라이브러리의 난수 생성 기능
