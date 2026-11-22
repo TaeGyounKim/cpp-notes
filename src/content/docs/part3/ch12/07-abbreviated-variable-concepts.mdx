@@ -1,0 +1,301 @@
+---
+title: 축약 함수 템플릿, 변수 템플릿, 콘셉트 기초
+description: auto 매개변수로 쓰는 축약 함수 템플릿, 타입마다 값이 다른 변수 템플릿, 템플릿 인수의 요구 사항을 이름 붙여 적는 콘셉트와 requires 식의 네 가지 요구 사항을 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import conceptsCode from '../../../../examples/ch12/abbreviated-and-concepts.cpp?raw';
+import conceptsCpp11Code from '../../../../examples/ch12/abbreviated-and-concepts-cpp11.cpp?raw';
+
+- 다루는 것: 함수 템플릿을 짧게 쓰는 문법, 변수의 템플릿, 그리고 템플릿 인수의 요구 사항을 적는 콘셉트
+- 이 글에서 배우는 요소: 축약 함수 템플릿, 변수 템플릿, `std::numbers`, 콘셉트 정의와 콘셉트 식, `static_assert`, requires 식(단순·타입·복합·중첩 요구 사항), `&&`·`||` 결합
+
+## 축약 함수 템플릿
+
+- 6편의 `add()`는 간단한 함수치고 길었음
+
+```cpp
+template <typename T1, typename T2>
+decltype(auto) add(const T1& a, const T2& b) { return a + b; }
+```
+
+- **축약 함수 템플릿 문법** (abbreviated function template syntax) <Badge text="C++20" />: 템플릿 머리 없이 매개변수 타입을 `auto`로 씀 <CppRef path="cpp/language/function_template" />
+
+```cpp
+decltype(auto) add(const auto& a, const auto& b) { return a + b; }
+```
+
+- 문법상의 편의일 뿐. 컴파일러가 원래의 긴 코드로 바꿔 줌. `auto`로 쓴 매개변수마다 템플릿 타입 매개변수가 하나씩 생김
+- 주의 두 가지
+  - **`auto`마다 서로 다른** 템플릿 타입 매개변수가 됨. 두 매개변수가 같은 타입 `T`여야 하는 템플릿(`template <typename T> ... add(const T& a, const T& b)`)은 축약 문법으로 쓸 수 없음
+  - 추론된 타입에 **이름이 없음**. 본문에서 그 타입이 필요하면 긴 문법을 쓰거나 `decltype(a)`로 알아냄
+
+## 변수 템플릿
+
+- 클래스 템플릿, 멤버 함수 템플릿, 함수 템플릿에 더해 **변수 템플릿** (variable template) <Badge text="C++14" />도 있음 <CppRef path="cpp/language/variable_template" />
+
+```cpp
+template <typename T>
+constexpr T tau{ T{ 6.283185307179586476925286766559 } };   // 2π
+
+float f{ tau<float> };
+auto d{ tau<long double> };
+```
+
+- 요청한 타입으로 표현할 수 있는 가장 가까운 값을 얻음
+- 다른 템플릿처럼 특수화할 수도 있음
+
+:::note
+표준 라이브러리의 `<numbers>` <Badge text="C++20" />에 자주 쓰는 수학 상수가 있다. 예: `std::numbers::pi`, `std::numbers::e`, 그리고 변수 템플릿 판 `std::numbers::pi_v<float>` <CppRef path="cpp/numeric/constants" />
+:::
+
+## 콘셉트
+
+- **콘셉트** (concept) <Badge text="C++20" />: 클래스 템플릿과 함수 템플릿의 템플릿 인수를 제약하는, **이름 붙은 요구 사항** <CppRef path="cpp/language/constraints" />
+  - 술어(참·거짓을 내는 식)로 쓰고, 컴파일할 때 계산해 템플릿 인수를 검사함
+- 주된 목적: 템플릿 관련 컴파일 오류를 사람이 읽을 수 있게 하는 것
+  - 템플릿에 맞지 않는 인수를 주면 오류가 수백, 수천 줄 쏟아지기도 함. 근본 원인을 찾기 어려움
+  - 이유: 컴파일러는 받은 인수로 일단 템플릿을 인스턴스화하고 컴파일함. 그제서야 템플릿 구현 깊은 곳에서 필요한 연산을 그 타입이 지원하지 않는다는 것을 앎. 인스턴스화한 곳에서 먼 곳이라 오류가 줄줄이 생김(2편)
+  - 콘셉트가 있으면 인스턴스화를 **시작하기 전에** 제약을 만족하는지 검사함
+
+:::tip
+콘셉트는 문법이 아니라 **의미**를 모델링하게 만든다. 예를 들어 `operator+`가 있는지만 보는 콘셉트는 문법만 검사한다. `std::string`에도 `+`가 있지만 정수의 `+`와는 뜻이 전혀 다르다. 반면 "정렬 가능한(sortable)", "맞바꿀 수 있는(swappable)" 같은 콘셉트는 의미를 담는다.
+:::
+
+### 문법
+
+- 콘셉트 정의: 이름 붙은 제약 집합의 템플릿
+
+```cpp
+template <매개변수-목록>
+concept 콘셉트-이름 = 제약-식;
+```
+
+- 익숙한 템플릿 머리로 시작하지만, 클래스·함수 템플릿과 달리 콘셉트는 **인스턴스화되지 않음**
+- 키워드 `concept` 뒤에 이름. 이름은 자유
+- 제약 식: 컴파일할 때 계산할 수 있는 상수 식
+  - 결과가 정확히 `bool`이어야 함(컴파일러가 타입을 변환해 주지 않음)
+  - 상수 식들의 `&&`, `||`도 됨
+  - 실행 시간에는 절대 계산되지 않음
+- **콘셉트 식**: `콘셉트-이름<인수-목록>`. 참 또는 거짓이 됨. 참이면 그 템플릿 인수가 콘셉트를 **모델링한다** (model)고 함
+
+### 상수 식 제약
+
+- `bool`로 계산되는 상수 식은 그대로 제약으로 쓸 수 있음
+
+```cpp
+template <typename T>
+concept Big = sizeof(T) > 4;
+```
+
+- `Big<char>`, `Big<short>`는 보통 거짓, `Big<double>`은 보통 참
+- 콘셉트 식은 컴파일할 때 `bool`이 되므로 **정적 단언** (static assertion)으로 확인할 수 있음 <CppRef path="cpp/language/static_assert" />
+  - `static_assert(조건)`: 컴파일할 때 조건이 참이어야 함. 거짓이면 컴파일 오류(26장에서 더 봄)
+
+```cpp
+static_assert(!Big<char>);
+static_assert(Big<double>);
+```
+
+- 첫 줄의 `!`를 빼면 GCC는 이렇게 알림
+
+```text
+error: static assertion failed
+note: constraints not satisfied
+note: the expression 'sizeof (T) > 4 [with T = char]' evaluated to 'false'
+```
+
+## requires 식
+
+- 콘셉트와 함께 들어온 새 상수 식. 콘셉트의 문법적 요구 사항을 정의함 <CppRef path="cpp/language/requires" />
+
+```cpp
+requires (매개변수-목록) { 요구-사항들; }
+```
+
+- `(매개변수-목록)`은 생략 가능. 함수의 매개변수 목록과 비슷하지만 기본값은 안 됨
+  - requires 식 본문에서만 쓰는 이름 있는 변수를 들여오는 용도. 본문에는 보통의 변수 선언을 쓸 수 없음
+- 요구 사항은 세미콜론으로 끝나는 것들의 나열. 네 종류: 단순, 타입, 복합, 중첩
+
+### 단순 요구 사항
+
+- `requires`로 시작하지 않는 아무 식 문장. 변수 선언, 반복문, 조건문 등은 안 됨
+- **계산되지 않음**. 컴파일되는지만 검사함
+
+```cpp
+template <typename T>
+concept Incrementable = requires(T x) { x++; ++x; };   // 후위·전위 ++
+```
+
+- 본문에 지역 변수를 둘 수 없으므로 `x`를 매개변수로 들여옴
+
+### 타입 요구 사항
+
+- 어떤 타입이 유효한지 검사함. `typename` 키워드로 시작
+
+```cpp
+template <typename T>
+concept HasValueType = requires { typename T::value_type; };   // 멤버 타입이 있는가
+```
+
+- 어떤 템플릿을 그 타입으로 인스턴스화할 수 있는지도 검사할 수 있음
+  - 예: `requires { typename Table<T>; }`
+
+### 복합 요구 사항
+
+- 식이 예외를 던지지 않는지, 그리고/또는 식의 결과가 어떤 타입 제약을 만족하는지 검사함
+
+```cpp
+{ 식 } noexcept -> 타입-제약;
+```
+
+- `noexcept`와 `-> 타입-제약`은 둘 다 생략 가능. 중괄호 안의 식 뒤에는 세미콜론이 없고, 전체 끝에 있음
+- 예: 소멸자와 `swap()` 멤버가 예외를 던지지 않아야 함
+
+```cpp
+template <typename T>
+concept NothrowSwappable = requires(T x, T y) {
+    { x.~T() } noexcept;
+    { x.swap(y) } noexcept;
+};
+```
+
+- **타입 제약** (type constraint): 콘셉트 이름에 템플릿 타입 인수를 0개 이상 붙인 것
+  - 화살표 왼쪽 식의 타입이 **첫째** 템플릿 타입 인수로 자동으로 들어감
+  - 그래서 타입 제약은 콘셉트 정의의 템플릿 타입 매개변수보다 인수가 하나 적음. 매개변수가 하나뿐인 콘셉트라면 인수 없이(빈 `<>` 또는 생략) 씀
+- 예: `const` 멤버 `size()`가 있고 그 결과가 `std::size_t`로 바뀔 수 있어야 함
+
+```cpp
+template <typename T>
+concept Sized = requires(const T x) {
+    { x.size() } -> std::convertible_to<std::size_t>;
+};
+```
+
+- `std::convertible_to<From, To>`: `<concepts>`의 표준 콘셉트. 매개변수 둘. `From`은 화살표 왼쪽 식의 타입으로 자동으로 채워지므로 `To`만 씀
+- `x`가 `const T`이므로 `size()`가 `const` 멤버여야 한다는 것도 함께 검사됨
+- 비교 가능한 타입이라면
+
+```cpp
+template <typename T>
+concept Comparable = requires(const T a, const T b) {
+    { a == b } -> std::convertible_to<bool>;
+    { a < b } -> std::convertible_to<bool>;
+    // 다른 비교 연산자도 같은 방식
+};
+```
+
+:::caution
+복합 요구 사항의 화살표 뒤에는 **타입 제약**이 와야 한다. 타입이 오면 안 된다. GCC는 타입을 쓰면 `return-type-requirement is not a type-constraint`라고 알린다.
+
+```cpp
+{ a == b } -> bool;                      // 컴파일 오류
+{ a == b } -> std::convertible_to<bool>; // 맞음
+```
+:::
+
+### 중첩 요구 사항
+
+- requires 식 안에 `requires 상수식;`으로 다른 요구를 넣음
+
+```cpp
+template <typename T>
+concept SmallCounter = requires(T t) {
+    ++t; --t;
+    requires sizeof(t) <= 2;   // 크기도 2바이트 이하
+};
+```
+
+## 콘셉트 식 결합
+
+- 기존 콘셉트 식을 `&&`(그리고), `||`(또는)로 결합할 수 있음
+
+```cpp
+template <typename T>
+concept SizedContainer = Sized<T> && HasValueType<T>;
+```
+
+<RunCode client:load code={conceptsCode} />
+
+- 볼 것
+  - `add(std::string{ "센서" }, "-7")`: 두 `auto`가 서로 다른 타입(`std::string`, `const char[3]`)으로 추론됨
+  - `tau<float>`와 `tau<double>`의 자릿수 차이
+  - 콘셉트 식은 `bool`이라 그대로 출력할 수 있음. `std::string`은 `++`가 없어 `Incrementable`이 거짓
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 축약 함수 템플릿 | C++20 | 템플릿 머리를 쓰는 보통의 함수 템플릿 |
+| 변수 템플릿 | C++14 | `constexpr` 함수 템플릿 `tau<float>()`, 또는 클래스 템플릿의 `static` 멤버 |
+| `<numbers>` | C++20 | 상수를 직접 정의 |
+| 콘셉트, requires 식 | C++20 | 타입 특성(`<type_traits>`)과 `static_assert`, SFINAE(26장) |
+| 메시지 없는 `static_assert` | C++17 | `static_assert(조건, "메시지")` |
+
+- `static_assert`(메시지 있는 형태)와 타입 특성은 C++11부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={conceptsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `void f(const auto& a, const auto& b)`의 `a`와 `b`는 같은 타입이어야 한다?
+  - `auto`마다 서로 다른 템플릿 타입 매개변수. 같아야 하면 긴 문법
+- 콘셉트도 인스턴스화된다?
+  - 인스턴스화되지 않음. 컴파일할 때 참·거짓으로 계산될 뿐
+- 단순 요구 사항 `x++;`는 실제로 `x`를 증가시킨다?
+  - 계산되지 않음. 컴파일되는지만 봄
+- 복합 요구 사항에서 `-> bool`처럼 타입을 쓴다?
+  - 타입 제약만. `-> std::convertible_to<bool>`
+- 제약 식이 `int`를 내도 `bool`로 바뀐다?
+  - 정확히 `bool`이어야 함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 축약 함수 템플릿 | `void f(const auto& a)`. `auto`마다 다른 매개변수, 타입 이름 없음 |
+| 변수 템플릿 | `template <typename T> constexpr T tau{ ... };` → `tau<float>` |
+| 콘셉트 정의 | `template <typename T> concept 이름 = 제약-식;` |
+| 콘셉트 식 | `이름<인수>`. 컴파일할 때 `bool` |
+| `static_assert` | 컴파일할 때 조건 검사 |
+| 단순 요구 | `requires(T x) { x++; }`. 컴파일되는지만 |
+| 타입 요구 | `typename T::value_type;` |
+| 복합 요구 | `{ 식 } noexcept -> 타입-제약;` |
+| 중첩 요구 | `requires 상수식;` |
+| 결합 | `&&`(그리고), `\|\|`(또는) |
+
+## 복습 질문
+
+<details>
+<summary>`auto larger(const auto& a, const auto& b)`를 `larger(3, 4.5)`로 부르면 컴파일되는가?</summary>
+
+- 됨. 두 `auto`가 서로 다른 템플릿 타입 매개변수라 `int`와 `double`로 따로 추론됨(6편의 `T` 하나짜리와 다름)
+
+</details>
+
+<details>
+<summary>`T`에 `begin()`과 `end()` 멤버가 있어야 한다는 콘셉트를 쓰면?</summary>
+
+```cpp
+template <typename T>
+concept HasRange = requires(T x) { x.begin(); x.end(); };
+```
+
+</details>
+
+<details>
+<summary>`hash()` 멤버가 예외를 던지지 않고 그 결과가 `std::size_t`로 바뀔 수 있어야 한다는 요구 사항은?</summary>
+
+```cpp
+{ x.hash() } noexcept -> std::convertible_to<std::size_t>;
+```
+
+</details>
