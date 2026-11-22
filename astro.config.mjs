@@ -36,6 +36,13 @@ const parts = [
 			chapter('6장. 재사용을 위한 설계', 'part2/ch06'),
 		],
 	},
+	{
+		label: 'Part 3 · 전문가처럼 코딩하기',
+		link: '/part3/ch07/01-dynamic-memory/',
+		items: [
+			chapter('7장. 메모리 관리', 'part3/ch07'),
+		],
+	},
 ];
 
 export default defineConfig({
