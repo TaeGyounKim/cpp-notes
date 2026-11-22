@@ -1,0 +1,258 @@
+---
+title: 컨테이너
+description: 표준 라이브러리의 순차 컨테이너(vector, list, forward_list, deque, array), 순차 뷰(span, mdspan), 컨테이너 어댑터(queue, priority_queue, stack), 정렬된·정렬되지 않은 연관 컨테이너, C++23의 평평한 연관 컨테이너 어댑터, bitset을 한눈에 비교합니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import contCode from '../../../../examples/ch16/containers.cpp?raw';
+import contCpp11Code from '../../../../examples/ch16/containers-cpp11.cpp?raw';
+
+- 다루는 것: 표준 라이브러리가 제공하는 자료 구조. C++을 쓴다면 연결 리스트나 큐를 다시 만들 필요가 없음
+- 이 글에서 배우는 요소: 컨테이너의 종류와 성능 특성, 언제 무엇을 쓰는가. 자세한 사용법은 18장
+
+## 컨테이너란
+
+- **컨테이너** (container): 정보(**원소**, element)를 자료 구조(연결 리스트, 큐 등)에 맞게 담는 것 <CppRef path="cpp/container" />
+  - 자료 구조마다 넣기·지우기·접근의 동작과 성능이 다름. 일에 맞는 것을 고르려면 종류를 알아야 함
+- 모든 표준 컨테이너는 **클래스 템플릿**. `int`, `double` 같은 기본 타입부터 직접 만든 클래스까지 무엇이든 담음
+- 한 컨테이너는 한 타입의 객체만 담음(**동질** 컬렉션)
+  - 크기가 정해지지 않은 이질 컬렉션이 필요하면: 원소를 `std::any`로 감싸 담거나, 타입 종류가 적고 컴파일할 때 정해지면 `std::variant`를 담거나(24장), 파생 클래스 여러 개를 가진 기반 클래스의 포인터를 담음
+- 표준은 각 컨테이너와 알고리즘의 **인터페이스**만 정하고 구현은 정하지 않음. 대신 인터페이스의 일부로 **성능 요구 사항**을 정하고, 구현은 그것을 지켜야 함
+- 성능은 빅오 표기법(4장)으로 나타냄. 원소가 N개일 때 O(1)은 상수 시간, O(log N)은 로그 시간, O(N)은 선형 시간
+
+## 순차 컨테이너
+
+- 원소의 순서열을 담음. 다섯 가지: `vector`, `list`, `forward_list`, `deque`, `array`
+
+### vector
+
+- `<vector>`. 원소를 **연속된 메모리**에 담고 아무 원소나 바로 접근함(임의 접근) <CppRef path="cpp/container/vector" />
+  - 원소를 넣으면 알아서 커지고, 어느 정도 범위 검사도 하는 배열. C++에서 `vector`는 **동적 배열**과 같은 말
+- 성능
+  - 끝에 넣기·지우기: 빠름. 넣기는 **분할 상환 상수 시간** (amortized constant time). 대부분 O(1)이지만 가끔 공간을 늘리느라 O(N)이 걸리고, 평균하면 O(1)(18장)
+  - 그 밖의 위치에 넣기·지우기: 느림(선형 시간). 자리를 만들거나 메우려고 원소들을 한 칸씩 옮김
+  - 원소 접근: 빠름(상수 시간)
+- 가운데에 넣고 지우면 원소를 옮겨야 하지만, 그래도 **`vector`를 기본 컨테이너로** 씀
+  - 연결 리스트보다 가운데 넣기·지우기조차 빠른 경우가 많음
+  - `vector`는 메모리에 연속해 있고 연결 리스트는 흩어져 있음. 컴퓨터는 연속된 데이터를 매우 효율적으로 다룸
+  - 성능 프로파일러(29장)가 다른 것이 빠르다고 알려 줄 때만 바꿈
+- `vector<bool>` 특수화: 불리언 원소의 공간을 아낌. 어떻게 아낄지는 표준이 정하지 않음. 크기가 정해진 `bitset`과 달리 커지고 줄어듦
+
+:::tip
+`vector`를 기본 컨테이너로 쓴다.
+:::
+
+### list와 forward_list
+
+- `<list>`의 `list`: **이중 연결 리스트** <CppRef path="cpp/container/list" />
+  - 원소가 메모리에 연속해 있지 않음. 각 원소가 앞뒤 원소의 위치를 (보통 포인터로) 앎
+  - 성능은 `vector`와 정반대: 원소 찾기·접근은 느림(선형 시간), 자리를 찾고 나면 넣기·지우기는 빠름(상수 시간)
+  - 그래도 실제로는 대개 `vector`가 빠름. 프로파일러로 확인
+- `<forward_list>`의 `forward_list`: **단일 연결 리스트**
+  - 앞으로만 훑을 수 있고 `list`보다 메모리를 조금 덜 씀
+  - 자리를 찾으면 어디서든 상수 시간 넣기·지우기, 빠른 임의 접근은 없음
+
+### deque
+
+- `<deque>`의 `deque`: **양쪽 끝 큐** (double-ended queue) <CppRef path="cpp/container/deque" />
+  - 원소 접근 빠름(상수 시간), **양 끝**에 넣기·지우기 빠름(상수 시간), 가운데는 느림(선형 시간)
+  - 원소가 메모리에 연속해 있지 않아 `vector`보다 느릴 수 있음
+- 양 끝에서 넣고 빼면서 모든 원소에 빠르게 접근해야 할 때 쓰지만, 그런 문제는 많지 않음. 대부분은 `vector`
+
+### array
+
+- `<array>`의 `array`: C 스타일 배열을 대신함 <CppRef path="cpp/container/array" />
+  - 원소 개수를 미리 정확히 알고, `vector`처럼 커질 필요가 없을 때 알맞음
+  - C 스타일 배열을 얇게 감싼 것이라 `vector`보다 부담이 조금 적음
+- C 스타일 배열보다 나은 점
+  - 자기 크기를 늘 앎
+  - 포인터로 자동 변환되지 않아 그로 인한 버그를 피함
+- 넣기·지우기가 없음. 크기가 고정이라 `vector`처럼 자유 공간이 꼭 필요하지 않고 스택에 둘 수 있음
+- 원소 접근은 `vector`처럼 빠름(상수 시간)
+
+## 순차 뷰
+
+- **`span`** <Badge text="C++20" />: `<span>`. 연속된 데이터 위의 **뷰**. 읽기 전용일 수도, 원소를 읽고 쓸 수도 있음 <CppRef path="cpp/container/span" />
+  - `vector`, `array`, C 스타일 배열 등 어디서 온 데이터든 함수 하나로 다룰 수 있음(18장)
+- **`mdspan`** <Badge text="C++23" />: `<mdspan>`. `span`처럼 연속된 데이터 위의 뷰이지만 **다차원**
+
+:::tip
+`const std::vector<T>&`를 받는 함수를 쓴다면 `std::span<const T>`를 받는 것을 고려한다. `vector`, `array`, C 스타일 배열 등에서 온 데이터와 그 일부분까지 받을 수 있다.
+:::
+
+## 컨테이너 어댑터
+
+- `vector`, `list`, `deque` 같은 순차 컨테이너 위에 얹은 간단한 인터페이스. 셋: `queue`, `priority_queue`, `stack`
+
+| 어댑터 | 헤더 | 의미 | 예 |
+| --- | --- | --- | --- |
+| `queue` | `<queue>` | 한쪽에 넣고 다른 쪽에서 뺌. **먼저 들어온 것이 먼저** (FIFO) | 은행 창구: 줄 선 순서대로 손님을 받음 |
+| `priority_queue` | `<queue>` | 원소마다 우선순위. **우선순위가 높은 것부터** 뺌. 같으면 순서는 정해지지 않음 | 기업 고객을 일반 고객보다 먼저 받음 |
+| `stack` | `<stack>` | **나중에 들어온 것이 먼저** (LIFO, FILO). 맨 위만 보임 | 오류 처리 도구: 가장 최근 오류를 먼저 봄 |
+
+- `queue`의 넣기(분할 상환 상수)와 빼기(상수)는 빠름
+- `priority_queue`는 우선순위 순서를 유지하려고 원소를 재배치하므로 보통의 `queue`보다 넣기·빼기가 느림
+- `stack`의 넣기·빼기는 빠름(상수 시간). 최근 오류가 이전 오류를 무의미하게 만들 때가 많아 LIFO 순서가 유용함
+
+## 정렬된 연관 컨테이너
+
+- 넷: `set`, `multiset`, `map`, `multimap`. 원소를 정렬해 두므로 **정렬된** (ordered) 연관 컨테이너라 함
+- **연관 컨테이너** (associative container): 키와 값을 연결함. `set`과 `multiset`은 키 자체가 값이라 이 이름이 조금 헷갈림
+
+### set과 multiset
+
+- `<set>`의 `set`: 수학의 집합과 비슷함. 각 원소는 **유일**함 <CppRef path="cpp/container/set" />
+  - 수학의 집합과 달리 원소를 **정렬된 순서**로 둠. 원소가 이미 있는지 훨씬 빨리 확인하기 위해서
+  - 원소를 훑으면 타입의 `operator<`나 사용자 정의 비교자의 순서로 나옴
+  - 넣기·지우기·찾기 모두 로그 시간. 이론상 넣기·지우기는 `vector`보다 빠르고 `list`보다 느림, 찾기는 `list`보다 빠르고 `vector`보다 느림. 늘 프로파일러로 확인
+- 쓸 때: 원소를 정렬해 두면서 넣기·지우기와 찾기를 비슷하게 자주 하고 둘 다 최대한 빠르게 하고 싶을 때. 중복을 허용하지 않게 하고 싶을 때
+  - 예: 서점의 재고 프로그램. 책이 들어오고 팔릴 때마다 바꾸고, 손님은 특정 책을 찾음
+- 원소는 **바꿀 수 없음**. 바꾸면 순서가 깨지기 때문. 지우고 새 값을 넣음
+- `<set>`의 `multiset`: 중복을 허용하는 것 말고는 `set`과 거의 같음
+
+### map과 multimap
+
+- `<map>`의 `map`: **연관 배열**. 첨자가 문자열처럼 아무 타입이나 될 수 있는 배열 <CppRef path="cpp/container/map" />
+  - 키-값 쌍을 담고 **키** 기준으로 정렬함(값 기준 아님)
+  - `set`에는 없는 `operator[]`가 있음. 나머지는 대부분 `set`과 같음
+  - 예: 서점에서 ISBN을 키로, 책의 자세한 정보를 담은 `Book` 객체를 값으로
+- `<map>`의 `multimap`: 키가 중복될 수 있는 것 말고는 `map`과 거의 같음
+
+## 정렬되지 않은 연관 컨테이너
+
+- **해시 테이블** (hash table)이라고도 함 <Badge text="C++11" />. 넷 <CppRef path="cpp/container/unordered_map" />
+  - `<unordered_map>`: `unordered_map`, `unordered_multimap`
+  - `<unordered_set>`: `unordered_set`, `unordered_multiset`
+- `hash_map` 같은 이름이 더 알맞았겠지만, C++11 이전에 표준에 없어서 서드파티 라이브러리들이 `hash_` 접두어로 이미 구현해 두었음. 이름이 부딪치지 않게 `unordered_` 접두어를 씀
+- 정렬된 짝과 비슷하게 동작하지만 원소를 **정렬하지 않음**
+- 넣기·지우기·찾기가 평균 **상수 시간**, 최악은 선형 시간. 원소가 많을 때 `map`이나 `set`보다 찾기가 훨씬 빠를 수 있음
+- 어떻게 동작하는지, 왜 해시 테이블이라 부르는지는 18장
+
+## 평평한 연관 컨테이너 어댑터
+
+- <Badge text="C++23" /> 넷 <CppRef path="cpp/container/flat_map" />
+  - `<flat_map>`: `flat_map`, `flat_multimap`
+  - `<flat_set>`: `flat_set`, `flat_multiset`
+- 순차 컨테이너 위에 얹어 연관 컨테이너 인터페이스를 제공하는 **어댑터**
+  - 바탕 컨테이너는 임의 접근 반복자를 지원해야 함(`vector`, `deque` 등)
+  - `flat_map`과 `flat_multimap`은 순차 컨테이너 둘(키용, 값용), `flat_set`과 `flat_multiset`은 하나(키용)를 씀
+- 인터페이스는 정렬된 짝과 거의 같음. 노드 기반 자료 구조가 아니라서 노드 관련 멤버 함수가 없는 것만 다름. 거의 그대로 바꿔 쓸 수 있음
+
+## bitset
+
+- C와 C++에서는 흔히 `int`나 `long` 하나에 플래그를 비트마다 저장하고 `&`, `|`, `^`, `~`, `<<`, `>>`로 다뤘음
+- `<bitset>`의 `bitset`: 이 비트 필드 조작을 추상화함. 이런 용도로 비트 연산자를 직접 쓸 필요가 없음 <CppRef path="cpp/utility/bitset" />
+- 보통 의미의 컨테이너는 아님. 원소를 넣고 지우는 자료 구조가 아니고 **크기가 고정**됨. 읽고 쓸 수 있는 불리언 값의 나열로 생각하면 됨
+- C 스타일 비트 다루기와 달리 `int` 등 기본 타입의 크기에 묶이지 않음. `bitset<40>`도 `bitset<213>`도 됨
+
+## 한눈에 비교
+
+- 성능(원소 N개)
+
+| 컨테이너 | 넣기 | 지우기 | 찾기·접근 |
+| --- | --- | --- | --- |
+| `vector` | 끝: 분할 상환 O(1)<br/>그 밖: O(N) | 끝: O(1)<br/>그 밖: O(N) | O(1) |
+| `list` | 앞·끝, 자리를 찾은 뒤: O(1) | 같음 | 처음·끝: O(1)<br/>그 밖: O(N) |
+| `forward_list` | 앞, 자리를 찾은 뒤: O(1) | 같음 | 처음: O(1)<br/>그 밖: O(N) |
+| `deque` | 앞·끝: O(1)<br/>그 밖: O(N) | 같음 | O(1) |
+| `array` | 없음 | 없음 | O(1) |
+| `queue` | `list`·`deque` 바탕: O(1) | 같음 | 없음 |
+| `priority_queue` | `vector` 바탕: 분할 상환 O(log N)<br/>`deque` 바탕: O(log N) | O(log N) | 없음 |
+| `stack` | `list`·`deque`: O(1)<br/>`vector`: 분할 상환 O(1) | O(1) | 없음 |
+| `set` `multiset` `map` `multimap` | O(log N) | O(log N) | O(log N) |
+| `unordered_*` 넷 | 평균 O(1), 최악 O(N) | 같음 | 같음 |
+| `flat_*` 넷 | O(N) | O(N) | O(log N) |
+| `bitset` | 없음 | 없음 | O(1) |
+
+- 쓰임
+
+| 컨테이너 | 언제 쓰는가 |
+| --- | --- |
+| `vector` | **기본 컨테이너**. 프로파일러가 다른 것이 빠르다고 할 때만 바꿈 |
+| `list`, `forward_list` | 드물게. 프로파일러로 확인 |
+| `deque` | 보통 필요 없음. `vector` |
+| `array` | C 스타일 고정 크기 배열 대신 |
+| `queue` / `priority_queue` / `stack` | FIFO / 우선순위 / LIFO |
+| `set`, `map` 등 | 찾기·넣기·지우기를 고르게 하는 정렬된 컬렉션. 중복이 없어야 하면 `set`, 키와 값을 이으면 `map` |
+| `unordered_*` | 정렬이 필요 없을 때. 대개 정렬된 쪽보다 빠르지만 원소에 따라 다름 |
+| `flat_*` | 정렬된 컬렉션. 연속 메모리라 캐시 친화적이어서 정렬된 짝보다 빠를 때가 많음 |
+| `bitset` | 플래그 모음 |
+
+- 문자열도 엄밀히는 컨테이너. 그래서 3편의 알고리즘 일부는 문자열에도 쓰임
+
+<RunCode client:load code={contCode} />
+
+- 볼 것
+  - `span<const double>`을 받는 `average()`가 `vector`, `array`, C 배열을 모두 받음
+  - `set`은 중복 `"부엌"`을 하나만 두고 정렬함. `multiset`은 중복을 둠
+  - `map`과 `flat_map`은 키 순서로 출력됨
+  - `bitset<10>`의 1번과 4번 비트가 켜짐(오른쪽이 0번)
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `flat_map`, `flat_set` 등, `mdspan` | C++23 | 정렬된 `vector`에 `std::lower_bound`로 직접 구현, 다차원 인덱스를 직접 계산 |
+| `span` | C++20 | 포인터와 길이를 따로 넘김 |
+| `array`, `forward_list`, `unordered_*` | C++11 | C 스타일 배열, `list`, 서드파티 해시 테이블 |
+
+- `vector`, `list`, `deque`, `set`, `map`, `queue`, `stack`, `priority_queue`, `bitset`은 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={contCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 가운데 넣기가 많으면 `list`가 늘 빠르다?
+  - 연속 메모리 덕분에 `vector`가 빠를 때가 많음. 프로파일러로 확인
+- `set`의 원소를 직접 고칠 수 있다?
+  - 순서가 깨지므로 안 됨. 지우고 다시 넣음
+- `map`은 값 기준으로 정렬된다?
+  - 키 기준
+- `unordered_map`은 늘 `map`보다 빠르다?
+  - 평균은 그렇지만 최악은 선형 시간이고 원소에 따라 다름
+- `queue`, `stack`도 독립된 자료 구조다?
+  - 순차 컨테이너 위에 얹은 어댑터
+
+## 정리
+
+| 분류 | 컨테이너 |
+| --- | --- |
+| 순차 | `vector`(기본), `list`, `forward_list`, `deque`, `array` |
+| 순차 뷰 | `span`(C++20), `mdspan`(C++23) |
+| 어댑터 | `queue`(FIFO), `priority_queue`, `stack`(LIFO) |
+| 정렬된 연관 | `set`, `multiset`, `map`, `multimap`. O(log N) |
+| 해시 테이블 | `unordered_map` 등 넷. 평균 O(1) |
+| 평평한 연관 어댑터 | `flat_map` 등 넷(C++23). 캐시 친화적 |
+| 특수 | `bitset` |
+
+## 복습 질문
+
+<details>
+<summary>단어별 등장 횟수를 세고 마지막에 단어 순서대로 출력하려면 어떤 컨테이너가 알맞은가?</summary>
+
+- `std::map<std::string, int>`. 키 순서로 정렬되어 있어 그대로 출력하면 됨. 순서가 필요 없다면 `std::unordered_map`이 더 빠를 수 있음
+
+</details>
+
+<details>
+<summary>작업을 받은 순서대로 처리하는 작업 대기열과, 긴급도 순으로 처리하는 대기열에는 각각 무엇을 쓰는가?</summary>
+
+- 받은 순서대로: `std::queue`(FIFO)
+- 긴급도 순: `std::priority_queue`
+
+</details>
+
+<details>
+<summary>`void process(const std::vector<int>& data)`를 `std::array`와 C 배열에서도 쓰게 하려면?</summary>
+
+- 매개변수를 `std::span<const int>`로 바꿈
+
+</details>
