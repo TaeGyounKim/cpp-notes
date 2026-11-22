@@ -1,0 +1,71 @@
+---
+// 기본 헤더 아래에 Part 탭 한 줄을 추가한다.
+import Default from '@astrojs/starlight/components/Header.astro';
+
+const { topics } = Astro.locals.starlightSidebarTopics;
+---
+
+<div class="rows">
+	<div class="main"><Default><slot /></Default></div>
+	<nav class="parts print:hidden" aria-label="Part">
+		<ul>
+			{
+				topics.map((topic) => (
+					<li>
+						<a href={topic.link} aria-current={topic.isCurrent ? 'true' : undefined}>
+							{topic.label}
+						</a>
+					</li>
+				))
+			}
+		</ul>
+	</nav>
+</div>
+
+<style>
+	.rows {
+		display: grid;
+		grid-template-rows: var(--part-tabs-main-height) var(--part-tabs-height);
+		/* 헤더의 위아래 여백을 상쇄해서 탭 줄이 헤더 바닥에 붙게 한다. */
+		margin-block: calc(-1 * var(--sl-nav-pad-y));
+		height: var(--sl-nav-height);
+	}
+	.main {
+		padding-block: var(--sl-nav-pad-y);
+		min-height: 0;
+	}
+	.parts {
+		margin-inline: calc(-1 * var(--sl-nav-pad-x));
+		padding-inline: var(--sl-nav-pad-x);
+		border-top: 1px solid var(--sl-color-hairline-shade);
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+	ul {
+		display: flex;
+		gap: 0.25rem;
+		height: 100%;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	a {
+		display: flex;
+		align-items: center;
+		height: 100%;
+		padding-inline: 0.75rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		white-space: nowrap;
+		text-decoration: none;
+		color: var(--sl-color-gray-2);
+		border-bottom: 2px solid transparent;
+	}
+	a:hover {
+		color: var(--sl-color-white);
+	}
+	a[aria-current='true'] {
+		color: var(--sl-color-text-accent);
+		border-bottom-color: var(--sl-color-text-accent);
+	}
+</style>

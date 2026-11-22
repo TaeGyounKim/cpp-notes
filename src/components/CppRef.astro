@@ -1,0 +1,48 @@
+---
+// 용어 옆에 붙이는 cppreference.com 링크.
+// path = 영어판 주소에서 /w/ 뒤의 부분. 예: "cpp/language/static_cast"
+interface Props {
+	path: string;
+}
+const { path } = Astro.props;
+---
+
+<a
+	class="cppref not-content"
+	href={`https://en.cppreference.com/w/${path}`}
+	target="_blank"
+	rel="noopener"
+	title="cppreference.com에서 자세히 보기 (영어)"
+	>cppreference<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2h6v6M10 2 2.5 9.5" /></svg></a
+>
+
+<style>
+	.cppref {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2em;
+		margin-inline-start: 0.25em;
+		padding: 0.05em 0.5em;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.25rem;
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-xs);
+		font-weight: 400;
+		line-height: 1.5;
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+		vertical-align: middle;
+		white-space: nowrap;
+	}
+	.cppref:hover {
+		border-color: var(--sl-color-accent);
+		color: var(--sl-color-text-accent);
+	}
+	svg {
+		width: 0.7em;
+		height: 0.7em;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.5;
+	}
+</style>

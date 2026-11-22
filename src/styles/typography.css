@@ -1,0 +1,70 @@
+/*
+ * 글꼴과 글자 크기·간격.
+ * 본문과 제목은 나눔스퀘어(Regular 400 / Bold 700 / ExtraBold 800), 코드는 Consolas.
+ */
+
+@font-face {
+	font-family: 'NanumSquare';
+	font-weight: 400;
+	font-display: swap;
+	src: local('NanumSquare Regular'), local('NanumSquareR'), url('/fonts/NanumSquareR.woff2') format('woff2');
+}
+@font-face {
+	font-family: 'NanumSquare';
+	font-weight: 700;
+	font-display: swap;
+	src: local('NanumSquare Bold'), local('NanumSquareB'), url('/fonts/NanumSquareB.woff2') format('woff2');
+}
+@font-face {
+	font-family: 'NanumSquare';
+	font-weight: 800;
+	font-display: swap;
+	src: local('NanumSquare ExtraBold'), local('NanumSquareEB'), url('/fonts/NanumSquareEB.woff2') format('woff2');
+}
+
+:root {
+	--sl-font: 'NanumSquare';
+	/* Consolas는 Windows에만 있고 한글이 없다. 다른 OS는 그 OS의 고정폭 글꼴로, 코드 속 한글은 나눔스퀘어로 넘어간다. */
+	--sl-font-mono: Consolas, Menlo, Monaco, 'Liberation Mono', 'NanumSquare';
+
+	/* 크기 */
+	--sl-text-body: 1rem; /* 본문 16px */
+	--sl-text-code: 0.9375rem; /* 코드 15px: Consolas는 같은 크기에서 작아 보인다 */
+
+	/* 줄 간격 */
+	--sl-line-height: 1.8;
+	--sl-line-height-headings: 1.35;
+}
+
+body {
+	letter-spacing: -0.01em;
+	/* 한글은 단어 중간에서 줄을 바꾸지 않는다. */
+	word-break: keep-all;
+	overflow-wrap: break-word;
+}
+
+h1,
+h2 {
+	font-weight: 800;
+	letter-spacing: -0.02em;
+}
+h3,
+h4,
+h5,
+h6 {
+	font-weight: 700;
+	letter-spacing: -0.015em;
+}
+
+/* 코드에는 자간 조정을 적용하지 않는다. */
+code,
+pre,
+kbd {
+	letter-spacing: 0;
+}
+
+/* 글 하단 "이전/다음 페이지"의 제목: 기본값(약 24px)은 본문에 비해 커서 줄인다. */
+.pagination-links .link-title {
+	font-size: var(--sl-text-lg);
+	font-weight: 700;
+}

@@ -1,0 +1,42 @@
+---
+title: 이 사이트 사용법
+description: 단계별 시각화와 코드 실행을 쓰는 방법을 안내합니다.
+sidebar:
+  order: 1
+---
+
+import StepViz from '../../../components/StepViz.svelte';
+import RunCode from '../../../components/RunCode.svelte';
+import demo from '../../../data/guide/demo.js';
+import demoCode from '../../../examples/guide/demo.cpp?raw';
+
+이 사이트의 글에는 읽는 것 말고도 직접 눌러 보고 고쳐 볼 수 있는 부분이 두 가지 있습니다.
+
+## 단계별 시각화
+
+코드를 한 줄씩 실행하면서 메모리가 어떻게 바뀌는지 보여 줍니다.
+
+- **다음**을 누르면 한 줄을 실행합니다. 방금 실행한 줄이 왼쪽 코드에서 강조됩니다.
+- 오른쪽 그림의 상자 하나가 변수 하나입니다. 이름, 타입, 값, 주소가 표시됩니다.
+- 그림 아래에 이 단계에서 무슨 일이 일어났는지 설명이 나옵니다.
+
+그림 속 주소는 설명을 위해 지어낸 값입니다.
+
+<StepViz client:load data={demo} />
+
+## 코드 실행
+
+편집기 안의 코드는 자유롭게 고칠 수 있습니다.
+
+- **실행**을 누르거나 Ctrl+Enter를 누르면 코드를 컴파일하고 실행해서 결과를 아래에 보여 줍니다.
+- 컴파일 오류가 나면 컴파일러가 알려 준 오류 메시지를 그대로 보여 줍니다.
+- **원래대로**를 누르면 처음 코드로 돌아갑니다.
+
+<RunCode client:load code={demoCode} />
+
+:::note[실행에는 인터넷이 필요합니다]
+코드는 내 컴퓨터가 아니라 [Compiler Explorer](https://godbolt.org) 서버에서 컴파일되고 실행됩니다.
+연결이 안 될 때는 "Compiler Explorer에서 열기"를 눌러 그 사이트에서 직접 실행할 수 있습니다.
+:::
+
+실행 환경은 GCC 16.2 컴파일러에 C++23 옵션입니다. 경고 옵션(`-Wall -Wextra`)도 켜 두었기 때문에, 문제가 될 만한 코드에는 컴파일러 경고가 함께 표시됩니다.

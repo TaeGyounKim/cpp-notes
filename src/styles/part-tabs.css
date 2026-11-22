@@ -1,0 +1,16 @@
+/* 상단 Part 탭 한 줄만큼 헤더 높이를 늘린다. */
+:root {
+	--part-tabs-height: 2.5rem;
+	--part-tabs-main-height: 3.5rem;
+	--sl-nav-height: calc(var(--part-tabs-main-height) + var(--part-tabs-height));
+}
+@media (min-width: 50rem) {
+	:root {
+		--part-tabs-main-height: 4rem;
+		--sl-nav-height: calc(var(--part-tabs-main-height) + var(--part-tabs-height));
+	}
+}
+/* 모바일 메뉴 버튼은 늘어난 헤더가 아니라 첫 줄 가운데에 둔다. */
+starlight-menu-button button {
+	top: calc((var(--part-tabs-main-height) - var(--sl-menu-button-size)) / 2);
+}

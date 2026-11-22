@@ -1,0 +1,393 @@
+---
+title: 형변환, 부동소수점, 연산자
+description: 값의 타입을 바꾸는 형변환, 부동소수점을 다룰 때 조심할 점, 값을 계산하는 연산자와 우선순위를 익힙니다.
+sidebar:
+  order: 4
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import operatorsViz from '../../../../data/ch01/operators.js';
+import castCode from '../../../../examples/ch01/cast.cpp?raw';
+import narrowingCode from '../../../../examples/ch01/narrowing.cpp?raw';
+import floatPitfallsCode from '../../../../examples/ch01/float-pitfalls.cpp?raw';
+import floatSpecialCode from '../../../../examples/ch01/float-special.cpp?raw';
+import stdfloatCode from '../../../../examples/ch01/stdfloat.cpp?raw';
+import operatorsCode from '../../../../examples/ch01/operators.cpp?raw';
+import bitwiseCode from '../../../../examples/ch01/bitwise.cpp?raw';
+import mixedTypesCode from '../../../../examples/ch01/mixed-types.cpp?raw';
+import precedenceCode from '../../../../examples/ch01/precedence.cpp?raw';
+import operatorsCpp11Code from '../../../../examples/ch01/operators-cpp11.cpp?raw';
+
+- 다루는 것: 변수에 담은 값을 다른 타입으로 바꾸고, 계산하는 방법
+- 배우는 요소: 형변환, 부동소수점의 함정과 특수 값, 확장 부동소수점 타입, 연산자, 연산자 우선순위
+- 앞 글에서 만든 변수를 이제 실제로 "쓰는" 단계
+
+## 형변환
+
+- **형변환** (cast, type conversion): 값을 다른 타입의 값으로 바꾸는 것
+  - 예: `double` 값 12.87을 `int` 값 12로
+- 두 종류가 있음
+  - **명시적 형변환** (explicit conversion): 바꾸라고 코드에 직접 적는 것 <CppRef path="cpp/language/explicit_cast" />
+  - **암시적 형변환** (implicit conversion): 적지 않아도 컴파일러가 알아서 하는 것 <CppRef path="cpp/language/implicit_conversion" />
+
+### 명시적 형변환
+
+- 적는 방법 세 가지
+
+| 문법 | 이름 | 평가 |
+| --- | --- | --- |
+| `(int)price` | C 스타일 | C 언어에서 물려받은 것. 권장하지 않지만 여전히 많이 보임 |
+| `int(price)` | 함수 스타일 | 드물게 쓰임 |
+| `static_cast<int>(price)` | `static_cast` | 가장 길지만 가장 분명함. **권장** |
+
+- 세 방법 모두 C++11 이전부터 있던 문법
+- `static_cast`를 권장하는 이유 <CppRef path="cpp/language/static_cast" />
+  - 코드에서 눈에 띄고, 검색으로 찾기 쉬움
+  - C 스타일은 위험한 변환까지 가리지 않고 해 버림. `static_cast`는 말이 되는 변환만 허용
+  - 형변환의 나머지 종류와 자세한 차이: 10장에서 다룸
+- 부동소수점 → 정수: 소수 부분을 **버림**. 반올림이 아님
+  - `12.87` → `12`, `-12.87` → `-12` (0에 가까운 쪽으로)
+
+<RunCode client:load code={castCode} />
+
+### 암시적 형변환
+
+- 컴파일러가 알아서 해 주는 경우: 값을 잃을 일이 없을 때
+  - `short` → `long`: `long`은 `short`가 담는 값을 전부 담을 수 있음. 형변환을 적지 않아도 됨
+- 문제가 되는 경우: 값을 잃을 수 있는 방향
+  - `double` → `int`: 소수 부분이 사라짐
+  - 값이 `int`의 최댓값보다 크면 결과가 완전히 엉뚱한 수가 될 수도 있음
+- **축소 변환** (narrowing conversion): 값을 잃을 수 있는 방향의 암시적 변환 <Badge text="C++11" /> <CppRef path="cpp/language/list_initialization#Narrowing_conversions" />
+  - 유니폼 초기화(중괄호)는 축소 변환을 허용하지 않음
+  - 대입 문법(`=`)은 말없이 허용함
+  - 앞 글에서 유니폼 초기화를 권장한 이유 가운데 하나
+
+<RunCode client:load code={narrowingCode} />
+
+- 해 볼 것: 주석 처리된 `int b{ 12.87 };` 줄의 `//`를 지우고 실행
+  - 결과: 컴파일 오류. `narrowing conversion ... from 'double' to 'int'`
+- 값을 잃어도 괜찮다고 판단했다면: `static_cast`로 의도를 적음
+  - `int b{ static_cast<int>(12.87) };`
+
+## 부동소수점
+
+- 부동소수점 수는 정수보다 다루기 까다로움. 아래 세 가지는 꼭 기억할 것
+
+### 조심할 점 세 가지
+
+- 정확히 담기지 않는 값이 많음
+  - 컴퓨터는 수를 2진수로 담음. 0.1 같은 10진 소수는 2진수로는 끝없이 이어지는 소수라서 근삿값만 담김
+  - 결과: `0.1 + 0.2`가 정확히 `0.3`이 되지 않음
+- 크기가 크게 다른 두 수를 더하면 작은 쪽이 사라짐
+  - `double`이 정확히 기억하는 자릿수는 16자리쯤. 그보다 아래 자리는 담을 곳이 없음
+- 거의 같은 두 수를 빼면 정밀도를 잃음
+  - 앞쪽의 같은 자릿수가 모두 지워지고, 믿기 어려운 끝자리만 남음
+
+<RunCode client:load code={floatPitfallsCode} />
+
+- 마지막 줄 출력에서 볼 것: 기대한 값은 `1e-07`(0.0000001)인데 뒤에 `0000000005838672`가 따라 붙음
+- 실무 규칙: 부동소수점 값을 `==`로 비교하지 말 것. 비교하는 방법은 이 장의 뒤쪽 "조건문과 비교" 글에서 다룸
+
+### 특수 값
+
+| 값 | 뜻 | 생기는 경우 |
+| --- | --- | --- |
+| **무한대** (infinity), `+inf` / `-inf` | 양의 무한대, 음의 무한대 | 0이 아닌 수를 0으로 나눔 |
+| **NaN** (not-a-number) | 수가 아님 | 0을 0으로 나눔. 수학적으로 정의되지 않는 계산 |
+
+- 확인하는 함수: `<cmath>` 헤더 <Badge text="C++11" />
+  - `std::isinf(값)`: 무한대인가 <CppRef path="cpp/numeric/math/isinf" />
+  - `std::isnan(값)`: NaN인가 <CppRef path="cpp/numeric/math/isnan" />
+- 직접 얻는 방법: `std::numeric_limits<double>::infinity()`, `std::numeric_limits<double>::quiet_NaN()`
+
+<RunCode client:load code={floatSpecialCode} />
+
+- 첫 줄의 `-nan`: 0을 0으로 나눈 결과에 부호가 붙어 나온 것. NaN에는 부호가 의미 없음. `nan`과 똑같이 취급하면 됨
+- NaN은 자기 자신과 비교해도 같지 않음 → NaN인지 알아볼 때는 `==`가 아니라 `std::isnan`
+- 주의: **정수**를 0으로 나누는 것은 전혀 다른 이야기
+  - 무한대가 되지 않음. 프로그램이 죽거나 무슨 일이 일어날지 알 수 없음
+  - 0으로 나눌 가능성이 있으면 나누기 전에 확인할 것
+
+### 확장 부동소수점 타입 <Badge text="C++23" />
+
+- 표준 부동소수점 타입: `float`, `double`, `long double` 세 가지
+- C++23에서 추가된 타입: 비트 수가 이름에 정확히 적혀 있음. `<stdfloat>` 헤더 <CppRef path="cpp/types/floating-point" />
+
+| 타입 | 형식 | 리터럴 접미사 |
+| --- | --- | --- |
+| `std::float16_t` | IEEE 754의 16비트 형식 | `f16` 또는 `F16` |
+| `std::float32_t` | IEEE 754의 32비트 형식 | `f32` 또는 `F32` |
+| `std::float64_t` | IEEE 754의 64비트 형식 | `f64` 또는 `F64` |
+| `std::float128_t` | IEEE 754의 128비트 형식 | `f128` 또는 `F128` |
+| `std::bfloat16_t` | 인공지능 분야에서 쓰는 16비트 형식 | `bf16` 또는 `BF16` |
+
+- IEEE 754: 부동소수점 수를 비트로 담는 방법을 정한 국제 표준
+- 지원은 **선택 사항**. 컴파일러에 따라 일부 또는 전부가 없을 수 있음
+- 평소에는 표준 타입 세 가지로 충분. 그 가운데 기본은 `double`
+  - `float`는 정밀도가 낮음. 그래도 괜찮은지는 쓰는 곳에 따라 다름
+
+<RunCode client:load code={stdfloatCode} />
+
+- 아래 세 줄에서 볼 것: 같은 0.1인데 비트 수가 많을수록 0.1에 가까움. 어느 것도 정확히 0.1은 아님
+
+### 범위와 정밀도
+
+- 부동소수점 수를 이루는 두 부분
+  - **가수** (mantissa): 유효 숫자를 담는 부분. 비트가 많을수록 정밀함
+  - **지수** (exponent): 소수점의 위치를 담는 부분. 비트가 많을수록 범위가 넓음
+
+| 타입 | 이름 | 가수 비트 | 10진 자릿수 | 지수 비트 | 가장 작은 양수 | 가장 큰 값 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `float` | 단정밀도 | 24 | 7.22 | 8 | 1.18×10<sup>-38</sup> | 3.40×10<sup>38</sup> |
+| `double` | 배정밀도 | 53 | 15.95 | 11 | 2.23×10<sup>-308</sup> | 1.80×10<sup>308</sup> |
+| `long double` | 확장 정밀도 | 64 | 19.27 | 15 | 3.36×10<sup>-4932</sup> | 1.19×10<sup>4932</sup> |
+| `std::float16_t` | 반정밀도 | 11 | 3.31 | 5 | 6.10×10<sup>-5</sup> | 65504 |
+| `std::float32_t` | 단정밀도 | 24 | 7.22 | 8 | 1.18×10<sup>-38</sup> | 3.40×10<sup>38</sup> |
+| `std::float64_t` | 배정밀도 | 53 | 15.95 | 11 | 2.23×10<sup>-308</sup> | 1.80×10<sup>308</sup> |
+| `std::float128_t` | 4배정밀도 | 113 | 34.02 | 15 | 3.36×10<sup>-4932</sup> | 1.19×10<sup>4932</sup> |
+| `std::bfloat16_t` | 브레인 부동소수점 | 8 | 2.41 | 8 | 1.18×10<sup>-38</sup> | 3.40×10<sup>38</sup> |
+
+- 표준 타입 세 가지의 값은 흔한 환경의 값. 표준이 정한 것은 순서뿐
+  - `double`은 `float` 이상, `long double`은 `double` 이상의 정밀도
+  - 예: `long double`은 Visual C++에서는 `double`과 같은 크기
+- 10진 자릿수: 믿을 수 있는 유효 숫자의 개수. `float`는 7자리쯤, `double`은 16자리쯤
+
+## 연산자
+
+- **연산자** (operator): 값을 계산하거나 바꾸는 기호. `+`, `=`, `++` 같은 것 <CppRef path="cpp/language/expressions#Operators" />
+- **피연산자** (operand): 연산자가 다루는 값. `a + b`에서 `a`와 `b`
+- 피연산자의 개수에 따른 구분
+
+| 구분 | 피연산자 | 예 |
+| --- | --- | --- |
+| **단항 연산자** (unary operator) | 하나 | `!ready`, `count++` |
+| **이항 연산자** (binary operator) | 둘 | `a + b`, `total = 7` |
+| **삼항 연산자** (ternary operator) | 셋 | C++에 하나뿐. 이 장의 뒤쪽 "조건문과 비교" 글에서 다룸 |
+
+- 직접 만든 타입에 연산자를 붙이는 방법(연산자 오버로딩): 15장에서 다룸
+
+### 산술과 대입
+
+| 연산자 | 하는 일 | 예 |
+| --- | --- | --- |
+| `=` | 오른쪽 값을 왼쪽에 넣음 (대입) | `i = 3;` |
+| `!` | 참과 거짓을 뒤집음 | `bool off{ !on };` |
+| `+` `-` `*` `/` | 더하기, 빼기, 곱하기, 나누기 | `int k{ j / i };` |
+| `%` | 나눗셈의 나머지 (정수에만 사용) | `int rem{ 17 % 5 };` → 2 |
+| `++` | 1 올림 | `i++;` `++i;` |
+| `--` | 1 내림 | `i--;` `--i;` |
+| `+=` `-=` `*=` `/=` `%=` | 계산한 결과를 다시 왼쪽에 넣음 | `i += j;` → `i = i + j;` |
+
+- 정수끼리 나누면 결과도 정수. 소수 부분은 버려짐 <CppRef path="cpp/language/operator_arithmetic" />
+  - `17 / 5`는 3.4가 아니라 `3`
+  - 한쪽이라도 부동소수점이면 결과도 부동소수점. `17.0 / 5`는 `3.4`
+- `++`와 `--`는 놓는 자리에 따라 식의 값이 다름 <CppRef path="cpp/language/operator_incdec" />
+
+| 형태 | 이름 | 변수 | 식의 값 |
+| --- | --- | --- | --- |
+| `++i` | **전위 증가** (pre-increment) | 1 올라감 | 올린 **뒤**의 값 |
+| `i++` | **후위 증가** (post-increment) | 1 올라감 | 올리기 **전**의 값 |
+
+- `i++;`처럼 한 줄에 혼자 쓰면 둘의 차이가 없음. 차이는 그 값을 다른 데 쓸 때만 생김
+- **복합 대입 연산자** (compound assignment operator): `+=`처럼 연산자와 `=`를 붙인 것 <CppRef path="cpp/language/operator_assignment" />
+
+<RunCode client:load code={operatorsCode} />
+
+- 해 볼 것: 실행하기 전에 `post`, `pre`, `n`의 값을 먼저 예상해 보고 맞는지 확인
+
+### 비트 연산자
+
+- 값을 이루는 비트(0과 1)를 직접 다루는 연산자. 정수 타입에 사용
+
+| 연산자 | 이름 | 하는 일 | 복합 대입 |
+| --- | --- | --- | --- |
+| `&` | 비트 AND | 두 비트가 모두 1일 때만 1 | `&=` |
+| <code>&#124;</code> | 비트 OR | 두 비트 가운데 하나라도 1이면 1 | <code>&#124;=</code> |
+| `^` | 비트 XOR (exclusive or) | 두 비트가 서로 다를 때만 1 | `^=` |
+| `<<` | 왼쪽 시프트 (shift) | 비트를 왼쪽으로 지정한 칸만큼 밀기 | `<<=` |
+| `>>` | 오른쪽 시프트 | 비트를 오른쪽으로 지정한 칸만큼 밀기 | `>>=` |
+
+- 자리별로 계산한 모습
+
+```text
+    1100        1100        1100
+  & 1010      | 1010      ^ 1010
+  ------      ------      ------
+    1000        1110        0110
+```
+
+- 시프트와 곱셈·나눗셈
+  - 왼쪽으로 한 칸 밀 때마다 2를 곱한 것과 같음. `12 << 1` → 24
+  - 오른쪽으로 한 칸 밀 때마다 2로 나눈 것과 같음(나머지 버림). `12 >> 2` → 3 (두 칸이므로 4로 나눔)
+- `<<`는 `std::cout`에서 출력에 쓰던 그 기호. 정수에 쓰면 시프트, 스트림에 쓰면 출력
+
+<RunCode client:load code={bitwiseCode} />
+
+### 타입이 다른 값끼리 계산하면
+
+- 이항 연산자의 두 피연산자는 타입이 같아야 계산할 수 있음
+- 타입이 다르면: 컴파일러가 한쪽을 다른 쪽 타입으로 암시적 변환한 뒤 계산
+- 변환 방향의 큰 원칙: 더 넓은 쪽으로 맞춤 <CppRef path="cpp/language/usual_arithmetic_conversions" />
+
+| 두 피연산자 | 맞춰지는 타입 | 예 |
+| --- | --- | --- |
+| 작은 정수 타입과 큰 정수 타입 | 큰 정수 타입 | `short + long` → `long` |
+| 정수와 부동소수점 | 부동소수점 | `int / double` → `double` |
+| `int`와 `unsigned int` | `unsigned int` | `-1 * 1u` → 4294967295 |
+
+- 결과가 기대와 다를 수 있음 → 암시적 변환에 기대지 말고 `static_cast`로 의도를 적을 것
+
+<RunCode client:load code={mixedTypesCode} />
+
+- 마지막 줄 출력 `4294967295`: `-1`이 `unsigned int`로 바뀌면서 아주 큰 양수가 됨
+  - 부호 있는 타입과 없는 타입은 섞어 쓰지 말 것
+
+### 연산자와 형변환을 함께 쓰는 예
+
+- 점수 두 개의 평균을 구하는 코드. 한 줄씩 넘기며 각 칸의 값이 어떻게 바뀌는지 확인
+
+<StepViz client:load data={operatorsViz} />
+
+- 마지막 두 줄이 핵심
+  - `total / count`: 둘 다 `int` → 정수 나눗셈 → 87
+  - `static_cast<double>(total) / count`: 한쪽이 `double` → 부동소수점 나눗셈 → 87.5
+
+## 연산자 우선순위
+
+- 문제 상황
+  - 연산자가 여러 개 섞인 식은 어느 것부터 계산되는지 한눈에 보이지 않음
+  - 예: `10 + 4 * 3 - 20 / 6 % 3`
+- **우선순위** (precedence): 어느 연산자를 먼저 계산할지 정한 순서 <CppRef path="cpp/language/operator_precedence" />
+  - 우선순위가 높은 연산자부터 계산
+  - 우선순위가 같으면 왼쪽부터 계산 (대입 연산자는 예외. 오른쪽부터)
+
+| 순위 | 연산자 | |
+| --- | --- | --- |
+| 1 (가장 먼저) | `++` `--` | 후위 |
+| 2 | `!` `++` `--` | 전위 |
+| 3 | `*` `/` `%` | |
+| 4 | `+` `-` | |
+| 5 | `<<` `>>` | |
+| 6 | `&` | |
+| 7 | `^` | |
+| 8 | <code>&#124;</code> | |
+| 9 (가장 나중) | `=` `+=` `-=` `*=` `/=` `%=` `&=` <code>&#124;=</code> `^=` `<<=` `>>=` | |
+
+- 전체 연산자의 우선순위: 15장에서 다룸
+- 위 식의 계산 순서
+
+| 단계 | 계산 | 남은 식 |
+| --- | --- | --- |
+| 1 | `4 * 3` → 12 | `10 + 12 - 20 / 6 % 3` |
+| 2 | `20 / 6` → 3 | `10 + 12 - 3 % 3` |
+| 3 | `3 % 3` → 0 | `10 + 12 - 0` |
+| 4 | `10 + 12` → 22 | `22 - 0` |
+| 5 | `22 - 0` → 22 | `22` |
+
+- 왼쪽부터 차례로 계산한다고 생각했다면 0이 나옴. 실제 값은 22
+- 권장: 우선순위를 외우지 말고 괄호로 묶거나 식을 여러 줄로 나눌 것
+  - `10 + (4 * 3) - ((20 / 6) % 3)`
+  - 괄호 안이 항상 먼저 계산됨
+
+<RunCode client:load code={precedenceCode} />
+
+- 실행 결과의 경고 `suggest parentheses around '+' inside '<<'`: 컴파일러도 헷갈리기 쉬운 식이라고 알려 주는 것
+  - `1 << 2 + 3`은 `(1 << 2) + 3`이 아니라 `1 << (2 + 3)`. 시프트가 덧셈보다 순위가 낮음
+
+## 이전 표준에서는
+
+- 이 글의 형변환과 연산자는 모두 C++11에서도 그대로 쓸 수 있음
+- 달라지는 것
+
+| 이 글에서 쓴 것 | 들어온 표준 | C++11에서는 |
+| --- | --- | --- |
+| 확장 부동소수점 타입, `<stdfloat>` | C++23 | 없음. `float`, `double`, `long double`을 씀 |
+| 2진수 리터럴 `0b1100` | C++14 | 16진수 `0xC` |
+| 2진수 출력 `{:04b}` | C++20 (`std::format`) | `std::bitset<4>(값)`을 `std::cout`에 출력. `<bitset>` 헤더 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={operatorsCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 중괄호가 축소 변환을 막는 정도는 컴파일러와 상황에 따라 다름
+  - 표준: 축소 변환이 들어간 중괄호 초기화는 잘못된 코드
+  - GCC 16.2: 리터럴(`int b{ 12.87 };`)이면 오류, 변수(`int b{ price };`)이면 경고만 내고 컴파일함
+  - 경고도 오류처럼 다룰 것. 값을 잃어도 된다면 `static_cast`로 적음
+- `int` → `double`도 중괄호에서는 축소 변환
+  - `int total{ 7 }; double d{ total };` → 경고
+  - 이유: 아주 큰 정수는 `double`에 정확히 담기지 않을 수 있음
+  - `double d{ 7 };`처럼 리터럴이고 정확히 담기는 값이면 문제없음
+- `double average{ total / count };`는 평균을 구하지 못함
+  - 나눗셈이 `int`끼리 먼저 끝난 뒤에 `double`로 바뀜. 소수 부분은 이미 사라진 뒤
+  - 나누기 **전에** 한쪽을 바꿔야 함: `static_cast<double>(total) / count`
+
+## 정리
+
+| 요소 | 핵심 | 들어온 표준 |
+| --- | --- | --- |
+| `static_cast<타입>(값)` | 권장하는 명시적 형변환 | |
+| 부동소수점 → 정수 | 소수 부분 버림 | |
+| 축소 변환 | 값을 잃을 수 있는 암시적 변환. 중괄호 초기화가 막아 줌 | C++11 |
+| 부동소수점의 함정 | 근삿값, 크기가 다른 수의 덧셈, 가까운 수의 뺄셈 | |
+| 무한대, NaN | `std::isinf`, `std::isnan`으로 확인 | C++11 |
+| 확장 부동소수점 타입 | `std::float16_t` 등. 지원은 선택 사항 | C++23 |
+| 정수 나눗셈 | `17 / 5` → 3, `17 % 5` → 2 | |
+| 전위·후위 증가 | `++i`는 올린 뒤의 값, `i++`는 올리기 전의 값 | |
+| 비트 연산자 | `&`, <code>&#124;</code>, `^`, `<<`, `>>` | |
+| 우선순위 | 곱셈·나눗셈 → 덧셈·뺄셈 → 시프트 → 비트 연산 → 대입. 헷갈리면 괄호 | |
+
+## 복습 질문
+
+<details>
+<summary>`static_cast<int>(-7.9)`의 값은 얼마인가요?</summary>
+
+- -7
+- 반올림도 내림도 아니고, 소수 부분을 버림 (0에 가까운 쪽)
+
+</details>
+
+<details>
+<summary>`int a = 3.7;`과 `int a{ 3.7 };`은 어떻게 다른가요?</summary>
+
+- `int a = 3.7;`: 컴파일됨. `a`는 3. 소수 부분이 말없이 사라짐
+- `int a{ 3.7 };`: 컴파일 오류. 축소 변환을 중괄호 초기화가 막음
+
+</details>
+
+<details>
+<summary>`0.1 + 0.2 == 0.3`이 거짓인 이유는 무엇인가요?</summary>
+
+- 0.1, 0.2, 0.3 모두 2진수로는 정확히 담기지 않아 근삿값으로 저장됨
+- 근삿값끼리 더한 결과와 0.3의 근삿값이 미세하게 다름
+
+</details>
+
+<details>
+<summary>`int n{ 5 }; int m{ n++ * 2 };`를 실행한 뒤 `n`과 `m`의 값은?</summary>
+
+- `n`은 6, `m`은 10
+- `n++`의 식의 값은 올리기 전의 값 5. 그래서 `5 * 2`
+
+</details>
+
+<details>
+<summary>`int sum{ 9 }; int count{ 2 };`일 때 4.5를 얻으려면 어떻게 나눠야 하나요?</summary>
+
+- `static_cast<double>(sum) / count`
+- `sum / count`는 정수 나눗셈이라 4
+
+</details>
+
+<details>
+<summary>`2 + 3 * 4 << 1`의 값은 얼마인가요?</summary>
+
+- 28
+- `3 * 4` → 12, `2 + 12` → 14, `14 << 1` → 28
+- 곱셈, 덧셈, 시프트 순서
+
+</details>

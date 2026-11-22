@@ -1,0 +1,223 @@
+---
+title: 네임스페이스
+description: 이름이 겹치는 문제를 네임스페이스로 푸는 방법과 using 지시문, using 선언, 중첩 네임스페이스, 별칭을 익힙니다.
+sidebar:
+  order: 2
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import ScopeMap from '../../../../components/ScopeMap.svelte';
+import lookup from '../../../../data/ch01/namespaces.js';
+import conflictCode from '../../../../examples/ch01/ns-conflict.cpp?raw';
+import basicCode from '../../../../examples/ch01/ns-basic.cpp?raw';
+import insideCode from '../../../../examples/ch01/ns-inside.cpp?raw';
+import usingCode from '../../../../examples/ch01/ns-using.cpp?raw';
+import directiveVsDeclarationCode from '../../../../examples/ch01/ns-directive-vs-declaration.cpp?raw';
+import nestedCode from '../../../../examples/ch01/ns-nested.cpp?raw';
+import nestedCpp11Code from '../../../../examples/ch01/ns-nested-cpp11.cpp?raw';
+
+- 다루는 것: 서로 다른 코드가 같은 이름을 쓸 때 생기는 충돌과, 그것을 막는 네임스페이스
+- 배우는 요소: `namespace` 블록, `::` 연산자, `using` 지시문, `using` 선언, 중첩 네임스페이스, 네임스페이스 별칭
+- 앞 글에서 미뤄 둔 `std::println`의 `std::`가 무엇인지도 여기서 풀림
+
+## 이름이 겹치는 문제
+
+- 문제 상황
+  - 내 코드에 `play()`라는 함수가 있음
+  - 어느 날 가져다 쓰기로 한 외부 라이브러리에도 `play()`가 있음
+- 결과: 컴파일러는 `play()`가 둘 중 어느 것인지 알 수 없음
+  - 라이브러리의 함수 이름은 내가 바꿀 수 없음
+  - 내 함수 이름을 전부 바꾸는 것은 큰 고생
+- 아래는 그 상황을 파일 하나에 옮긴 코드. 실행하면 컴파일 오류가 남
+
+<RunCode client:load code={conflictCode} />
+
+- 오류 메시지 읽는 법
+  - `redefinition of 'void play()'`: `play()`가 다시 정의됨 (10번 줄)
+  - `previously defined here`: 먼저 정의된 곳은 여기 (4번 줄)
+- 해결책: 이름마다 소속을 붙여 구분함 → 네임스페이스
+- 해 볼 것: 다음 절을 읽은 뒤 돌아와서, 두 함수를 각각 `namespace video { … }`와 `namespace audio { … }`로 감싸고 `main`의 `play();`를 `audio::play();`로 고쳐 실행
+
+## 네임스페이스 만들기와 쓰기
+
+- **네임스페이스** (namespace): 이름이 정의되는 구역. 구역이 다르면 같은 이름을 써도 충돌하지 않음 <CppRef path="cpp/language/namespace" />
+- 만드는 방법: `namespace 이름 { … }` 블록 안에 코드를 넣음
+- **범위 지정 연산자** (scope resolution operator) `::`: "어느 구역의 이름인지"를 밝히는 연산자
+  - `audio::play()`: `audio` 네임스페이스의 `play`
+
+<RunCode client:load code={basicCode} />
+
+- `std`도 네임스페이스임
+  - 표준 라이브러리의 이름은 전부 `std` 네임스페이스 안에 있음
+  - `std::println`: `std` 네임스페이스의 `println`
+- **전역 네임스페이스** (global namespace): 어떤 `namespace` 블록에도 속하지 않은 바깥 구역
+  - `main` 함수는 반드시 전역 네임스페이스에 있어야 함. 네임스페이스 안에 넣으면 안 됨
+
+### 같은 네임스페이스 안에서는
+
+- 같은 네임스페이스 안의 코드끼리는 접두어 없이 서로를 부를 수 있음
+
+<RunCode client:load code={insideCode} />
+
+- 해 볼 것: `main` 안의 `audio::alarm();`에서 `audio::`를 지우고 실행
+  - 결과: 컴파일 오류. `main`은 `audio` 밖에 있으므로 접두어가 필요함
+
+## using으로 접두어 줄이기
+
+- 매번 접두어를 붙이는 것이 번거로울 때 쓰는 방법 두 가지
+
+| 문법 | 이름 | 효과 |
+| --- | --- | --- |
+| `using namespace audio;` | **using 지시문** (using-directive) <CppRef path="cpp/language/namespace#Using-directives" /> | `audio`의 **모든** 이름을 접두어 없이 쓸 수 있음 |
+| `using audio::play;` | **using 선언** (using-declaration) <CppRef path="cpp/language/using_declaration" /> | `audio`의 `play` **하나만** 접두어 없이 쓸 수 있음 |
+
+<RunCode client:load code={usingCode} />
+
+- 해 볼 것: `using namespace audio;` 아래에 `using namespace video;`를 추가하고 실행
+  - 결과: 컴파일 오류. `play()`가 `audio`의 것인지 `video`의 것인지 모호해짐
+  - 고치는 방법: `main` 안의 `play();`를 `audio::play();`로 바꿈
+
+### 어느 play를 찾아가는가
+
+- 왼쪽에서 코드를 고르면, 그 코드가 오른쪽의 어느 이름을 찾아가는지 표시됨
+- 코드는 모두 `main` 함수 안에 적었다고 가정
+
+<ScopeMap client:load data={lookup} />
+
+### 선언과 지시문은 무엇이 다른가
+
+- 이름이 비슷하지만 컴파일러가 하는 일이 다름
+
+| | using 선언 | using 지시문 |
+| --- | --- | --- |
+| 문법 | `using audio::play;` | `using namespace audio;` |
+| 하는 일 | 이름 하나를 **지금 이 범위에 들여옴** | 이름을 들여오지 않음. 이름을 찾을 때 **그 네임스페이스도 살펴보라고 지시**만 함 |
+| 같은 이름이 이미 있을 때 | `using` 줄에서 바로 충돌 오류 | `using` 줄에서는 오류 없음. 그 이름을 실제로 쓰는 줄에서 모호하다는 오류 |
+
+- 아래 코드에는 전역에도 `play`가 있고 `audio`에도 `play`가 있음
+- using 지시문을 썼기 때문에 그대로는 문제없이 실행됨
+
+<RunCode client:load code={directiveVsDeclarationCode} />
+
+- 해 볼 것 1: `main`의 마지막 줄 아래에 `play();`를 추가하고 실행
+  - 결과: 추가한 줄에서 오류 (`call of overloaded 'play()' is ambiguous`)
+  - 이유: 전역의 `play`와 지시문으로 보이게 된 `audio`의 `play` 중 어느 것인지 정할 수 없음
+- 해 볼 것 2: 원래 코드로 되돌린 뒤 `using namespace audio;`를 `using audio::play;`로 바꾸고 실행
+  - 결과: `using` 줄에서 오류 (`conflicts with a previous declaration`). `play()`를 한정 없이 부른 곳이 없는데도 오류가 남
+  - 이유: 선언은 `play`라는 이름을 전역에 실제로 들여오는데, 전역에는 이미 `play`가 있음
+- 오류가 나는 위치 정리 (GCC 16.2에서 확인)
+
+| 상황 | using 선언 | using 지시문 |
+| --- | --- | --- |
+| 같은 범위에 같은 이름의 함수나 변수가 이미 정의되어 있음 | `using` 줄에서 오류 | 그 이름을 쓰는 줄에서 오류 |
+| 두 네임스페이스에서 같은 이름의 **변수**를 가져옴 | 두 번째 `using` 줄에서 오류 | 그 이름을 쓰는 줄에서 오류 |
+| 두 네임스페이스에서 같은 이름의 **함수**를 가져옴 | 예외: 그 함수를 부르는 줄에서 오류 | 그 함수를 부르는 줄에서 오류 |
+
+- 마지막 줄이 예외인 이유
+  - C++에서는 이름이 같은 함수 여러 개가 한 범위에 함께 있을 수 있음. 이것을 **함수 오버로딩** (function overloading)이라 하며 이 장의 뒤쪽 "함수와 어트리뷰트" 글에서 다룸
+  - 그래서 using 선언 두 개로 `audio::play`와 `video::play`를 모두 들여오는 것 자체는 허용됨
+  - 둘은 받는 값이 똑같아서 구별할 방법이 없으므로, 실제로 `play()`를 부르는 순간 모호하다는 오류가 남
+- 기억할 것: using 선언의 충돌이 항상 `using` 줄에서 드러나는 것은 아님. 오류 메시지가 가리키는 줄이 `using` 줄인지 사용하는 줄인지 확인할 것
+- 정식 용어
+  - **한정된 이름** (qualified name): `audio::play`처럼 `::`로 소속을 밝힌 이름 <CppRef path="cpp/language/qualified_lookup" />
+  - **한정되지 않은 이름** (unqualified name): `play`처럼 소속 없이 쓴 이름 <CppRef path="cpp/language/unqualified_lookup" />
+  - `::play`: 맨 앞에 `::`만 붙이면 "전역 네임스페이스의 `play`"라는 뜻
+
+### using을 쓸 때 주의할 점
+
+- `using` 지시문을 남발하지 말 것
+  - 여러 네임스페이스를 모두 열어 두면 네임스페이스를 안 쓰는 것과 같아짐
+  - 이름 충돌이 다시 생기고, 엉뚱한 함수가 불릴 수도 있음
+- 헤더 파일의 전역 범위에는 `using` 지시문도 `using` 선언도 쓰지 말 것
+  - 이유: 그 헤더를 `#include`하는 모든 파일에 `using`이 강제로 적용됨
+  - 함수 안이나 네임스페이스 안처럼 좁은 범위에 쓰는 것은 괜찮음
+- 모듈 인터페이스 파일에서는 내보내지(`export`) 않는 한 써도 됨 <Badge text="C++20" />
+  - 모듈 인터페이스 파일과 내보내기: 이 장의 뒷부분에서 다룸
+
+:::note[이 사이트의 표기]
+- 다른 교재나 예제에서는 `using namespace std;`를 쓰고 `std::`를 생략한 코드를 흔히 볼 수 있음
+- 이 사이트의 예제는 `std::`를 항상 붙임
+  - 이유: 어떤 이름이 표준 라이브러리의 것인지 코드만 보고 알 수 있음
+:::
+
+## 중첩 네임스페이스
+
+- **중첩 네임스페이스** (nested namespace): 네임스페이스 안에 들어 있는 네임스페이스
+- 용도: 큰 라이브러리를 영역별로 다시 나눔
+- 한 줄로 쓰는 문법: 각 단계를 `::`로 이어 붙임 <Badge text="C++17" />
+
+<RunCode client:load code={nestedCode} />
+
+### 이전 표준에서는
+
+- C++11 ~ C++14: 한 줄 문법이 없음. `namespace` 블록을 하나씩 겹쳐 써야 함
+- 뜻은 완전히 같음. 쓰는 쪽(`studio::audio::effects::echo()`)의 코드도 달라지지 않음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={nestedCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 네임스페이스 별칭
+
+- **네임스페이스 별칭** (namespace alias): 이미 있는 네임스페이스에 붙이는 다른 이름. 보통 더 짧은 이름 <CppRef path="cpp/language/namespace_alias" />
+- 문법: `namespace 새이름 = 원래이름;`
+- 위 두 예제의 `namespace fx = studio::audio::effects;`가 별칭
+  - `fx::echo()`와 `studio::audio::effects::echo()`는 같은 함수를 부름
+- `using` 지시문과의 차이: 접두어를 없애지 않고 짧게 줄일 뿐이라 이름 충돌이 생기지 않음
+
+## 정리
+
+| 요소 | 문법 | 들어온 표준 |
+| --- | --- | --- |
+| 네임스페이스 정의 | `namespace audio { … }` | |
+| 범위 지정 연산자 | `audio::play()` | |
+| using 지시문 | `using namespace audio;` | |
+| using 선언 | `using audio::play;` | |
+| 중첩 네임스페이스 (한 줄) | `namespace a::b::c { … }` | C++17 |
+| 중첩 네임스페이스 (겹쳐 쓰기) | `namespace a { namespace b { … } }` | |
+| 네임스페이스 별칭 | `namespace fx = a::b::c;` | |
+
+## 복습 질문
+
+<details>
+<summary>`std::println`에서 `std`와 `::`는 각각 무엇인가요?</summary>
+
+- `std`: 표준 라이브러리의 이름이 모두 들어 있는 네임스페이스
+- `::`: 범위 지정 연산자. 왼쪽 구역 안에서 오른쪽 이름을 찾으라는 뜻
+
+</details>
+
+<details>
+<summary>using 지시문과 using 선언의 차이는 무엇인가요?</summary>
+
+- using 지시문(`using namespace audio;`): 네임스페이스의 모든 이름을 접두어 없이 쓸 수 있게 함
+  - 이름을 들여오지 않고, 이름을 찾을 때 그 네임스페이스도 살펴보라고 지시만 함
+- using 선언(`using audio::play;`): 지정한 이름 하나만 접두어 없이 쓸 수 있게 함
+  - 그 이름을 지금 범위에 실제로 들여옴. 같은 이름이 이미 있으면 `using` 줄에서 충돌 오류
+
+</details>
+
+<details>
+<summary>`using namespace audio;`와 `using namespace video;`를 둘 다 쓴 뒤 `play();`를 부르면 어떻게 되나요? (둘 다 `play`가 있음)</summary>
+
+- 컴파일 오류. 어느 `play`인지 모호함
+- `audio::play();`처럼 접두어를 붙이면 해결됨
+
+</details>
+
+<details>
+<summary>헤더 파일의 전역 범위에 `using namespace std;`를 쓰면 안 되는 이유는 무엇인가요?</summary>
+
+- 그 헤더를 `#include`하는 모든 파일에 `using`이 강제로 적용됨
+- 헤더를 쓰는 사람의 코드에서 뜻하지 않은 이름 충돌이 생길 수 있음
+
+</details>
+
+<details>
+<summary>C++14까지만 쓸 수 있는 프로젝트에서 `namespace a::b { void f(); }`를 어떻게 바꿔 쓰나요?</summary>
+
+- `namespace a { namespace b { void f(); } }`
+- 한 줄 문법은 C++17부터 쓸 수 있음
+
+</details>
