@@ -1,0 +1,200 @@
+---
+title: 표준 라이브러리 컨테이너 요건
+description: 표준 컨테이너가 갖춰야 할 타입 별칭(value_type, reference, size_type 등)과 필수 멤버 함수(생성·대입·소멸, begin/end, ==, swap, size, max_size, empty)와 그 복잡도, at()으로 범위 검사하기, 반복자를 만들기 전에 정할 것(종류, 순서, 내부 표현, 끝, const 반복자)을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import grCode from '../../../../examples/ch25/graph-requirements.cpp?raw';
+import grCpp11Code from '../../../../examples/ch25/graph-requirements-cpp11.cpp?raw';
+
+- 다루는 것: 2편의 `directed_graph`는 표준 라이브러리의 정신은 따르지만 **규칙**까지 지키지는 않음. 대부분은 그것으로 충분하지만 표준 알고리즘과 함께 쓰려면 일이 더 필요함
+- 이 글에서 배우는 요소: 컨테이너의 타입 별칭, 필수 멤버 함수, `at()`, 반복자 설계에서 정할 것
+
+## 필수 타입 별칭
+
+- 표준은 모든 컨테이너가 다음 `public` 타입 별칭을 갖추도록 요구함 <CppRef path="cpp/named_req/Container" />
+
+| 이름 | 뜻 |
+| --- | --- |
+| `value_type` | 컨테이너에 담는 원소 타입 |
+| `reference` | 원소 타입의 참조 |
+| `const_reference` | 원소 타입의 `const` 참조 |
+| `iterator` | 원소를 훑는 반복자 타입 |
+| `const_iterator` | `const` 원소를 훑는 반복자 타입 |
+| `size_type` | 원소 수를 나타내는 타입. 보통 `std::size_t`(`<cstddef>`) |
+| `difference_type` | 두 반복자의 차이를 나타내는 타입. 보통 `std::ptrdiff_t`(`<cstddef>`) |
+
+```cpp
+template <typename T>
+class directed_graph {
+public:
+    using value_type = T;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    // iterator, const_iterator는 4편
+};
+```
+
+- 별칭이 생기면 멤버 함수 선언도 그것으로 씀
+
+```cpp
+const T& operator[](std::size_t index) const;          // 전
+const_reference operator[](size_type index) const;     // 후
+```
+
+- 제네릭 코드는 이 별칭을 믿고 씀. 예: `typename C::value_type`으로 원소 타입을, `typename C::size_type`으로 크기 타입을 얻음
+
+## 필수 멤버 함수
+
+| 멤버 함수 | 하는 일 | 최악 복잡도 |
+| --- | --- | --- |
+| 기본 생성자 | 빈 컨테이너를 만듦 | 상수 |
+| 복사 생성자 | 깊은 복사 | 선형 |
+| 이동 생성자 | 이동 생성 | 상수 |
+| 복사 대입 연산자 | 깊은 복사 | 선형 |
+| 이동 대입 연산자 | 이동 대입 | 선형 |
+| 소멸자 | 남은 원소를 없애고 그 메모리를 풂 | 선형 |
+| `begin()`, `begin() const` | 첫 원소를 가리키는 반복자, `const` 반복자 | 상수 |
+| `end()`, `end() const` | 마지막 원소 다음을 가리키는 반복자, `const` 반복자 | 상수 |
+| `cbegin() const`, `cend() const` | `begin() const`, `end() const`와 같음 | 상수 |
+| `operator==` | 두 컨테이너 비교 | 선형 |
+| `void swap(Container&) noexcept` | 내용을 맞바꿈 | 상수 |
+| `size_type size() const` | 원소 수 | 상수 |
+| `size_type max_size() const` | 담을 수 있는 최대 원소 수 | 상수 |
+| `bool empty() const` | 원소가 없는지 | 상수 |
+
+- 복사·이동 생성자, 복사·이동 대입 연산자, 소멸자: `directed_graph`는 **0의 규칙**을 따르므로 직접 쓰지 않아도 데이터 멤버(`vector`)가 다 해 줌
+- `size()`, `max_size()`, `empty()`: `m_nodes`의 같은 이름 멤버 함수에 넘기면 됨
+
+```cpp
+size_type size() const noexcept { return m_nodes.size(); }
+size_type max_size() const noexcept { return m_nodes.max_size(); }
+bool empty() const noexcept { return m_nodes.empty(); }
+```
+
+:::note
+멤버 함수를 클래스 **밖에서** 정의할 때 반환 타입이 클래스 템플릿의 멤버 타입이면 `typename directed_graph<T>::size_type`처럼 전부 적어야 한다. 반환 타입은 클래스 이름보다 앞에 나오므로 클래스 범위가 아직 적용되지 않기 때문이다. 뒤에 오는 반환 타입(`auto f() -> size_type`)을 쓰면 짧게 쓸 수 있다.
+:::
+
+- `begin()`, `end()`, `cbegin()`, `cend()`는 반복자를 만든 뒤(4편)
+
+## at(): 범위를 검사하는 접근
+
+- `operator[]`는 `vector`처럼 범위를 검사하지 않음. 범위 밖 인덱스는 정의되지 않은 동작(프로그램이 죽을 수 있음)
+- `vector`처럼 범위를 검사하는 `at()`을 더함. 벗어나면 `std::out_of_range` 예외
+  - `m_nodes.at()`에 넘기면 검사를 그대로 얻음
+
+```cpp
+const_reference at(size_type index) const { return m_nodes.at(index).value; }
+```
+
+<RunCode client:load code={grCode} />
+
+- 볼 것
+  - `empty()`, `size()`, `max_size()`
+  - 타입 별칭(`value_type`, `size_type`)만 쓰는 제네릭 함수 `first_or`가 `vector`와 그래프 모두에 동작
+  - `at(5)`는 `out_of_range`
+  - 0의 규칙 덕분에 복사가 그냥 됨. 이 예제는 `operator==`를 `= default`로 간단히 둠(2편처럼 순서와 상관없이 비교하려면 직접 씀)
+
+## 반복자를 만들기 전에 정할 것
+
+- 가장 중요한 컨테이너 요건은 **반복자** 지원
+  - 표준 알고리즘과 함께 쓰려면 원소에 접근하는 반복자 타입이 있어야 함
+  - 보통 `operator++`, `*`, `->`, `==`를 오버로드하고, 종류에 따라 연산을 더함
+- 정할 것 다섯
+
+### 1. 종류
+
+- 순방향, 양방향, 임의 접근, 연속(17장) 중 무엇인가
+- `directed_graph`에는 **양방향**이 알맞음: `operator--`를 더 제공해야 함
+- 임의 접근으로 만들 수도 있음: `+`, `-`, `+=`, `-=`, `<`, `>`, `<=`, `>=`, `[]`를 더함. 반복자 연습으로 좋음
+
+### 2. 순서
+
+- `directed_graph`는 정렬되어 있지 않으므로, 정렬 순서로 훑는 것은 비효율적
+- 표준 규칙이 요구하는 것: `begin()`부터 `end()`까지 훑으면 **모든 원소를 한 번씩** 지나감. 특정 순서일 필요는 없음
+- 그래서 노드를 **넣은 순서**대로 훑음. `std::unordered_set`이 순서를 보장하지 않는 것과 같은 생각
+
+### 3. 내부 표현
+
+- 반복자의 표현은 컨테이너의 내부 구현에 크게 좌우됨
+- 반복자의 첫째 목적은 원소 하나를 가리키는 것. 노드는 모두 `m_nodes`(`vector`)에 있으므로, 그래프의 반복자는 **`vector`의 반복자를 감싼** 것으로 할 수 있음
+
+### 4. 끝 반복자
+
+- 끝 반복자는 "마지막 다음" 표시: 마지막 원소를 가리키는 반복자에 `++`를 하면 닿는 반복자
+- 그래프의 끝 반복자는 `m_nodes`의 끝 반복자를 감싼 것으로 함
+
+### 5. iterator와 const_iterator
+
+- 컨테이너는 `iterator`와 `const_iterator` 두 별칭을 모두 제공해야 함
+- 그래프에 들어간 값은 바뀌면 안 되므로(값이 서로 다르다는 불변식) **둘 다 `const` 반복자**로 정의함. `std::set`과 같은 원리
+- 둘을 따로 만들 때는 `iterator`가 `const_iterator`로 **변환 가능**해야 함
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `operator==`를 `= default`로 | C++20 | 멤버별 비교를 직접 씀 |
+| `using` 타입 별칭 | C++11 | `typedef` |
+| 컨테이너 요건(타입 별칭, `size`, `empty`, `at` 등) | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={grCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 컨테이너 요건을 채우려면 복사 생성자와 소멸자를 꼭 직접 써야 한다?
+  - 요건은 "있어야 함". 0의 규칙으로 컴파일러가 만들어 주면 충분
+- `size_type`은 아무 정수 타입이면 된다?
+  - 원소 수를 나타낼 수 있는 부호 없는 정수. 보통 `std::size_t`
+- 반복자는 정렬된 순서로 훑어야 한다?
+  - 모든 원소를 한 번씩이면 됨. 순서는 컨테이너가 정함
+- 그래프의 `iterator`로 노드 값을 바꿀 수 있게 한다?
+  - 값이 겹치면 불변식이 깨짐. `set`처럼 둘 다 `const` 반복자
+- 클래스 밖 정의에서 반환 타입 `size_type`만 써도 된다?
+  - `typename directed_graph<T>::size_type`으로 적거나 뒤에 오는 반환 타입을 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 타입 별칭 | `value_type`, `reference`, `const_reference`, `iterator`, `const_iterator`, `size_type`, `difference_type` |
+| 필수 멤버 | 생성·대입·소멸, `begin`/`end`/`cbegin`/`cend`, `==`, `swap`, `size`, `max_size`, `empty` |
+| 0의 규칙 | 데이터 멤버가 복사·이동·해제를 맡음 |
+| `at()` | 범위 검사, `out_of_range` |
+| 반복자 설계 | 종류(양방향), 순서(넣은 순), 표현(`vector` 반복자 감싸기), 끝, 둘 다 `const` |
+
+## 복습 질문
+
+<details>
+<summary>`directed_graph`의 반복자를 임의 접근 반복자로 만들려면 무엇을 더 제공해야 하는가?</summary>
+
+- 양방향 반복자의 연산에 더해 `+`, `-`(반복자 ± 정수, 반복자 - 반복자), `+=`, `-=`, 비교 `<`, `>`, `<=`, `>=`(또는 `<=>`), `[]`
+- 감싼 `vector` 반복자가 임의 접근이므로 모두 넘기기만 하면 됨
+
+</details>
+
+<details>
+<summary>`std::list`처럼 `max_size()`를 직접 계산해야 한다면 무엇을 기준으로 하는가?</summary>
+
+- 할당자가 잡을 수 있는 최대 원소 수와 `size_type`이 나타낼 수 있는 최댓값 중 작은 것. `directed_graph`는 `vector`에 넘기므로 따로 계산하지 않음
+
+</details>
+
+<details>
+<summary>`iterator`와 `const_iterator`를 따로 만들 때 꼭 지켜야 하는 관계는?</summary>
+
+- `iterator`에서 `const_iterator`로 변환할 수 있어야 함. 그래야 `const_iterator it = c.begin();`이 되고, 두 반복자를 섞어 비교할 수 있음
+
+</details>
