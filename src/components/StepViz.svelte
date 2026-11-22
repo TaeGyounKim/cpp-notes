@@ -11,6 +11,7 @@
 	 *   }]
 	 * }
 	 * Cell = { id, name?, type, addr, value?, pointsTo?, aliases?, freed? }
+	 * data.regions?: { stack?, heap? }  두 영역의 제목. 기본은 '스택', '힙'
 	 */
 	import { fade, fly } from 'svelte/transition';
 	import Arrow from './StepVizArrow.svelte';
@@ -89,8 +90,8 @@
 				{/each}
 			</defs>
 
-			<text class="region" x={STACK.x} y="18">스택</text>
-			{#if hasHeap}<text class="region" x={HEAP.x} y="18">힙</text>{/if}
+			<text class="region" x={STACK.x} y="18">{data.regions?.stack ?? '스택'}</text>
+			{#if hasHeap}<text class="region" x={HEAP.x} y="18">{data.regions?.heap ?? '힙'}</text>{/if}
 
 			{#each now.cells as c (c.id)}
 				<g in:fly={{ y: -12, duration: 300 }} out:fade={{ duration: 150 }}>
