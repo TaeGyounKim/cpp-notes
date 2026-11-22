@@ -1,0 +1,194 @@
+---
+title: vector의 메모리 할당과 이동, vector<bool>
+description: vector가 메모리를 늘리는 방식, 크기와 용량, reserve·shrink_to_fit·swap으로 용량 다루기, data()로 연속 메모리에 접근하기, 컨테이너의 이동 의미론과 noexcept, 순번을 돌려주는 클래스 예제, vector<bool> 특수화의 함정을 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import memCode from '../../../../examples/ch18/vector-memory.cpp?raw';
+import memCpp11Code from '../../../../examples/ch18/vector-memory-cpp11.cpp?raw';
+
+- 다루는 것: `vector`가 메모리를 어떻게 늘리는지, 그것을 왜 알아야 하고 어떻게 조절하는지
+- 이 글에서 배우는 요소: 크기와 용량, `reserve`, `shrink_to_fit`, `data()`, 이동 의미론, `vector<bool>`
+
+## vector의 메모리 할당 방식
+
+- `vector`는 넣는 원소를 담을 메모리를 알아서 잡음
+  - 원소는 C 스타일 배열처럼 **연속된 메모리**에 있어야 함
+  - 이미 잡은 메모리 덩어리의 끝에 메모리를 덧붙여 달라고 할 방법이 없음
+  - 그래서 메모리가 더 필요할 때마다 **더 큰 새 덩어리**를 다른 곳에 잡고 모든 원소를 복사·이동함(**재할당**, reallocation)
+- 재할당은 시간이 걸리므로, 재할당할 때 필요보다 **넉넉히** 잡아 원소를 넣을 때마다 재할당하지 않게 함
+- 추상화 원칙대로라면 내부를 몰라도 될 것 같지만, 알아야 하는 이유가 둘
+  - **효율**: 넣기가 분할 상환 상수 시간임을 보장함. 대부분은 상수 시간이고, 가끔 재할당이 필요하면 선형 시간. 효율이 중요하면 재할당 시점을 조절할 수 있음
+  - **반복자 무효화**: 재할당은 그 `vector`의 원소를 참조하던 모든 반복자를 무효로 만듦(3편)
+
+:::caution
+재할당을 직접 조절하지 않는다면 모든 넣기가 재할당을 일으켜 모든 반복자를 무효로 만든다고 가정한다.
+:::
+
+### 크기와 용량
+
+- `size()`: 원소 수. `capacity()`: 재할당 없이 담을 수 있는 원소 수 <CppRef path="cpp/container/vector/capacity" />
+  - 재할당 없이 더 넣을 수 있는 원소 수는 `capacity() - size()`
+- `empty()`: 비었는지. 비어 있어도 용량은 0이 아닐 수 있음
+- 비멤버 `std::size()`, `std::empty()`: 모든 컨테이너, 포인터로 접근하지 않는 정적 C 스타일 배열, `initializer_list`에 씀
+- <Badge text="C++20" /> 비멤버 `std::ssize()`: 크기를 **부호 있는** 정수 타입으로 돌려줌 <CppRef path="cpp/iterator/size" />
+  - `size()`는 부호 없는 `size_t`라 `size() - 21`처럼 빼면 아주 큰 수가 됨. `ssize()`는 -1
+
+### 용량 미리 잡기
+
+- 효율이나 반복자 무효화를 신경 쓰지 않으면 메모리 할당을 직접 조절할 필요가 없음
+- 최대한 효율적이게 하거나 반복자가 무효가 되지 않게 보장하려면 담을 원소를 모두 수용할 공간을 미리 잡게 함(원소 수를 알아야 함)
+- `reserve(n)`: n개를 담을 메모리를 잡음
+
+:::caution
+공간을 미리 잡으면 용량은 바뀌지만 크기는 바뀌지 않는다. 원소를 만들지 않는다. 크기를 넘는 원소에 접근하지 않는다.
+:::
+
+- 다른 방법: 생성자, `resize()`, `assign()`으로 원소 수를 지정하면 그 크기(와 아마 그만한 용량)의 원소가 실제로 생김
+
+### 메모리 돌려주기
+
+- `vector`는 필요하면 메모리를 늘리지만, 소멸하기 전에는 **돌려주지 않음**. 원소를 지우면 크기는 줄지만 용량은 줄지 않음
+- `shrink_to_fit()` <Badge text="C++11" />: 용량을 크기에 맞추라고 **요청**함. 구현은 무시해도 됨
+- 모든 메모리를 확실히 돌려주는 기법: 빈 `vector`와 맞바꿈
+
+```cpp
+std::vector<int>().swap(values);
+```
+
+- 같은 타입의 빈 임시 `vector`를 만들어 `values`와 맞바꿈. `values`가 쓰던 메모리는 임시 객체로 넘어가고, 문장이 끝날 때 임시 객체가 소멸하며 해제됨. `values`의 용량은 0이 됨
+
+### 데이터에 직접 접근
+
+- `data()`: 원소가 담긴 연속 메모리 덩어리의 포인터 <CppRef path="cpp/container/vector/data" />
+- 비멤버 `std::data()`: `array`, `vector`, 문자열, 정적 C 스타일 배열, `initializer_list`에 씀
+- 예전 코드의 `&v[0]`도 같은 일을 하지만 빈 `vector`에서 안전하지 않음. `data()`를 씀
+- 포인터와 길이를 받는 C API에 넘길 때 유용함: `cFunction(v.data(), v.size());`
+
+## 이동 의미론
+
+- 모든 표준 컨테이너는 이동 생성자와 이동 대입 연산자를 가짐(9장)
+- 그래서 컨테이너를 함수에서 **값으로 돌려줘도** 성능 손해가 없음
+
+```cpp
+std::vector<int> makeSeries(std::size_t n)
+{
+    std::vector<int> v(n);
+    for (int k{ 0 }; auto& x : v) { x = k++; }
+    return v;
+}
+std::vector<int> series;
+series = makeSeries(123);   // 복사 대입이 아니라 이동 대입
+```
+
+- 반환값 최적화로 아예 생략되는 경우도 많음(9장)
+- 컨테이너의 이동이 원소를 다룰 때 제대로 쓰이려면 원소 타입의 이동 생성자와 이동 대입 연산자가 **`noexcept`여야** 함(1편의 예제)
+  - 예외를 던질 수 있다면: 재할당 중 데이터 일부를 새 덩어리로 옮긴 뒤 예외가 나면 되돌릴 방법이 없음
+  - 그래서 표준 컨테이너는 이동 멤버 함수가 예외를 던지지 않는다고 보장할 때만 쓰고, 아니면 강한 예외 안전성을 위해 복사 멤버 함수를 씀
+- 표준 라이브러리 같은 컨테이너를 직접 만들 때: `<utility>`의 `std::move_if_noexcept()` <CppRef path="cpp/utility/move_if_noexcept" />
+  - 받은 참조를 이동 생성자가 `noexcept`면 우측값 참조로, 아니면 `const` 참조로 바꿈. 한 번의 호출로 알맞은 생성자를 부르게 함
+  - 대입 연산자에 대한 비슷한 도우미는 표준에 없음. 타입 특성으로 직접 만들 수 있음(26장)
+
+## 예제: 차례로 돌려주기
+
+- 컴퓨터 과학의 흔한 문제: 한정된 자원에 요청을 나눠 주기. 가장 간단한 해법은 **라운드 로빈** (round-robin)
+  - 예: 운영체제가 프로세스마다 시간 조각을 주고, 마지막 프로세스 다음에는 처음으로 돌아감
+- 아무 타입에나 쓰는 순번 클래스 템플릿 `TurnTaker`: 원소를 더하고, 빼고, 다음 차례를 돌려줌
+  - `vector`를 바로 써도 되지만, 필요한 기능만 드러내는 감싸는 클래스를 만들면 쓰기 편함
+- 설계에서 신경 쓸 점: "다음 차례"를 어떻게 기억할까
+  - 반복자로 기억하면 `add()`의 `push_back()`이 재할당할 때, `remove()`의 `erase()`가 앞쪽을 지울 때 반복자가 무효가 됨. 그때마다 위치를 계산해 반복자를 다시 만들어야 함
+  - 여기서는 **위치**(인덱스)를 기억함. 재할당이 일어나도 위치는 그대로 유효하고, 앞쪽 원소가 지워질 때만 하나 당기면 됨
+- 생성자에서 예상 원소 수만큼 `reserve()`함
+- 반복자를 데이터 멤버로 둔다면 템플릿 매개변수에 기대는 타입이므로 `typename std::vector<T>::iterator`처럼 `typename`이 필요함(17장)
+
+<RunCode client:load code={memCode} />
+
+- 볼 것
+  - GCC는 용량을 1, 2, 4, 8, …로 두 배씩 늘림. 늘리는 방식은 표준이 정하지 않으므로 컴파일러마다 다를 수 있음
+  - `size() - 21`은 부호 없는 산술로 아주 큰 수, `ssize() - 21`은 -1
+  - `reserve` 뒤 크기는 0, `clear` 뒤 용량은 그대로, `shrink_to_fit`과 `swap`으로 용량이 바뀜
+  - `TurnTaker`에서 "지은"이 빠진 뒤에도 순서가 이어짐
+
+## vector&lt;bool&gt; 특수화
+
+- 표준은 `bool`용 `vector`의 부분 특수화를 요구함. `bool` 값을 비트 하나씩 **꾹꾹 채워** 공간을 아끼려는 의도 <CppRef path="cpp/container/vector_bool" />
+  - C++에는 정확히 한 비트를 저장하는 기본 타입이 없음. 컴파일러에 따라 `bool`은 `char`나 `int`와 같은 크기
+- `vector`라기보다 **비트 필드**로 생각하면 됨. 11편의 `bitset`이 더 많은 기능을 갖췄지만, `vector<bool>`은 크기를 바꿀 수 있음
+- 비트 필드용 멤버로 `flip()`이 하나 더 있음. 컨테이너에 부르면 모든 원소를, `operator[]`가 돌려준 것에 부르면 그 원소만 뒤집음
+- `bool`의 참조에는 멤버 함수를 부를 수 없는데 어떻게? `operator[]`, `at()` 등은 진짜 `bool&`가 아니라 비트를 대신하는 **대리 객체** (proxy) `vector<bool>::reference`를 돌려줌
+
+:::caution
+`vector<bool>`이 돌려주는 참조는 대리 객체라서, 주소를 얻어 컨테이너 안 원소의 포인터로 쓸 수 없다. `bool& r{ v[0] };`도 컴파일되지 않는다.
+:::
+
+- 또 다른 함정: `auto x{ v[1] };`의 `x`는 `bool` 값이 아니라 대리 객체. `x = false;`가 **원본을 바꿈**
+- 실제로는 아끼는 공간이 작고, 원소에 접근하고 고치는 것이 `vector<int>` 등보다 훨씬 느림
+  - 많은 C++ 전문가가 `vector<bool>` 대신 `bitset`을 권함
+  - 크기가 바뀌는 비트 필드가 꼭 필요하면 `std::vector<std::int_fast8_t>`나 `std::vector<unsigned char>`를 씀. `std::int_fast8_t`는 `<cstdint>`의 타입으로, 8비트 이상인 정수 중 가장 빠른 부호 있는 타입
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::ssize()`, 초기화문이 있는 범위 `for` | C++20 | `static_cast<std::ptrdiff_t>(v.size())`, 바깥에 변수 선언 |
+| 비멤버 `std::size()`, `std::empty()`, `std::data()` | C++17 | 멤버 함수, C 배열은 `sizeof` 계산 |
+| `shrink_to_fit()`, `data()`, 이동 의미론, `move_if_noexcept` | C++11 | `swap` 기법, `&v[0]`, 복사 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={memCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `reserve(10)` 뒤에 `v[5] = 1;`을 해도 된다?
+  - 용량만 늘고 크기는 0. 원소가 없으므로 정의되지 않은 동작. `resize(10)`이나 `push_back`
+- `clear()`나 `erase()`를 하면 메모리가 돌아간다?
+  - 크기만 줄고 용량은 그대로. `shrink_to_fit()`(요청) 또는 빈 `vector`와 `swap`
+- `vector`를 함수에서 값으로 돌려주면 느리다?
+  - 이동되거나 생략되어 빠름
+- `vector<bool>`의 `auto x{ v[0] };`은 `bool` 복사본이다?
+  - 대리 객체라 원본에 연결됨. 값이 필요하면 `bool x{ v[0] };`
+- 용량은 늘 두 배씩 는다?
+  - 구현마다 다름(1.5배 등). 표준은 분할 상환 상수 시간만 요구함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 재할당 | 더 큰 새 덩어리로 옮김. 넉넉히 잡아 분할 상환 상수 시간. 모든 반복자 무효 |
+| 크기·용량 | `size()` ≤ `capacity()`. `std::ssize()`(C++20)는 부호 있음 |
+| 미리 잡기 | `reserve(n)`: 용량만. `resize(n)`: 원소까지 |
+| 돌려주기 | `shrink_to_fit()`(요청), `std::vector<T>().swap(v)` |
+| 직접 접근 | `data()`, `std::data()` |
+| 이동 | 컨테이너는 값으로 돌려줘도 됨. 원소의 이동은 `noexcept`여야 쓰임 |
+| `vector<bool>` | 비트 압축, 대리 객체, `flip()`. 대개 `bitset`이나 `vector<unsigned char>` |
+
+## 복습 질문
+
+<details>
+<summary>파일에서 줄을 읽어 `std::vector<std::string>`에 넣는데 줄 수를 미리 안다. 재할당을 막으려면?</summary>
+
+- 읽기 전에 `lines.reserve(n)`. 그 뒤 `push_back`/`emplace_back`은 n개까지 재할당하지 않음
+
+</details>
+
+<details>
+<summary>큰 `vector`를 다 쓴 뒤 메모리를 반드시 돌려주려면?</summary>
+
+- `std::vector<T>().swap(v);`(`v = std::vector<T>{};`로 이동 대입해도 보통 같은 효과). `shrink_to_fit()`은 요청일 뿐이라 보장되지 않음
+
+</details>
+
+<details>
+<summary>`std::vector<bool> flags(8); bool* p{ &flags[0] };`가 컴파일되지 않는 이유는?</summary>
+
+- `flags[0]`은 `bool`이 아니라 대리 객체 `vector<bool>::reference`를 돌려주므로, 그 주소는 `bool*`가 아님. 비트는 따로 주소를 가질 수 없음
+
+</details>
