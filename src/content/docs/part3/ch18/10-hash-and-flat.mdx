@@ -1,0 +1,232 @@
+---
+title: 해시 테이블과 평평한 연관 컨테이너
+description: 해시 함수와 버킷, 충돌과 선형 체이닝, 직접 만든 키의 해시 함수, unordered_map과 버킷 멤버, unordered_multimap·set·multiset, C++23의 flat_map·flat_set, 세 가지 연관 컨테이너 중 무엇을 고를지 익힙니다.
+sidebar:
+  order: 10
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import hashViz from '../../../../data/ch18/hash-buckets.js';
+import hashCode from '../../../../examples/ch18/hashing.cpp?raw';
+import hashCpp11Code from '../../../../examples/ch18/hashing-cpp11.cpp?raw';
+
+- 다루는 것: 정렬하지 않는 대신 평균 상수 시간에 찾는 해시 테이블과, 연속 메모리에 정렬해 두는 평평한 연관 컨테이너
+- 이 글에서 배우는 요소: 해시 함수, 버킷, 충돌, `std::hash` 특수화, `unordered_*` 넷, `flat_*` 넷, 고르는 기준
+
+## 정렬되지 않은 연관 컨테이너
+
+- **해시 테이블** (hash table)이라고도 함. 넷: `unordered_map`, `unordered_multimap`, `unordered_set`, `unordered_multiset` <Badge text="C++11" />
+- `map`, `multimap`, `set`, `multiset`은 원소를 정렬하지만, 이 넷은 **정렬하지 않음**
+
+### 해시 함수와 버킷
+
+- 구현은 보통 배열 하나로 이뤄지고, 배열의 각 원소를 **버킷** (bucket)이라 함. 버킷마다 0, 1, 2, …의 번호가 있음
+- **해시 함수** (hash function): 키를 **해시 값**으로 바꿈. 해시 값은 다시 버킷 번호로 바뀌고, 그 키에 딸린 값이 그 버킷에 저장됨
+- 해시 함수의 결과가 늘 유일하지는 않음. 둘 이상의 키가 같은 버킷 번호로 가는 것을 **충돌** (collision)이라 함
+  - 다른 키가 같은 해시 값을 내거나, 다른 해시 값이 같은 버킷 번호로 바뀔 때
+- 충돌 처리 방법은 여럿(이차 재해싱, 선형 체이닝 등). 표준은 정하지 않지만 현재 구현은 대부분 **선형 체이닝** (linear chaining)
+  - 버킷이 데이터를 직접 담지 않고 연결 리스트를 가리킴. 그 리스트에 그 버킷의 모든 원소가 있음
+
+<StepViz client:load data={hashViz} />
+
+- 찾기의 과정과 복잡도
+  - 해시 함수를 한 번 불러 해시 값을 구하고, 버킷 번호로 바꿈
+  - 그 버킷의 리스트에서 키를 `==`로 하나 이상 비교함
+  - 그래서 `map`보다 훨씬 빠를 수 있지만, **충돌이 얼마나 많은지**에 달림
+- **완전 해시** (perfect hash): 충돌을 하나도 만들지 않는 해시 함수. 찾기가 상수 시간
+  - 보통의 해시도 원소 수와 상관없이 찾기가 평균 1에 가까움
+  - 충돌이 늘면 찾기 시간이 늘어 성능이 떨어짐. 테이블을 키우면 충돌이 줄지만 캐시 크기도 고려해야 함
+
+### 직접 만든 키의 해시 함수
+
+- 표준은 포인터와 모든 기본 타입(`bool`, `char`, `int`, `float`, `double` 등)의 해시 함수를 제공함
+  - 표준 라이브러리 클래스 일부도: `optional`, `bitset`, `unique_ptr`, `shared_ptr`, `string`, `string_view`, `vector<bool>` 등
+- 그 밖의 키 타입은 해시 함수를 직접 만들어야 함
+  - 완전 해시는 키 집합이 고정되어 알려져 있어도 깊은 수학적 분석이 필요한 어려운 일
+  - 완전하지 않아도 충분히 좋은 해시를 만드는 것도 쉽지 않음. 여기서는 간단한 예만
+- 정렬되지 않은 연관 컨테이너의 키에는 `operator==`가 있어야 함
+- 방법: `<functional>`의 `std::hash` 클래스 템플릿을 그 타입으로 **특수화**하고, 함수 호출 연산자에서 해시 값을 계산함 <CppRef path="cpp/utility/hash" />
+
+```cpp
+struct Cell
+{
+    int row;
+    int col;
+    bool operator==(const Cell&) const = default;   // C++20
+};
+
+template <>
+struct std::hash<Cell>
+{
+    std::size_t operator()(const Cell& c) const
+    {
+        std::size_t h{ std::hash<int>{}(c.row) };
+        return h ^ (std::hash<int>{}(c.col) + 0x9e3779b9 + (h << 6) + (h >> 2));
+    }
+};
+```
+
+- 보통 `std` 네임스페이스에 무언가를 넣는 것은 허용되지 않지만, 표준 클래스 템플릿의 특수화는 예외
+- `std::hash<Cell>`처럼 네임스페이스 밖에서 한정된 이름으로 특수화하는 형식은 표준의 결함 보고(DR)로 뒤늦게 허용된 것이라 오래된 컴파일러는 거부할 수 있음. 그때는 `namespace std { template <> struct hash<Cell> { ... }; }`처럼 네임스페이스 안에 둠
+- 데이터 멤버가 하나면 그 멤버의 표준 해시를 그대로 돌려줘도 됨. 여럿이면 모든 멤버를 반영해 섞어야 함(위의 섞는 식은 널리 쓰이는 간단한 방식의 하나)
+- 특수화 대신 해시 함수 객체를 템플릿 인수로 줄 수도 있음: `std::unordered_map<Cell, char, CellHash>`
+
+## unordered_map
+
+- `<unordered_map>` <CppRef path="cpp/container/unordered_map" />
+
+```cpp
+template <typename Key, typename T,
+          typename Hash = std::hash<Key>,
+          typename Pred = std::equal_to<Key>,
+          typename Alloc = std::allocator<std::pair<const Key, T>>>
+class unordered_map;
+```
+
+- 템플릿 타입 매개변수 다섯: 키 타입, 값 타입, 해시 타입, 같음 비교자 타입, 할당자 타입. 뒤의 셋은 기본값이 있음
+- `map`처럼 중괄호로 초기화하고, 같은 방식으로 훑음. 키는 **유일**함
+- 훑는 순서는 해시 값에 따라 정해지므로 정해져 있지 않음. 넣은 순서도, 키 순서도 아님
+
+### map과 다른 멤버
+
+| 연산 | `map` | `unordered_map` |
+| --- | --- | --- |
+| `lower_bound()`, `upper_bound()` | ○ | × |
+| `rbegin()`, `rend()` 등 역방향 반복자 | ○ | × |
+| `bucket()`, `bucket_count()`, `bucket_size()`, `max_bucket_count()` | × | ○ |
+| `begin(n)`, `end(n)`, `cbegin(n)`, `cend(n)`, 지역 반복자 | × | ○ |
+| `load_factor()`, `max_load_factor()`, `rehash()`, `reserve()` | × | ○ |
+| `at()`, `operator[]`, `find()`, `count()`, `contains()`, `equal_range()` | ○ | ○ |
+| `insert()`, `insert_or_assign()`, `try_emplace()`, `emplace()`, `emplace_hint()`, `insert_range()` | ○ | ○ |
+| `erase()`, `clear()`, `extract()`, `merge()`, `swap()`, `size()`, `empty()` | ○ | ○ |
+
+- 해시 전용 멤버
+  - `load_factor()`: 버킷당 평균 원소 수. 충돌 정도를 짐작하게 함. `max_load_factor()`를 넘으면 버킷을 늘리고 다시 배치함(**재해싱**, rehash)
+  - `bucket_count()`: 버킷 수
+  - `bucket(키)`: 그 키가 있는 버킷의 번호
+  - `begin(n)`, `end(n)`: 버킷 n의 원소들을 훑는 **지역 반복자** (`local_iterator`, `const_local_iterator`). 버킷을 넘어 훑는 데는 쓸 수 없음
+  - `reserve(n)`: n개를 담아도 재해싱이 일어나지 않게 버킷을 미리 마련함
+- 예: 전화번호부. 이름이 키, 번호가 값. 넣고 지우고 찾는 코드는 `map`과 같고, 출력 순서만 다름
+
+## unordered_multimap, unordered_set, unordered_multiset
+
+- `unordered_multimap`: 같은 키를 여럿 허용하는 `unordered_map` <CppRef path="cpp/container/unordered_multimap" />
+  - `multimap`처럼 `operator[]`, `at()`, `insert_or_assign()`, `try_emplace()`가 없고, `insert()`는 늘 성공하며 반복자만 돌려줌
+  - 키와 값이 모두 같은 쌍도 넣게 해 주므로, 중복을 피하려면 넣기 전에 직접 확인함
+  - 찾기는 `find()`가 아무거나 하나를 돌려주므로 `equal_range()`를 씀
+- `<unordered_set>`의 `unordered_set`, `unordered_multiset`: 키를 정렬하지 않고 해시를 쓰는 것 말고는 `set`, `multiset`과 비슷함 <CppRef path="cpp/container/unordered_set" />
+
+## 평평한 연관 컨테이너 어댑터
+
+- <Badge text="C++23" /> 순차 컨테이너 위에서 연관 컨테이너 인터페이스를 제공하는 어댑터 <CppRef path="cpp/container/flat_map" />
+  - `<flat_set>`: `flat_set`, `flat_multiset`
+  - `<flat_map>`: `flat_map`, `flat_multimap`
+- `flat_set`, `flat_map`은 `set`, `map`처럼 키가 유일. `flat_multiset`, `flat_multimap`은 중복 허용
+- 모두 데이터를 키 기준으로 **정렬해서** 저장함. 기본 비교자 `std::less`
+- 바탕 컨테이너
+  - `flat_set`, `flat_multiset`: 키를 담을 순차 컨테이너 하나
+  - `flat_map`, `flat_multimap`: 키용 하나와 값용 하나, 둘. `keys()`, `values()`로 각각을 볼 수 있음
+  - 임의 접근 반복자를 지원해야 함(`vector`, `deque`). 기본은 `vector`
+- 정렬된 짝과 인터페이스가 비슷하지만 다른 점
+  - 노드 기반이 아니라서 노드 핸들(`extract()` 등)이 없음
+  - 반복자가 **임의 접근** 반복자(정렬된 짝은 양방향)
+- 정렬된 짝을 대개 그대로 바꿔 쓸 수 있음. 9편의 접근 제어 목록이라면 `std::set<std::string>`을 `std::flat_set<std::string>`으로 바꾸면 됨
+
+## 무엇을 고를까
+
+- 이제 연관 컨테이너마다 세 가지: 예를 들어 `map`, `unordered_map`, `flat_map`. 하는 일은 비슷하지만 자료 구조가 크게 달라 시간·공간 효율이 다름
+
+- 시간 복잡도
+
+| 종류 | 넣기·지우기 | 찾기 |
+| --- | --- | --- |
+| 정렬된(`map` 등) | 로그 | 로그 |
+| 정렬되지 않은(`unordered_map` 등) | 평균 상수 | 평균 상수 |
+| 평평한(`flat_map` 등) | **선형** | 로그(캐시 친화적) |
+
+- 그 밖의 특성
+
+| 종류 | 훑기 | 메모리 | 키에 필요한 것 |
+| --- | --- | --- | --- |
+| 정렬된 | 키 순서, 보통 | 노드마다 포인터 | `<`(비교자) |
+| 정렬되지 않은 | 순서 없음 | 버킷 + 노드 | 해시 함수와 `==` |
+| 평평한 | 키 순서, **가장 빠름** | 가장 적음 | `<`(비교자) |
+
+- 원소를 훑는 일이 중요하면 평평한 어댑터가 가장 빠름. 데이터가 연속 메모리에 있어 캐시에 잘 맞기 때문
+- 그 밖의 연산이 중요하면 보통 정렬되지 않은 것이 정렬된 것보다 빠름
+- 성능이 정말 중요하면 쓰임새에 맞춰 셋 다 측정(벤치마크, 29장)해 보는 수밖에 없음
+- 대개는 다루기 쉬운 쪽을 고르면 됨. 직접 만든 타입을 키로 쓸 때 정렬된 쪽은 비교 연산을, 정렬되지 않은 쪽은 해시 함수를 만들어야 하는데, 해시 함수가 보통 더 어려움
+
+<RunCode client:load code={hashCode} />
+
+- 볼 것
+  - 전화번호부의 출력 순서는 넣은 순서도 가나다순도 아님(구현마다 다를 수 있음)
+  - "민수"의 버킷 번호와 그 버킷의 원소, 버킷 수와 적재율
+  - 직접 만든 `Cell` 키를 `std::hash` 특수화로 씀
+  - `flat_map`은 키 순서로 정렬되고, 키와 값이 따로 저장됨(`keys()`, `values()`). `flat_set`의 반복자는 임의 접근이라 `begin() + 1`이 됨
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `flat_map`, `flat_set` 등 | C++23 | 정렬된 `vector`와 `std::lower_bound` |
+| 기본 `operator==`(`= default`), `contains()` | C++20 | 직접 정의, `count()` |
+| `unordered_*` 넷, `std::hash` | C++11 | 서드파티 해시 테이블(`hash_map` 등) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 해시 함수 객체를 템플릿 인수로 주고, 평평한 맵 대신 정렬된 `vector`를 씀
+
+<RunCode client:load code={hashCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `unordered_map`을 훑으면 넣은 순서대로 나온다?
+  - 순서가 정해지지 않음. 넣은 순서가 필요하면 별도로 `vector`에 기록
+- 해시 테이블은 언제나 상수 시간이다?
+  - **평균**. 충돌이 많으면(나쁜 해시 함수) 최악 선형 시간
+- 직접 만든 타입을 키로 쓰려면 `<`가 필요하다?
+  - 해시 테이블은 해시 함수와 `==`. `<`는 정렬된 쪽과 평평한 쪽에 필요
+- `flat_map`은 넣기도 빠르다?
+  - 정렬된 연속 메모리에 끼워 넣으므로 **선형** 시간. 넣기가 많으면 불리
+- `flat_map`에서도 `extract()`로 노드를 옮긴다?
+  - 노드 기반이 아니라 노드 핸들이 없음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 해시 테이블 | 버킷 배열. 키 → 해시 값 → 버킷. 충돌은 체이닝 |
+| 성능 | 평균 상수, 최악 선형. 충돌이 관건 |
+| 직접 만든 키 | `operator==` + `std::hash` 특수화(또는 해시 함수 객체 인수) |
+| 해시 전용 멤버 | `bucket`, `bucket_count`, `load_factor`, `rehash`, `reserve`, 지역 반복자 |
+| `unordered_*` 넷 | `map`·`multimap`·`set`·`multiset`의 정렬하지 않는 판 |
+| `flat_*` 넷 | 정렬된 연속 메모리. 넣기 선형, 훑기 빠름, 임의 접근 반복자, 노드 핸들 없음 |
+
+## 복습 질문
+
+<details>
+<summary>`struct Point { int x; int y; };`를 `std::unordered_set`의 원소로 쓰려면 무엇이 필요한가?</summary>
+
+- `operator==`(C++20이면 `= default`)
+- `std::hash<Point>` 특수화(또는 해시 함수 객체를 두 번째 템플릿 인수로)
+
+</details>
+
+<details>
+<summary>원소 10만 개를 넣을 것을 알 때 `unordered_map`의 재해싱을 줄이려면?</summary>
+
+- 넣기 전에 `m.reserve(100000);`. 그만큼을 담을 버킷을 미리 마련함
+
+</details>
+
+<details>
+<summary>한 번 만든 뒤 거의 바뀌지 않고, 키 순서로 자주 훑는 사전에는 세 가지 맵 중 무엇이 알맞을까?</summary>
+
+- `flat_map`. 넣기는 선형이지만 거의 하지 않고, 정렬된 연속 메모리라 훑기와 찾기가 캐시 친화적이며 메모리도 적음. 확신이 필요하면 측정
+
+</details>
