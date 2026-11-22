@@ -1,0 +1,227 @@
+---
+title: 변환 연산자
+description: 내 클래스를 다른 타입으로 바꾸는 변환 연산자, operator auto, 생성자와 변환 연산자가 부딪쳐 생기는 모호함을 explicit로 푸는 법, 불리언 식에 쓰기 위한 void*·bool·explicit bool 변환의 차이를 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import convCode from '../../../../examples/ch15/conversions.cpp?raw';
+import convCpp11Code from '../../../../examples/ch15/conversions-cpp11.cpp?raw';
+
+- 다루는 것: 내 클래스의 객체를 `double`, `std::string`, `bool` 같은 다른 타입으로 바꾸는 법
+- 이 글에서 배우는 요소: 변환 연산자, `operator auto`, 모호함과 `explicit` 변환 연산자, 불리언 식을 위한 변환
+
+## 변환 연산자
+
+- 온도 클래스 `Celsius`가 안에 `double`을 담고 있으니 `double` 변수에 넣을 수 있을 것 같지만, 그대로는 안 됨
+
+```cpp
+Celsius c{ 1.5 };
+double d1{ c };                 // 컴파일 오류
+double d2{ (double)c };         // 캐스트를 붙여도 컴파일 오류
+```
+
+- 컴파일러는 `Celsius`를 `double`로 바꾸는 방법을 모름
+  - 첫 줄에서 이미 무엇을 원하는지 알았고, 할 수 있었다면 했을 것. 캐스트를 붙인다고 방법이 생기지 않음
+  - 게다가 쓸데없는 캐스트를 붙이는 것은 대개 나쁜 생각
+- 이런 변환을 허용하려면 방법을 알려 줘야 함. **변환 연산자** (conversion operator) <CppRef path="cpp/language/cast_operator" />
+
+```cpp
+operator double() const;
+
+Celsius::operator double() const
+{
+    return m_value;
+}
+```
+
+- 함수 이름이 `operator double`. 반환 타입이 이름에 들어 있으므로 **반환 타입을 따로 적지 않음**
+- 호출된 객체를 바꾸지 않으므로 `const`
+- 이제 `double d1{ c };`가 컴파일되고 제대로 동작함
+- 어떤 타입이든 같은 문법. 예: `std::string`으로
+
+```cpp
+operator std::string() const;
+
+Celsius::operator std::string() const
+{
+    return std::format("{}도", m_value);
+}
+
+std::string s1 = c;                               // 대입 모양
+std::string s2{ static_cast<std::string>(c) };    // 명시적 캐스트
+```
+
+- `std::string`처럼 생성자가 많은 타입은 중괄호 초기화 `std::string s{ c };`가 컴파일러·표준에 따라 모호해질 수 있음. 그럴 때는 위의 두 모양 중 하나를 씀
+
+### `operator auto`
+
+- 변환 연산자의 타입을 직접 적는 대신 `auto`로 컴파일러가 추론하게 할 수 있음 <Badge text="C++14" />
+
+```cpp
+operator auto() const { return m_value; }   // double로 추론
+```
+
+- 주의: 반환 타입을 추론하는 멤버 함수는 구현이 쓰는 쪽에서 보여야 함. 그래서 클래스 정의 안에 구현을 둠
+- `auto`는 참조와 `const`를 벗김(1장). 타입 `T`의 참조를 돌려주더라도 `T`가 값으로 돌아가 복사됨. 필요하면 직접 붙임
+
+```cpp
+operator const auto&() const { /* ... */ }
+```
+
+## 모호함과 explicit 변환 연산자
+
+- `double` 변환 연산자를 쓰면 **모호함**이 생김
+
+```cpp
+Celsius c{ 6.6 };
+Celsius sum{ c + 3.4 };   // operator double()이 있으면 컴파일 오류
+```
+
+- GCC: ``ambiguous overload for 'operator+' (operand types are 'Celsius' and 'double')``
+- 변환 연산자를 쓰기 전에는 컴파일되었음. 왜 안 되는가?
+  - 컴파일러가 두 길 중 어느 쪽인지 알 수 없음
+  - `c`를 `operator double()`로 `double`로 바꿔 `double` 덧셈을 할까?
+  - `3.4`를 `double` 생성자로 `Celsius`로 바꿔 `Celsius` 덧셈을 할까?
+  - 전에는 둘째 길뿐이었지만 이제 둘 다 됨. 쓰는 사람이 원하지 않을 선택을 하지 않으려고 아예 선택하지 않음
+- C++11 이전의 흔한 해법: 그 생성자를 `explicit`로 만들어(8장) 자동 변환을 막음
+  - 하지만 `double`을 `Celsius`로 자동 변환하는 것은 보통 편해서 막고 싶지 않음
+- <Badge text="C++11" /> 생성자 대신 **변환 연산자**를 `explicit`로 만듦
+
+```cpp
+explicit operator double() const;
+```
+
+- 이제 `c + 3.4`가 컴파일됨(`3.4`를 `Celsius`로 바꾸는 길만 남음)
+- `explicit` 변환 연산자는 `static_cast<double>(c)`처럼 명시적으로 바꿀 때만 쓰임
+- `operator auto`도 `explicit`로 만들 수 있음
+
+## 불리언 식을 위한 변환
+
+- 객체를 불리언 식에 쓰고 싶을 때가 있음. 포인터라면 흔히 이렇게 씀
+
+```cpp
+if (ptr != nullptr) { /* 역참조 */ }
+if (ptr) { /* 역참조 */ }
+if (!ptr) { /* ... */ }
+```
+
+- 5편의 스마트 포인터 `Owner`로는 하나도 컴파일되지 않음. 변환 연산자를 더해야 함. 세 가지 방법을 비교함
+
+### `operator void*()`
+
+```cpp
+operator void*() const { return m_ptr; }
+```
+
+- 포인터 타입으로 바꾸면 `nullptr`과의 비교, `if (p)`, `!p`가 모두 그 변환으로 동작함
+- 흔히 `void*`를 씀. 불리언 식에서 검사하는 것 말고는 할 수 있는 일이 거의 없는 포인터 타입이기 때문
+
+### `operator bool()`
+
+```cpp
+operator bool() const { return m_ptr != nullptr; }
+```
+
+- 객체를 불리언 식에 쓰는 것이니 `bool`로 바로 바꾸면 되지 않는가?
+  - `if (p)`, `!p`는 동작함
+  - `p != nullptr`는 컴파일 오류(``no match for 'operator!='``). `nullptr`은 자기 타입 `std::nullptr_t`가 있고 정수 0(`false`)으로 자동 변환되지 않기 때문
+  - 지원하려면 `Owner`와 `std::nullptr_t`를 받는 비교 연산자를 따로 더해야 함. 연산자가 늘수록 다른 비교와 부딪칠 여지도 늘어남
+- 포인터를 나타내지 않는 객체라도 문제가 있음. C++은 기회만 있으면 `bool`을 `int`로 조용히 **승격**함
+  - `int i{ p };`가 컴파일되고 실행됨. `Owner`가 `bool`을 거쳐 `int`가 됨. 보통 원하지 않는 동작
+  - `int`, `long` 등으로의 변환을 하나씩 `delete`할 수 있지만 지저분해짐
+  - 그래서 예전에는 `operator bool()`보다 `operator void*()`를 선호하는 프로그래머가 많았음
+
+### `explicit operator bool()`
+
+- <Badge text="C++11" /> 오늘날의 권장 해법: **`explicit operator bool()`**
+
+```cpp
+explicit operator bool() const { return m_ptr != nullptr; }
+```
+
+- `explicit` 변환이지만, `if`, `while`, `for`의 조건, `!`, `&&`, `||`, `?:`의 조건처럼 **문맥상 `bool`이 필요한 곳**(contextual conversion)에서는 자동으로 쓰임 <CppRef path="cpp/language/implicit_conversion" />
+  - `if (p)`, `!p`는 동작함
+  - `int i{ p };`는 컴파일 오류(``invalid user-defined conversion from ... to 'int'``). 조용한 승격이 없음
+  - `p != nullptr`는 여전히 안 됨. 필요하면 `nullptr_t`를 받는 비교를 따로 둠
+- 표준 `std::unique_ptr`, `std::shared_ptr`, `std::optional`, 스트림이 모두 `explicit operator bool()`을 씀
+
+| 방법 | `if (p)`, `!p` | `p != nullptr` | `int i{ p };` |
+| --- | --- | --- | --- |
+| `operator void*()` | 됨 | 됨 | 안 됨 |
+| `operator bool()` | 됨 | 안 됨 | 됨(원치 않는 승격) |
+| `explicit operator bool()` | 됨 | 안 됨 | 안 됨 |
+
+- 결과는 로컬 GCC로 확인함
+- 어느 연산자를 오버로드할지 정하는 것도 설계. 그 결정이 쓰는 쪽이 클래스를 쓸 수 있는 방식을 바로 정함
+
+<RunCode client:load code={convCode} />
+
+- 볼 것
+  - `explicit operator double()`이라 `c + 3.4`가 모호하지 않고 `Celsius` 덧셈이 됨
+  - `std::string text = sum;`으로 문자열 변환
+  - `explicit operator bool()`인데도 `if (*p)`, `!*p`에서 쓰임. 주석을 풀어 `int i{ full };`을 쓰면 컴파일 오류
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `explicit` 변환 연산자, `explicit operator bool()` | C++11 | 생성자를 `explicit`로, `operator void*()`, "안전한 bool 관용구"(멤버 포인터로 변환) |
+| `operator auto` | C++14 | 타입을 직접 적음 |
+
+- 변환 연산자 자체는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={convCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 변환 연산자에도 반환 타입을 적는다?
+  - 이름(`operator double`)에 들어 있으므로 적지 않음
+- `(double)c`처럼 캐스트하면 변환 방법이 없어도 된다?
+  - 컴파일러가 방법을 모르면 캐스트도 안 됨. 변환 연산자를 써야 함
+- 변환 연산자를 더하면 기존 코드가 그대로 동작한다?
+  - `c + 3.4`처럼 모호함이 생길 수 있음. `explicit`로 막음
+- `explicit operator bool()`이면 `if (p)`도 안 된다?
+  - 조건문 같은 문맥상 변환에서는 됨. `int i{ p }` 같은 암시적 변환만 막힘
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 변환 연산자 | `operator 타입() const;` 반환 타입 없음 |
+| `operator auto` | 타입 추론(C++14). 정의를 클래스 안에. 참조·`const`는 직접 붙임 |
+| 모호함 | 변환 생성자와 변환 연산자가 둘 다 맞으면 오류 |
+| `explicit` 변환 연산자 | 명시적으로만 변환(C++11). 모호함 해소 |
+| 불리언 변환 | `explicit operator bool()` 권장. 조건문에서 쓰이고 `int`로 새지 않음 |
+
+## 복습 질문
+
+<details>
+<summary>`Money`에 `Money(double)` 생성자와 `operator double()`가 둘 다 있다. `m + 1.0`은 어떻게 되는가? 고치려면?</summary>
+
+- 모호해서 컴파일 오류. `double` 덧셈과 `Money` 덧셈이 둘 다 가능함
+- `operator double()`을 `explicit`로 만듦. 필요한 곳에서는 `static_cast<double>(m)`
+
+</details>
+
+<details>
+<summary>`explicit operator bool()`을 가진 `File` 객체 `f`에 대해 `bool ok = f;`는 컴파일되는가? `bool ok{ static_cast<bool>(f) };`는?</summary>
+
+- `bool ok = f;`는 복사 초기화라 암시적 변환이 필요해 컴파일되지 않음
+- `static_cast<bool>(f)`는 명시적 변환이라 됨. `if (f)`도 문맥상 변환이라 됨
+
+</details>
+
+<details>
+<summary>`operator bool()`(비 `explicit`)을 가진 클래스에서 `int n = obj + 1;`이 컴파일되는 이유는?</summary>
+
+- `obj`가 `bool`로 바뀌고, `bool`이 `int`로 승격되어 `+ 1`이 됨. 그래서 `explicit`를 붙임
+
+</details>
