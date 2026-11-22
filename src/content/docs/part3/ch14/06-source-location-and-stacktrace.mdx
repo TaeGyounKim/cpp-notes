@@ -1,0 +1,234 @@
+---
+title: 소스 위치와 스택 추적
+description: __FILE__·__LINE__·__func__를 대신하는 std::source_location으로 로그와 예외에 위치를 자동으로 담기, C++23의 std::stacktrace로 호출 스택을 얻어 예외에 담는 법을 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import slCode from '../../../../examples/ch14/source-location.cpp?raw';
+import slCpp11Code from '../../../../examples/ch14/source-location-cpp11.cpp?raw';
+
+- 다루는 것: 오류가 **어디서** 났는지, **어떤 호출을 거쳐** 거기에 왔는지를 코드로 알아내기
+- 이 글에서 배우는 요소: `__FILE__`, `__LINE__`, `__func__`, `std::source_location`, 기본 인수의 계산 시점, `std::stacktrace`, `std::stacktrace_entry`
+
+## 소스 위치
+
+- C++20 이전에는 전처리기 매크로로 소스 코드의 위치를 알아냈음
+
+| 매크로 | 바뀌는 값 |
+| --- | --- |
+| `__FILE__` | 지금 소스 파일 이름 |
+| `__LINE__` | 지금 줄 번호 |
+
+- 또 모든 함수 안에는 함수 이름을 담은 지역 정적 문자 배열 `__func__`가 정의되어 있음(1장)
+- **`std::source_location`** <Badge text="C++20" />: 이 매크로들과 `__func__`를 대신하는 객체 지향적인 수단. `<source_location>` <CppRef path="cpp/utility/source_location" />
+
+| 접근자 | 값 |
+| --- | --- |
+| `file_name()` | 지금 소스 파일 이름 |
+| `function_name()` | 지금 함수 이름(함수 안일 때) |
+| `line()` | 지금 줄 번호 |
+| `column()` | 지금 열 번호 |
+
+- 정적 멤버 함수 `current()`: **불린 곳**의 위치로 `source_location`을 만듦
+
+## 로그에 위치 담기
+
+- 예전에는 로그에 파일 이름, 함수 이름, 줄 번호를 자동으로 넣으려면 C 스타일 매크로를 써야 했음
+- 이제 순수한 C++ 함수로 할 수 있음. 요령: `source_location` 매개변수의 **기본 인수**로 `current()`를 줌
+
+```cpp
+void logMessage(std::string_view message,
+                std::source_location where = std::source_location::current())
+{
+    std::println("{}({}): {}: {}", where.file_name(), where.line(),
+                 where.function_name(), message);
+}
+
+void readSensor()
+{
+    logMessage("측정 시작");   // 이 줄의 위치가 기록됨
+}
+```
+
+- 핵심: 기본 인수 `current()`는 함수 선언이 있는 줄이 아니라 **함수를 부른 곳**에서 계산됨. 그래서 `logMessage()`를 부른 줄의 위치가 들어감
+- 함수 이름의 정확한 모양은 컴파일러마다 다름. GCC는 `void readSensor()`, Microsoft Visual C++은 호출 규약까지 붙인 모양
+
+## 예외에 위치 담기
+
+- 직접 만든 예외 클래스의 생성자에 같은 요령을 쓰면, 예외를 **던진 위치**가 자동으로 저장됨
+
+```cpp
+class TracedError : public std::exception
+{
+public:
+    explicit TracedError(std::string message,
+                         std::source_location where =
+                             std::source_location::current())
+        : m_message{ std::move(message) }, m_where{ where } {}
+    const char* what() const noexcept override { return m_message.c_str(); }
+    const std::source_location& where() const noexcept { return m_where; }
+
+private:
+    std::string m_message;
+    std::source_location m_where;
+};
+```
+
+```cpp
+try {
+    readSensor();   // 안에서 throw TracedError{ "센서 응답 없음" };
+} catch (const TracedError& e) {
+    std::println(std::cerr, "잡음: '{}' {}번째 줄, {}", e.what(),
+                 e.where().line(), e.where().function_name());
+}
+```
+
+## 스택 추적
+
+- 함수 `A()`가 `B()`를 부르면, `B()`에 넘길 인수와 끝난 뒤 돌아갈 곳이 기록됨. `B()`가 `C()`를 부르면 또 기록됨
+- 이 기록들이 **스택 추적** (stack trace), 다른 말로 **호출 스택** (call stack)의 **프레임**
+  - 함수를 부를 때마다 프레임이 하나 쌓이고, 함수가 끝나면 그 프레임이 빠짐
+  - 어느 순간이든 스택 추적은 지금 실행 중인 함수에 어떤 호출을 거쳐 왔는지 정확히 알려 줌. 버그를 찾고 고치는 데 아주 중요한 정보(디버깅은 31장)
+- 이 절의 내용은 모두 C++23에 새로 들어옴
+
+### 스택 추적 라이브러리
+
+- `<stacktrace>` <Badge text="C++23" /> <CppRef path="cpp/utility/basic_stacktrace" />
+- `std::stacktrace::current()`: 지금 순간의 스택 추적을 얻음
+  - 정수를 넘기면 위쪽 프레임을 그만큼 건너뜀
+- `std::print()`/`std::println()`으로 바로 출력하거나 `std::to_string()`으로 문자열로 바꿀 수 있음
+
+```cpp
+void C() { std::println("{}", std::stacktrace::current()); }
+void B() { C(); }
+void A() { B(); }
+```
+
+- 출력 모양은 컴파일러와 운영체제에 따라 다름. Compiler Explorer의 GCC(Linux)에서는 다음처럼 나옴. 맨 위가 지금 함수, 아래로 갈수록 부른 쪽이고, `main` 아래로 C 런타임 라이브러리의 프레임이 이어짐
+
+```text
+   0#  C() at /app/example.cpp:3 [0x40576b]
+   1#  B() at /app/example.cpp:4 [0x4057ca]
+   2#  A() at /app/example.cpp:5 [0x4057d6]
+   3#  main at /app/example.cpp:6 [0x4057ea]
+   4#  <unknown> [0x7381eb02a1c9]
+   5#  __libc_start_main [0x7381eb02a28a]
+   6#  _start [0x405684]
+```
+
+- 각 프레임은 `std::stacktrace_entry`. 범위 기반 `for`로 하나씩 훑을 수 있음 <CppRef path="cpp/utility/stacktrace_entry" />
+  - `description()`: 프레임 설명(보통 함수 이름)
+  - `source_file()`, `source_line()`: 그 프레임의 문장이 있는 소스 파일 이름과 줄 번호
+
+```cpp
+for (unsigned i{ 0 }; const auto& frame : std::stacktrace::current()) {
+    std::println("{} -> {}", i++, frame.description());
+}
+```
+
+:::note
+GCC에서는 `<stacktrace>`를 쓰는 프로그램을 링크할 때 `-lstdc++exp`를 붙여야 한다(GCC 14 이상. 그 전에는 `-lstdc++_libbacktrace`). 붙이지 않으면 스택 추적 구현 함수를 찾지 못한다는 링크 오류(`undefined reference`)가 난다. 아래 실행 예제는 이 옵션을 붙여 둔 것이다.
+:::
+
+### 예외에 스택 추적 담기
+
+- `TracedError`에 소스 위치에 더해 스택 추적도 담음
+
+```cpp
+explicit TracedError(std::string message,
+                     std::source_location where =
+                         std::source_location::current())
+    : m_message{ std::move(message) }, m_where{ where },
+      m_trace{ std::stacktrace::current(1) }   // 1: 맨 위 프레임 건너뜀
+{}
+
+const std::stacktrace& trace() const noexcept { return m_trace; }
+```
+
+- `current(1)`로 맨 위 프레임을 건너뜀. 맨 위는 `TracedError` 생성자 자신이라 관심 없음. 알고 싶은 것은 이 예외를 만들기까지의 경로
+- 잡는 쪽에서 프레임을 출력함
+
+```cpp
+} catch (const TracedError& e) {
+    for (unsigned i{ 0 }; const auto& frame : e.trace()) {
+        std::println(std::cerr, "{}> {}, {}({})", i++, frame.description(),
+                     frame.source_file(), frame.source_line());
+    }
+}
+```
+
+:::tip
+직접 만든 예외에는 스택 추적을 담아 두면 오류를 디버깅하기 쉽다.
+:::
+
+<RunCode client:load code={slCode} flags="-std=c++23 -Wall -Wextra -lstdc++exp" />
+
+- 볼 것
+  - 로그의 줄 번호는 `logMessage()`를 정의한 줄이 아니라 부른 줄(38)
+  - 예외의 위치는 `throw`한 줄(39)과 함수 `void readSensor()`
+  - 스택 추적의 위쪽 세 프레임이 `readSensor()`, `poll()`, `main` 순서. 생성자 프레임은 건너뜀
+  - 이 실행 환경의 파일 이름은 `/app/example.cpp`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::source_location` | C++20 | `__FILE__`, `__LINE__`, `__func__`(C++11)를 매크로로 모아 넘김 |
+| `std::stacktrace` | C++23 | Boost.Stacktrace, 운영체제 API(`backtrace()`, `CaptureStackBackTrace()` 등) |
+| 범위 기반 `for`의 초기화 구문 | C++20 | 반복문 앞에 변수 선언 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 함수를 부른 곳의 위치를 얻으려면 매크로가 필요함(함수 안의 `__LINE__`은 그 함수의 줄이 되므로)
+
+<RunCode client:load code={slCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 기본 인수 `std::source_location::current()`는 함수를 선언한 줄의 위치가 된다?
+  - 함수를 부른 곳에서 계산됨. 그래서 로그 함수에 쓸 수 있음
+- `function_name()`의 결과는 어느 컴파일러나 같다?
+  - 컴파일러마다 다름
+- `std::stacktrace::current()`의 맨 위 프레임은 부른 쪽이다?
+  - `current()`를 부른 함수 자신. 예외 생성자에서라면 생성자. `current(1)`로 건너뜀
+- `<stacktrace>`만 포함하면 GCC에서 바로 링크된다?
+  - `-lstdc++exp`가 필요함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 옛 방식 | `__FILE__`, `__LINE__`, `__func__` |
+| `std::source_location` | `file_name()`, `function_name()`, `line()`, `column()`, `current()` |
+| 요령 | 매개변수 기본 인수 `= std::source_location::current()`. 부른 곳에서 계산 |
+| `std::stacktrace` | `current(건너뛸 수)`, 출력·`to_string()`, `size()` |
+| `stacktrace_entry` | `description()`, `source_file()`, `source_line()` |
+| 사용자 정의 예외 | 생성자에서 위치와 `current(1)` 스택 추적을 저장 |
+
+## 복습 질문
+
+<details>
+<summary>`void check(bool ok, std::source_location w = std::source_location::current())`를 `main()`의 20번째 줄에서 부르면 `w.line()`은?</summary>
+
+- 20번째 줄. 기본 인수는 부른 곳에서 계산됨
+
+</details>
+
+<details>
+<summary>예외 생성자에서 `std::stacktrace::current()` 대신 `current(1)`을 쓰는 이유는?</summary>
+
+- 맨 위 프레임이 생성자 자신이라 쓸모없기 때문. 건너뛰면 예외를 만든 함수부터 시작함
+
+</details>
+
+<details>
+<summary>C++17 코드에서 로그 함수가 호출 위치를 기록하게 하려면?</summary>
+
+- `#define LOG(msg) logMessage((msg), __FILE__, __LINE__, __func__)`처럼 매크로로 감싸, 매크로를 쓴 곳의 `__LINE__`이 들어가게 함
+
+</details>
