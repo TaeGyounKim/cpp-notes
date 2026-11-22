@@ -1,0 +1,269 @@
+---
+title: 멤버 함수 템플릿
+description: 멤버 함수 하나만 따로 매개변수화하는 멤버 함수 템플릿, 원소 타입이나 크기가 다른 표 사이의 변환 복사와 대입, C++23의 this 추론으로 const 판과 비 const 판을 하나로 합치는 법을 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import memberCode from '../../../../examples/ch12/member-templates.cpp?raw';
+import memberCpp11Code from '../../../../examples/ch12/member-templates-cpp11.cpp?raw';
+
+- 다루는 것: 클래스 전체가 아니라 멤버 함수 하나만 매개변수화하기
+- 이 글에서 배우는 요소: 멤버 함수 템플릿, 변환 복사 생성자와 대입 연산자, 두 겹의 템플릿 머리, 크기가 다른 표 사이의 복사, this 추론과 `std::forward_like`
+
+## 멤버 함수 템플릿
+
+- **멤버 함수 템플릿** (member function template): 클래스의 멤버 함수 하나를 따로 매개변수화한 것 <CppRef path="cpp/language/member_template" />
+  - 보통 클래스에도, 클래스 템플릿에도 둘 수 있음
+  - 쓰는 것은 함수 하나지만, 실제로는 타입마다 다른 판을 여러 개 쓰는 셈
+- 클래스 템플릿의 복사 생성자와 대입 연산자에 특히 쓸모가 있음
+
+:::caution
+가상 멤버 함수와 소멸자는 멤버 함수 템플릿이 될 수 없다.
+:::
+
+## 원소 타입이 다른 표 사이의 변환
+
+- `Table<int>`와 `Table<double>`은 서로 다른 타입
+  - `int`는 `double`로 바꿀 수 있으니 원소를 하나씩 옮기면 될 것 같지만, 그대로는 안 됨
+
+```cpp
+Table<int> counts;
+Table<double> ratios{ counts };   // 컴파일 오류
+ratios = counts;                  // 컴파일 오류
+```
+
+- GCC가 내는 오류
+
+```text
+no matching function for call to ...
+no match for 'operator=' (operand types are 'Table<double>' and 'Table<int>')
+```
+
+- 이유: 컴파일러가 만드는 복사 생성자와 대입 연산자는 `const Table<T>&`를 받음
+  - `Table<double>`의 것은 `const Table<double>&`를 받음. `Table<int>`를 받는 것은 없음
+- 해결: 복사 생성자와 대입 연산자의 **템플릿 판**을 더함
+
+```cpp
+template <typename T>
+class Table
+{
+public:
+    template <typename E>
+    Table(const Table<E>& src);
+
+    template <typename E>
+    Table& operator=(const Table<E>& rhs);
+
+    void swap(Table& other) noexcept;
+    // 나머지는 같음
+};
+```
+
+- 클래스는 `T`로, 새 생성자는 거기에 더해 다른 타입 `E`(element)로 매개변수화됨. 두 겹이라 한 타입의 표를 다른 타입의 표로 옮길 수 있음
+- 원래의 복사 생성자와 복사 대입 연산자는 없앨 수 없음. `E`가 `T`와 같을 때 컴파일러는 템플릿 판이 아니라 원래 것을 부름
+
+### 두 겹의 템플릿 머리
+
+- 클래스 밖에서 정의할 때 클래스 템플릿 머리(`T`)를 먼저, 멤버 템플릿 머리(`E`)를 그 뒤에 따로 씀
+
+```cpp
+template <typename T>
+template <typename E>
+Table<T>::Table(const Table<E>& src)
+    : Table{ src.rows(), src.cols() }   // 크기를 잡는 생성자에 위임
+{
+    for (std::size_t r{ 0 }; r < m_rows; ++r) {
+        for (std::size_t c{ 0 }; c < m_cols; ++c) {
+            if (src.at(r, c)) { at(r, c) = static_cast<T>(*src.at(r, c)); }
+        }
+    }
+}
+```
+
+- 둘을 합쳐 `template <typename T, typename E>`로 쓰면 안 됨. GCC는 선언과 맞는 것이 없다고 함
+
+```text
+no declaration matches 'Table<T>::Table(const Table<E>&)'
+```
+
+- `src`의 원소는 `rows()`, `cols()`, `at()` 같은 **public** 멤버로만 읽음
+  - 옮겨 받는 쪽은 `Table<T>`, 주는 쪽은 `Table<E>`. 서로 다른 타입이라 상대의 private 멤버에 접근할 수 없음
+
+### 변환 대입
+
+- 반환 타입은 `Table<T>&`, 매개변수는 `const Table<E>&`
+
+```cpp
+template <typename T>
+template <typename E>
+Table<T>& Table<T>::operator=(const Table<E>& rhs)
+{
+    Table<T> temp{ rhs };   // 모든 작업을 임시 객체에서
+    swap(temp);             // 예외 없는 연산으로 확정
+    return *this;
+}
+```
+
+- 복사 후 맞바꾸기(9장)
+  - `swap()`은 같은 타입의 표끼리만 맞바꿀 수 있음
+  - 그래서 먼저 변환 생성자로 `Table<E>`를 `Table<T>` 임시 객체로 바꾼 뒤, 같은 타입인 `*this`와 맞바꿈
+
+## 크기가 다른 표 사이의 복사
+
+- 3편의 `FixedTable<T, ROWS, COLS>`는 크기가 타입의 일부라 크기가 다른 표끼리 대입할 수 없었음
+- 그래도 대입하고 싶을 때가 있음. 완전한 복제 대신
+  - 받는 쪽에 들어가는 원소만 옮기고
+  - 주는 쪽이 작은 차원은 남는 칸을 비움
+- 멤버 함수 템플릿에 타입이 아닌 매개변수도 넣어 해결함
+
+```cpp
+template <typename T, std::size_t ROWS = 3, std::size_t COLS = 3>
+class FixedTable
+{
+public:
+    FixedTable() = default;
+    template <typename E, std::size_t ROWS2, std::size_t COLS2>
+    FixedTable(const FixedTable<E, ROWS2, COLS2>& src);
+    template <typename E, std::size_t ROWS2, std::size_t COLS2>
+    FixedTable& operator=(const FixedTable<E, ROWS2, COLS2>& rhs);
+    // 나머지는 3편과 같음
+};
+```
+
+- 템플릿이 아닌 복사 생성자와 대입 연산자는 컴파일러가 만든 것을 그대로 씀. 크기가 같은 표끼리는 `m_cells`를 통째로 복사하는 것이 맞음
+
+```cpp
+template <typename T, std::size_t ROWS, std::size_t COLS>
+template <typename E, std::size_t ROWS2, std::size_t COLS2>
+FixedTable<T, ROWS, COLS>::FixedTable(const FixedTable<E, ROWS2, COLS2>& src)
+{
+    for (std::size_t r{ 0 }; r < ROWS; ++r) {
+        for (std::size_t c{ 0 }; c < COLS; ++c) {
+            if (r < ROWS2 && c < COLS2) { m_cells[r][c] = src.at(r, c); }
+            else { m_cells[r][c].reset(); }
+        }
+    }
+}
+```
+
+- `src`가 더 커도 받는 쪽 크기(`ROWS`×`COLS`)만큼만 옮김
+- `src`가 작은 차원의 남는 칸은 `std::optional`의 `reset()`으로 비움
+- 대입 연산자는 위와 같은 복사 후 맞바꾸기. `swap()`은 `m_cells`만 맞바꾸면 됨
+
+## this 추론으로 const 판 합치기
+
+- 지금까지 `at()`은 두 판을 따로 선언했음. `const` 판에 구현을 두고, 비 `const` 판은 `std::as_const`와 `const_cast`로 그것을 부름(9장)
+- 중복된 코드는 없지만 선언은 여전히 둘
+- <Badge text="C++23" /> **명시적 객체 매개변수**(8장)를 써서 하나로 합칠 수 있음
+  - 요령: `at()`을 멤버 함수 템플릿으로 만들고, 명시적 객체 매개변수 `self`의 타입을 템플릿 타입 매개변수 `Self`로 둠. `Self`는 자동으로 추론됨
+  - 이 기능을 **this 추론** (deducing this)이라 함 <CppRef path="cpp/language/member_functions" />
+
+```cpp
+template <typename T>
+class Table
+{
+public:
+    template <typename Self>
+    auto&& at(this Self&& self, std::size_t row, std::size_t col);
+    // 나머지 생략
+};
+```
+
+- `Self&&`는 **전달 참조** (forwarding reference). `Table<T>&`, `const Table<T>&`, `Table<T>&&` 어디에나 묶일 수 있음
+
+:::note
+`Self&&`가 전달 참조가 되는 것은 `Self`가 **그 함수 템플릿 자신의** 템플릿 타입 매개변수일 때뿐이다. `Self`가 클래스 템플릿의 매개변수라면, 컴파일러가 그 멤버 함수를 처리할 때는 `Self`가 이미 `int` 같은 실제 타입으로 정해져 있다. 그래서 그 `Self&&`는 그냥 `int&&` 같은 우측값 참조다.
+:::
+
+- 구현. 명시적 객체 매개변수를 쓰는 멤버 함수 안에는 `this`가 없으므로 `self`로 객체에 접근함
+
+```cpp
+template <typename T>
+template <typename Self>
+auto&& Table<T>::at(this Self&& self, std::size_t row, std::size_t col)
+{
+    self.check(row, col);
+    return std::forward_like<Self>(self.m_cells[row * self.m_cols + col]);
+}
+```
+
+- `std::forward_like<Self>(x)` <Badge text="C++23" />: `x`에 대한 참조를 `Self&&`와 비슷한 성질(`const`, 좌측값·우측값)로 돌려줌 <CppRef path="cpp/utility/forward_like" />
+  - `self`가 `Table<T>&`이면 `std::optional<T>&`
+  - `self`가 `const Table<T>&`이면 `const std::optional<T>&`
+  - `self`가 `Table<T>&&`이면 `std::optional<T>&&`
+- 정리하면 멤버 함수 템플릿, 명시적 객체 매개변수, 전달 참조, `forward_like()`를 함께 쓰면 함수 템플릿 **하나**로 `const` 판과 비 `const` 판이 모두 만들어짐
+
+<RunCode client:load code={memberCode} />
+
+- 볼 것
+  - `Table<double> ratios{ counts };`에서 변환 생성자가 `int`를 `double`로 옮김. 3을 그대로, 4를 8로 나눠 0.5
+  - `other = counts;`로 3×3이던 `other`가 2×2가 됨. 비어 있던 칸은 그대로 빈 칸
+  - `at()`은 하나뿐인데 `const` 참조 `view`로도 부를 수 있음. 주석을 풀어 `view.at(0, 0) = 9;`를 하면 GCC가 ``no match for 'operator='``를 냄. 돌려받은 것이 `const std::optional<int>&`이기 때문
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| this 추론(명시적 객체 매개변수) | C++23 | `const` 판과 비 `const` 판을 따로 선언. 비 `const` 판은 `const_cast`로 `const` 판을 부름 |
+| `std::forward_like` | C++23 | 위와 같이 두 판을 따로 씀 |
+| `std::optional` | C++17 | 값과 "채워짐" 표시를 따로 저장 |
+
+- 멤버 함수 템플릿과 두 겹의 템플릿 머리는 C++98부터 있음. 위임 생성자는 C++11
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={memberCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 템플릿 판 복사 생성자를 만들면 원래 복사 생성자는 필요 없다?
+  - 같은 타입끼리는 원래 것이 쓰임. 템플릿 판은 그것을 대신하지 않음
+- 클래스 밖 정의에서 `template <typename T, typename E>`로 한 번에 쓴다?
+  - 클래스 템플릿 머리와 멤버 템플릿 머리를 따로, 순서대로
+- `Table<E>`의 private 멤버에 접근할 수 있다?
+  - `Table<T>`와 다른 타입이라 안 됨. public 멤버로
+- 가상 함수도 템플릿으로 만들 수 있다?
+  - 가상 멤버 함수와 소멸자는 템플릿이 될 수 없음
+- 클래스의 `T`로 `T&&` 매개변수를 쓰면 전달 참조다?
+  - 그 함수 자신의 템플릿 매개변수여야 전달 참조. 클래스의 `T`라면 그냥 우측값 참조
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 멤버 함수 템플릿 | 멤버 함수 하나만 따로 매개변수화. 가상·소멸자 불가 |
+| 변환 복사·대입 | `template <typename E> Table(const Table<E>&)` |
+| 클래스 밖 정의 | `template <typename T>` 다음 줄에 `template <typename E>` |
+| 다른 타입의 멤버 | public 멤버로만 |
+| 크기가 다른 표 | 멤버 템플릿에 타입이 아닌 매개변수. 넘치면 자르고 모자라면 비움 |
+| this 추론 | `template <typename Self> auto&& at(this Self&& self, ...)` + `std::forward_like<Self>` |
+
+## 복습 질문
+
+<details>
+<summary>`Table<long> a{ b };`(`b`는 `Table<long>`)에서 불리는 것은 템플릿 판 생성자인가?</summary>
+
+- 아님. 같은 타입이라 원래 복사 생성자가 불림
+
+</details>
+
+<details>
+<summary>변환 대입 연산자에서 왜 `swap(rhs)`를 바로 하지 않고 임시 객체를 먼저 만드는가?</summary>
+
+- `swap()`은 같은 타입(`Table<T>`)끼리만 됨. `rhs`는 `Table<E>`이므로 변환 생성자로 `Table<T>` 임시 객체를 만든 뒤 맞바꿈
+- 이렇게 하면 변환 도중 예외가 나도 `*this`는 바뀌지 않음(복사 후 맞바꾸기)
+
+</details>
+
+<details>
+<summary>this 추론을 쓴 `at()`을 `const Table<int>&`로 부르면 반환 타입은?</summary>
+
+- `Self`가 `const Table<int>&`로 추론되고, `std::forward_like`가 `const std::optional<int>&`를 돌려줌
+
+</details>
