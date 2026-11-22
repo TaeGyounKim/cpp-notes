@@ -1,0 +1,218 @@
+---
+title: 산술·비트 연산자와 스트림 연산자
+description: 단항 -와 +, 전위·후위 ++와 --를 구별해 오버로드하는 법, 비트·논리 연산자에 대한 지침, 객체를 스트림으로 읽고 쓰는 삽입·추출 연산자 <<와 >>를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import asCode from '../../../../examples/ch15/arithmetic-and-streams.cpp?raw';
+import asCpp11Code from '../../../../examples/ch15/arithmetic-and-streams-cpp11.cpp?raw';
+
+- 다루는 것: 9장에서 이항 산술 연산자와 복합 대입을 보았음. 이 글은 나머지 산술 연산자와 스트림 연산자
+- 이 글에서 배우는 요소: 단항 `-`·`+`, 전위·후위 `++`·`--`, 비트·논리 연산자, 삽입 `<<`·추출 `>>`
+
+## 단항 -와 +
+
+- `int`에서의 동작
+
+```cpp
+int i, j{ 4 };
+i = -j;      // 단항 -
+i = +i;      // 단항 +
+j = +(-i);   // 단항 - 결과에 단항 +
+j = -(-i);   // 단항 - 결과에 단항 -
+```
+
+- 단항 `-`는 부호를 바꾸고, 단항 `+`는 피연산자를 그대로 돌려줌. 결과에 또 적용할 수 있음
+- 객체를 바꾸지 않으므로 `const`로 만듦
+- 예: 온도 클래스의 단항 `-`. 단항 `+`는 보통 항등 연산이라 오버로드하지 않음
+
+```cpp
+Celsius Celsius::operator-() const
+{
+    return Celsius{ -m_value };
+}
+```
+
+- 피연산자를 바꾸지 않으므로 부호를 바꾼 **새 객체**를 만들어 돌려줌. 그래서 참조로 돌려줄 수 없음
+
+## 증가와 감소
+
+- 변수에 1을 더하는 방법은 여럿: `i = i + 1;`, `i = 1 + i;`, `i += 1;`, `++i;`, `i++;`
+- 마지막 둘이 **증가 연산자**
+  - **전위 증가** `++i`: 1을 더한 뒤 **새 값**을 식의 나머지에 씀
+  - **후위 증가** `i++`: 1을 더하지만 **이전 값**을 식의 나머지에 씀
+  - 감소 연산자도 같은 방식
+- 오버로드할 때의 문제: 전위인지 후위인지 어떻게 구별하는가?
+  - C++의 해법(일종의 꼼수): 전위 판은 인수가 없고, 후위 판은 쓰지 않는 `int` 인수를 하나 받음 <CppRef path="cpp/language/operator_incdec" />
+
+```cpp
+Celsius& operator++();     // 전위
+Celsius operator++(int);   // 후위
+Celsius& operator--();     // 전위
+Celsius operator--(int);   // 후위
+```
+
+- 전위는 결과가 피연산자의 최종 값과 같으므로 호출된 객체의 **참조**를 돌려줄 수 있음
+- 후위는 결과가 피연산자의 최종 값과 다르므로 참조를 돌려줄 수 없음. **값**으로
+
+```cpp
+Celsius& Celsius::operator++()
+{
+    ++m_value;
+    return *this;
+}
+
+Celsius Celsius::operator++(int)
+{
+    Celsius old{ *this };   // 지금 값을 저장
+    ++(*this);              // 전위 ++로 증가
+    return old;             // 이전 값을 돌려줌
+}
+```
+
+:::tip
+후위 연산자는 전위 연산자를 써서 구현한다.
+:::
+
+- 증가·감소 연산자는 포인터에도 씀. 스마트 포인터 같은 클래스라면 포인터를 증가·감소하는 `++`, `--`를 오버로드할 수 있음
+
+## 비트 연산자와 논리 연산자
+
+- 비트 연산자는 산술 연산자와, 복합 비트 대입은 복합 산술 대입과 비슷함. 훨씬 드물게 쓰므로 예는 생략. 필요하면 2편의 표에 있는 원형대로 구현하면 됨
+- 논리 연산자 `&&`, `||`는 오버로드를 권하지 않음
+  - 개별 타입에 적용하는 연산이 아니라 불리언 식의 결과를 모으는 연산
+  - 오버로드하면 단락 평가가 사라짐. 오버로드한 함수의 매개변수에 묶이려면 양쪽을 모두 먼저 계산해야 하기 때문(1편)
+  - 특정 타입에 오버로드할 만한 경우는 거의 없음
+
+## 삽입·추출 연산자
+
+- C++에서는 연산자로 스트림을 읽고 씀(13장)
+
+```cpp
+int number{ 10 };
+std::cout << "값은 " << number << '\n';   // 삽입 연산자 <<
+
+std::string text;
+std::cin >> number >> text;               // 추출 연산자 >>
+```
+
+- 내 클래스에도 삽입·추출 연산자를 만들면 같은 방식으로 읽고 쓸 수 있음 <CppRef path="cpp/language/operators" />
+
+```cpp
+Celsius a, b, c;
+std::cin >> a >> b >> c;
+std::cout << a << ' ' << b << ' ' << c << '\n';
+```
+
+- 먼저 클래스를 어떤 모양으로 내보내고 읽을지 정함. 여기서는 `double` 값 하나로 읽고, 쓸 때는 단위를 붙임
+
+### 전역 함수여야 한다
+
+- 삽입·추출 연산자의 왼쪽은 `Celsius`가 아니라 `std::ostream`/`std::istream`(예: `std::cout`, `std::cin`)
+- `ostream`이나 `istream` 클래스에 멤버를 더할 수 없으므로 **전역 함수**로 써야 함
+
+```cpp
+std::ostream& operator<<(std::ostream& out, const Celsius& c);
+std::istream& operator>>(std::istream& in, Celsius& c);
+```
+
+- 첫 매개변수를 `std::ostream` **참조**로 받으면 파일 출력 스트림, 문자열 출력 스트림, `cout`, `cerr`, `clog` 등 모든 출력 스트림에 쓸 수 있음. 추출 연산자도 마찬가지로 모든 입력 스트림
+- 둘째 매개변수
+  - 삽입 연산자는 객체를 바꾸지 않으므로 `const` 참조
+  - 추출 연산자는 객체를 바꾸므로 `const`가 아닌 참조
+
+### 스트림 참조를 돌려준다
+
+- 두 연산자 모두 첫 매개변수로 받은 스트림의 참조를 돌려줌. 그래야 호출을 이어 쓸 수 있음
+- 연산자 문법은 전역 함수 호출을 줄여 쓴 것
+
+```cpp
+std::cin >> a >> b >> c;
+// 다음과 같음
+operator>>(operator>>(operator>>(std::cin, a), b), c);
+```
+
+- 첫 호출이 돌려준 값이 다음 호출의 입력이 됨. 스트림 참조를 돌려주지 않으면 이어 쓰기가 컴파일되지 않음
+
+```cpp
+std::ostream& operator<<(std::ostream& out, const Celsius& c)
+{
+    out << c.value() << "도";
+    return out;
+}
+
+std::istream& operator>>(std::istream& in, Celsius& c)
+{
+    double value{ 0 };
+    if (in >> value) { c.set(value); }   // 실패하면 c를 바꾸지 않음
+    return in;
+}
+```
+
+<RunCode client:load code={asCode} />
+
+- 볼 것
+  - `a++`는 이전 값 21.5를 돌려주고, 그다음 `++a`는 23.5를 돌려줌
+  - 문자열 스트림에서 `18.5`, `30`은 읽히고 `x`에서 실패해 `z`는 99 그대로. 스트림은 실패 상태
+  - 같은 `<<`를 `std::ostringstream`에도 씀
+
+## 이전 표준에서는
+
+- 단항·증감·비트·스트림 연산자 오버로딩은 C++98부터 같음
+- 아래 코드는 C++11 옵션으로 컴파일됨. `std::println`만 `std::cout`으로 바꿈
+
+<RunCode client:load code={asCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 후위 `++`의 `int` 인수에 증가량을 넘길 수 있다?
+  - 전위·후위를 구별하는 표시일 뿐. 값은 쓰지 않음
+- 후위 `++`도 참조를 돌려준다?
+  - 이전 값을 담은 새 객체를 값으로 돌려줌
+- 단항 `-`는 객체의 부호를 바꾼다?
+  - 객체는 그대로 두고 부호가 바뀐 새 객체를 돌려줌
+- `operator<<`를 클래스의 멤버로 쓸 수 있다?
+  - 멤버로 쓰면 왼쪽이 내 객체가 되어 `obj << std::cout`처럼 거꾸로 써야 함. 전역으로
+- `operator<<`는 `void`를 돌려줘도 된다?
+  - 스트림 참조를 돌려줘야 이어 쓸 수 있음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 단항 `-` `+` | `T operator-() const;` 새 객체를 값으로 |
+| 전위 `++` `--` | `T& operator++();` 바뀐 자신의 참조 |
+| 후위 `++` `--` | `T operator++(int);` 이전 값을 복사해 값으로. 전위 판으로 구현 |
+| `&&` `\|\|` | 오버로드하지 않음 |
+| 삽입 `<<` | 전역. `std::ostream& operator<<(std::ostream&, const T&);` |
+| 추출 `>>` | 전역. `std::istream& operator>>(std::istream&, T&);` |
+| 반환 | 스트림 참조. 이어 쓰기 |
+
+## 복습 질문
+
+<details>
+<summary>`Counter c{ 5 }; Counter d{ c++ };` 뒤에 `c`와 `d`의 값은?</summary>
+
+- `c`는 6, `d`는 5. 후위는 증가하기 전 값을 돌려줌
+
+</details>
+
+<details>
+<summary>`operator>>`에서 읽기에 실패했을 때 객체를 바꾸지 않는 것이 좋은 이유는?</summary>
+
+- 쓰는 쪽은 스트림 상태로 실패를 알고 대응함. 그 사이 객체가 쓰레기 값으로 바뀌면 실패 처리 전에 객체를 쓰는 코드가 잘못된 값을 보게 됨. 기존 값을 지키면 적어도 유효한 상태가 유지됨(14장의 강한 보장)
+
+</details>
+
+<details>
+<summary>`std::cout << a << b;`가 컴파일되려면 `operator<<`가 무엇을 돌려줘야 하는가?</summary>
+
+- `std::ostream&`. `(std::cout << a)`의 결과가 다음 `<< b`의 왼쪽 피연산자가 되어야 함
+
+</details>
