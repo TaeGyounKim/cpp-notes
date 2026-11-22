@@ -44,6 +44,7 @@ const parts = [
 			chapter('8장. 클래스와 객체 익히기', 'part3/ch08'),
 			chapter('9장. 클래스와 객체 다루기', 'part3/ch09'),
 			chapter('10장. 상속 기법', 'part3/ch10'),
+			chapter('11장. 모듈, 헤더 파일, 그 밖의 주제', 'part3/ch11'),
 		],
 	},
 ];
