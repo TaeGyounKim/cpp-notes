@@ -1,0 +1,239 @@
+---
+title: optional의 모나드 연산과 expected
+description: optional에 C++23에서 생긴 모나드 연산 transform, and_then, or_else로 연산 잇기, 값 또는 오류를 담는 expected와 unexpected, 멤버 함수와 모나드 연산 transform_error, optional과 expected 중 고르는 기준, 예외·오류 코드·expected 비교를 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import oeCode from '../../../../examples/ch24/optional-expected.cpp?raw';
+import oeCpp11Code from '../../../../examples/ch24/optional-expected-cpp11.cpp?raw';
+
+- 다루는 것: 실패할 수 있는 연산을 깔끔하게 잇고, 실패 이유까지 돌려주는 법 <Badge text="C++23" />
+- 이 글에서 배우는 요소: `optional`의 `transform`, `and_then`, `or_else`, `expected`, `unexpected`, `transform_error`
+
+## optional의 모나드 연산 <Badge text="C++23" />
+
+- `std::optional<T>`(1장): `T` 값이 있거나 비어 있음 <CppRef path="cpp/utility/optional" />
+- C++23에서 멤버 함수 셋이 생김. 묶어서 **모나드 연산** (monadic operations)
+  - 각 연산을 하기 전에 `optional`에 값이 있는지 **검사하지 않고** 연산을 이어 붙일 수 있음
+
+| 연산 | 값이 있을 때 | 비었을 때 |
+| --- | --- | --- |
+| `transform(F)` | `F(값)`의 결과를 담은 `optional` | 빈 `optional` <CppRef path="cpp/utility/optional/transform" /> |
+| `and_then(F)` | `F(값)`의 결과. `F`는 `optional`을 돌려줘야 함 | 빈 `optional` <CppRef path="cpp/utility/optional/and_then" /> |
+| `or_else(F)` | 자기 자신 | `F()`의 결과. `F`는 `optional`을 돌려줘야 함 <CppRef path="cpp/utility/optional/or_else" /> |
+
+- `transform`과 `and_then`의 차이
+  - `transform`: 늘 성공하는 변환. `F`는 그냥 값을 돌려주고, 결과를 `optional`로 감싸 줌
+  - `and_then`: 실패할 수 있는 변환. `F`가 직접 `optional`을 돌려줌(비게 하면 사슬이 끊김)
+
+```cpp
+std::optional<int> parse(const std::string& s)
+{
+    try { return std::stoi(s); }
+    catch (...) { return {}; }
+}
+
+auto text{ parse(input)
+    .and_then([](int v) -> std::optional<int> { return v * 2; })
+    .transform([](int v) { return std::to_string(v); })
+    .or_else([] { return std::optional<std::string>{ "정수 아님" }; }) };
+std::println("{}", *text);
+```
+
+- 예전 방식이라면 단계마다 `if (opt)`로 검사해야 함. 사슬에서는 중간에 비면 나머지 `transform`, `and_then`은 건너뛰고 `or_else`로 감
+
+:::note
+C++23부터 `optional`은 `constexpr` 클래스라 컴파일 시간에도 쓸 수 있다.
+:::
+
+## expected <Badge text="C++23" />
+
+### 왜 필요한가
+
+- 함수는 타입 하나만 돌려줄 수 있음. 실패를 알리는 방법(14장)
+  - 예외를 던짐
+  - 반환 타입의 특별한 값으로 알림: 포인터면 `nullptr`, 양수만 돌려주는 함수면 음수
+    - 반환 타입의 모든 값이 정상 값이면 쓸 특별한 값이 없음. 예: 모든 `int`가 유효한 결과
+  - 빈 `optional`을 돌려줌
+    - 호출자는 **무엇이** 잘못됐는지 알 수 없음
+- `std::expected<T, E>`(`<expected>`): **기대한 값** `T` 또는 **오류 값** `E`를 담음 <CppRef path="cpp/utility/expected" />
+  - `E`는 **예상하지 못한 값** (unexpected value)이라고도 함
+  - **절대 비어 있지 않음**: 늘 `T`나 `E` 중 하나. 비어 있을 수 있는 `optional`과 가장 큰 차이
+  - `E`는 원하는 무엇이든: 정수, 열거형, 오류 위치(파일 이름, 줄, 열)까지 담은 클래스
+
+### 만들기
+
+- `T` 값에서 암시적으로 만들어짐(`optional<T>`처럼)
+- 오류를 담으려면 `std::unexpected<E>`로 감쌈 <CppRef path="cpp/utility/expected/unexpected" />
+- **기본 생성**한 `expected<T, E>`는 기본 생성한 `T`를 담음
+  - 기본 생성한 `optional`은 **비어 있음**. 즉 기본 생성한 `expected`는 성공, `optional`은 실패를 나타냄
+
+```cpp
+std::expected<int, std::string> parseInt(const std::string& s)
+{
+    try {
+        return std::stoi(s);
+    } catch (const std::invalid_argument& e) {
+        return std::unexpected{ e.what() };
+    } catch (const std::out_of_range& e) {
+        return std::unexpected{ e.what() };
+    }
+}
+```
+
+- `stoi()`는 정수가 아니면 `invalid_argument`, `int` 범위를 넘으면 `out_of_range`를 던짐. 이를 오류 문자열로 바꿔 돌려줌
+
+### 멤버 함수
+
+| 멤버 | 하는 일 |
+| --- | --- |
+| `has_value()`, `operator bool` | `T` 값을 담았으면 `true` |
+| `value()` | `T` 값. 오류를 담았으면 `bad_expected_access` 예외 <CppRef path="cpp/utility/expected/bad_expected_access" /> |
+| `operator*`, `operator->` | `T` 값에 접근. 오류를 담았으면 정의되지 않은 동작 |
+| `error()` | `E` 값. 값을 담았으면 정의되지 않은 동작 |
+| `value_or(v)` | `T` 값, 없으면 `v` |
+
+- `error()` 말고는 `optional`의 같은 이름 멤버와 비슷함
+
+```cpp
+auto r{ parseInt("123456789123456") };
+if (!r) { std::println("오류: {}", r.error()); }   // 메시지는 구현마다 다름
+std::println("{}", parseInt("42").value_or(0));
+```
+
+### 모나드 연산
+
+- `optional`의 셋에 `transform_error`가 더해짐
+
+| 연산 | 값을 담았을 때 | 오류를 담았을 때 |
+| --- | --- | --- |
+| `transform(F)` | `F(값)`을 담은 `expected` | 그대로 돌려줌 |
+| `and_then(F)` | `F(값)`의 결과(`expected`여야 함) <CppRef path="cpp/utility/expected/and_then" /> | 그대로 돌려줌 |
+| `or_else(F)` | 그대로 돌려줌 | `F(오류)`의 결과(`expected`여야 함) |
+| `transform_error(F)` | 그대로 돌려줌 | `F(오류)`로 바꾼 오류를 담은 `expected` <CppRef path="cpp/utility/expected/transform_error" /> |
+
+```cpp
+using Result = std::expected<int, std::string>;
+auto doubled{ parseInt("21")
+    .and_then([](int v) -> Result { return v * 2; }) };
+```
+
+- 오류 종류가 여럿이면 `E`에 `variant`(1편)를 씀
+
+```cpp
+struct OutOfRange { /* ... */ };
+struct InvalidArgument { /* ... */ };
+std::expected<int, std::variant<OutOfRange, InvalidArgument>>
+parseInt2(const std::string& s);
+```
+
+<RunCode client:load code={oeCode} />
+
+- 볼 것
+  - `toInt`는 `optional`, `parseAge`는 `expected<int, AgeError>`
+  - `"abc"`는 `toInt`가 비어 `and_then`, `transform`을 건너뛰고 `or_else`의 `"값 없음"`
+  - `parseAge`는 실패 이유(숫자 아님, 음수, 너무 큼)를 돌려줌
+  - `transform_error`로 오류 타입을 열거형에서 문자열로 바꿈
+  - 기본 생성: `optional`은 비었고 `expected`는 값(0)이 있음
+
+## optional과 expected 중 무엇을
+
+- **`expected`**: 실패가 **예상 밖**이고, 호출자가 제대로 처리하려면 **정확한 이유**가 필요할 때
+- **`optional`**: 값이 없어도 괜찮고 이유가 필요 없을 때
+  - 예: 선택적인 입력 매개변수, 못 찾는 것이 이상하지 않은 찾기 함수의 반환 타입
+
+### 예외, 오류 코드, expected
+
+- 함수에서 오류를 다루는 주된 방법 셋. 각자 장점이 있음
+
+| | 예외 | 오류 반환 코드 | `expected` |
+| --- | --- | --- | --- |
+| 보이는가 | 문서를 읽거나 코드를 분석하지 않으면 안 보임 | 함수 원형에서 바로 보임. 하지만 반환 값을 무시하기 쉬움 | 함수 원형에서 바로 보임. 결과를 담고 있어 무시할 수 없음 |
+| 자세함 | 오류에 대해 원하는 만큼 자세히 | 보통 정수 하나 | 원하는 만큼 자세히 |
+| 코드의 잡음 | 오류 처리를 따로 두어 깔끔함 | 오류 처리가 정상 흐름에 섞여 읽고 고치기 어려움 | 모나드 연산 덕분에 오류 처리가 정상 흐름에 섞이지 않음 |
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `expected`, `optional`의 모나드 연산 | C++23 | `if (opt)`로 단계마다 검사, 결과 구조체 |
+| `optional`, `from_chars` | C++17 | 출력 매개변수 + `bool`, `strtol` |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 성공 여부, 값, 오류를 담은 구조체를 직접 만들어 돌려줌
+
+<RunCode client:load code={oeCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `transform`에 넘긴 함수가 `optional`을 돌려줘도 된다?
+  - 그러면 `optional<optional<T>>`가 됨. 실패할 수 있는 변환은 `and_then`
+- 기본 생성한 `expected`는 비어 있다?
+  - `expected`는 비지 않음. 기본 생성하면 `T`의 기본값(성공)
+- 오류를 돌려줄 때 `return AgeError::Negative;`라고 쓴다?
+  - `return std::unexpected{ AgeError::Negative };`. 그냥 쓰면 `T`로 변환을 시도함
+- `*result`는 오류일 때 예외를 던진다?
+  - 정의되지 않은 동작. 예외는 `value()`
+- 모든 실패에 `expected`를 쓴다?
+  - 이유가 필요 없는 "없음"은 `optional`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `optional` 모나드 연산 | `transform`, `and_then`, `or_else`로 검사 없이 잇기 |
+| `expected<T, E>` | 값 또는 오류. 비지 않음. 기본은 `T` |
+| `unexpected{ e }` | 오류 담기 |
+| 멤버 | `has_value`, `value`(예외), `*`, `error`, `value_or` |
+| 모나드 연산 | `transform`, `and_then`, `or_else`, `transform_error` |
+| 고르기 | 이유가 필요하면 `expected`, 아니면 `optional` |
+
+## 복습 질문
+
+<details>
+<summary>설정 맵에서 키를 찾는 함수의 반환 타입은 `optional`과 `expected` 중 무엇이 맞는가?</summary>
+
+- 키가 없을 수 있는 것은 이상한 일이 아니고 이유도 하나뿐이므로 `optional<std::string>`
+- 설정 파일을 읽다 실패하면(파일 없음, 형식 오류, 몇째 줄) 이유가 중요하므로 `expected<Config, ParseError>`
+
+</details>
+
+<details>
+<summary>`expected<double, std::string>`을 돌려주는 안전한 나눗셈을 쓰려면?</summary>
+
+```cpp
+std::expected<double, std::string> divide(double a, double b)
+{
+    if (b == 0.0) { return std::unexpected{ "0으로 나눔" }; }
+    return a / b;
+}
+```
+
+</details>
+
+<details>
+<summary>`optional<std::string> name`이 있을 때, 있으면 대문자 첫 글자를, 없으면 `'?'`를 얻으려면?</summary>
+
+```cpp
+char initial{ name
+    .transform([](const std::string& s) {
+        return s.empty() ? '?' : static_cast<char>(std::toupper(s[0])); })
+    .value_or('?') };
+```
+
+</details>
+
+## 24장을 마치며
+
+- 표준 라이브러리의 다른 어휘 타입들을 봄
+  - `variant`와 `any`
+  - `pair`의 일반화인 `tuple`과 그 연산
+  - `optional`의 모나드 연산: 연산을 쉽게 이음
+  - 값 또는 오류를 담는 `expected`
+- 이것으로 Part 3을 마침. Part 4는 고급 주제로, 25장에서 표준 라이브러리 규칙에 맞는 알고리즘과 자료 구조를 직접 만들어 표준 라이브러리를 맞춤 확장하는 법을 봄
