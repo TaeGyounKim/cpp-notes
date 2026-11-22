@@ -1,0 +1,222 @@
+---
+title: deque, list, forward_list, array
+description: vector와 다른 순차 컨테이너들. 양 끝이 빠른 deque, 노드를 이어 붙이는 list와 splice·sort·unique 같은 전용 멤버, 앞으로만 가는 forward_list와 before_begin, 크기가 고정된 array와 std::get·to_array를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import StepViz from '../../../../components/StepViz.svelte';
+import spliceViz from '../../../../data/ch18/splice.js';
+import seqCode from '../../../../examples/ch18/sequences.cpp?raw';
+import seqCpp11Code from '../../../../examples/ch18/sequences-cpp11.cpp?raw';
+
+- 다루는 것: `vector`를 빼고 남은 순차 컨테이너 넷. `vector`와 **다른 점**만 다룸
+- 이 글에서 배우는 요소: `deque`의 양 끝, `list`의 전용 연산, `forward_list`의 "다음에" 연산, `array`의 고정 크기
+
+## deque
+
+- **양쪽 끝 큐** (double-ended queue). `<deque>`. `vector`와 거의 같지만 훨씬 덜 쓰임 <CppRef path="cpp/container/deque" />
+- `vector`와 다른 점
+  - 원소가 메모리에 **연속해 있지 않음**
+  - **앞과 뒤** 모두에서 진짜 상수 시간에 넣고 뺌(`vector`는 뒤에서만 분할 상환 상수 시간)
+  - `vector`에 없는 멤버: `push_front()`, `pop_front()`, `emplace_front()`(넣은 원소의 참조를 돌려줌), `prepend_range()` <Badge text="C++23" />
+  - 앞이나 뒤에 넣을 때 원소를 더 큰 배열로 옮기지 않음. 그래서 이때 원소의 참조와 포인터는 무효가 되지 않음
+  - `reserve()`, `capacity()`로 메모리 관리 방식을 드러내지 않음
+
+## list
+
+- 표준 **이중 연결 리스트**. `<list>` <CppRef path="cpp/container/list" />
+  - 어디서든 상수 시간에 넣고 지우지만, 개별 원소 접근은 느림(선형 시간)
+  - `operator[]` 같은 임의 접근 연산이 **없음**. 원소에는 반복자로만 접근함
+- 생성자, 소멸자, 복사, 대입, 비교는 `vector`와 거의 같음
+
+### 원소 접근과 반복자
+
+- 원소 접근 멤버는 `front()`, `back()`(상수 시간)뿐. 나머지는 반복자로
+- `begin()`, `end()`, `rbegin()`, `rend()`, `cbegin()`, `cend()`, `crbegin()`, `crend()`를 지원함
+- 반복자는 **양방향**. `++p`, `--p`는 되지만 `p + n`, `p - n` 같은 포인터 산술은 안 됨(17장)
+
+### 넣기와 지우기
+
+- `vector`의 것을 모두 지원함: `push_back()`, `pop_back()`, `emplace()`, `emplace_back()`, `insert()` 다섯 가지, `assign_range()`, `insert_range()`, `append_range()`, `erase()` 둘, `clear()`
+- `deque`처럼 `push_front()`, `emplace_front()`, `pop_front()`, `prepend_range()`도 있음
+- 원소 하나를 넣거나 지우는 것은 자리를 찾고 나면 상수 시간, 여러 개는 선형 시간
+- 그래서 넣고 지우기가 많고 인덱스 접근이 필요 없는 곳에 알맞을 수 있음. 그래도 `vector`가 더 빠를 수 있으니 프로파일러로 확인
+- 크기: `size()`(상수 시간), `empty()`, `resize()`는 있지만 `reserve()`, `capacity()`는 없음
+
+### 잇기(splice)
+
+- 연결 리스트라서 다른 리스트 **전체를 상수 시간에** 아무 위치에나 끼워 넣을 수 있음: `splice()` <CppRef path="cpp/container/list/splice" />
+  - 원소를 복사하거나 옮기지 않고, 노드의 연결(포인터)만 바꿈
+
+```cpp
+std::list<std::string> words{ "가방", "다리" };
+std::list<std::string> more{ "라면", "마당" };
+words.splice(words.end(), more);   // more의 노드가 words 끝으로. more는 빔
+```
+
+- 다른 리스트의 원소 하나만, 또는 범위만 옮기는 오버로드도 있음. 원본 리스트를 좌측값 참조로도, 우측값 참조로도 받음
+
+:::caution
+잇기는 인수로 넘긴 리스트를 망가뜨린다. 옮긴 원소는 원래 리스트에서 사라진다.
+:::
+
+- 아래는 단일 연결 리스트(`forward_list`)의 `splice_after`가 노드를 옮기는 모습. 노드의 주소가 그대로임을 볼 것
+
+<StepViz client:load data={spliceViz} />
+
+### 더 효율적인 알고리즘 멤버
+
+- `list`는 몇몇 제네릭 알고리즘(20장)의 전용판을 멤버 함수로 제공함
+
+| 멤버 | 하는 일 |
+| --- | --- |
+| `remove()`, `remove_if()` | 값과 같거나 조건에 맞는 원소를 모두 지우고 지운 수를 돌려줌 <Badge text="C++20" /> |
+| `unique()` | `operator==`나 이항 조건자로 이웃한 중복을 지우고 지운 수를 돌려줌 |
+| `merge()` | 두 정렬된 리스트를 합침. 인수 리스트는 빔(`splice()`처럼 파괴적) |
+| `sort()` | 안정 정렬 |
+| `reverse()` | 순서를 뒤집음 |
+
+:::tip
+고를 수 있다면 제네릭 알고리즘보다 `list` 전용 멤버를 쓴다. 더 효율적이다. 고를 수 없을 때도 있다. 예: 제네릭 `std::sort()`는 임의 접근 반복자가 필요한데 `list`는 제공하지 않는다.
+:::
+
+### 예: 수강생 명단 합치기
+
+- 수업마다 수강생 목록(`list`)이 있고, 등록금을 내지 않아 철회된 학생 목록이 있음. 모든 수업의 수강생을 중복 없이, 철회된 학생은 빼고 합친 명단을 만듦
+  - 표준 컨테이너는 중첩할 수 있음: `std::vector<std::list<std::string>>`
+- 순서: 모두 이어 붙임(`append_range`) → 정렬(`sort`) → 이웃한 중복 제거(`unique`) → 철회된 학생마다 `remove`
+  - `unique()`는 **이웃한** 중복만 지우므로 먼저 정렬해야 함
+- 이 예는 `list` 전용 멤버를 보이려는 것. 실제로는 `vector`와 제네릭 알고리즘(20장)으로 푸는 편이 빠른 경우가 많음
+
+## forward_list
+
+- **단일 연결 리스트**. `<forward_list>` <CppRef path="cpp/container/forward_list" />
+  - 앞으로만 훑을 수 있음
+- 리스트를 고치려면 관심 있는 원소의 **앞** 원소에 접근해야 하는데, 뒤로 가는 반복자가 없어 앞 원소를 쉽게 얻을 수 없음
+  - 그래서 고치는 범위(`erase_after()`, `splice_after()` 등에 주는 범위)는 **시작이 열린** 범위여야 함
+  - `before_begin()`: 첫 원소 **앞**의 가상 원소를 가리키는 반복자. 역참조할 수 없지만 하나 증가시키면 `begin()`과 같음
+  - 넣기·지우기도 "다음에" 하는 판: `insert_after()`, `emplace_after()`, `erase_after()`, `splice_after()`, `insert_range_after()` <Badge text="C++23" />
+- 표준은 `forward_list`가 메모리를 최소로 쓰도록 요구함
+  - 그래서 `size()`가 없음. 크기를 저장할 필요가 없도록
+  - 노드마다 다음 원소의 포인터만 있으면 됨. 64비트 시스템에서 `list<int>`의 원소는 포인터 둘(16바이트)과 `int`(4바이트)가 필요하지만 `forward_list<int>`는 포인터 하나(8바이트)와 `int`(4바이트)면 됨(정렬 여백은 따로)
+
+| 연산 | `list` | `forward_list` |
+| --- | --- | --- |
+| `back()`, `push_back()`, `pop_back()`, `emplace_back()`, `append_range()` | ○ | × |
+| `before_begin()`, `cbefore_begin()` | × | ○ |
+| `insert()`, `emplace()`, `erase()`, `splice()`, `insert_range()` | ○ | × |
+| `insert_after()`, `emplace_after()`, `erase_after()`, `splice_after()`, `insert_range_after()` | × | ○ |
+| `rbegin()`, `rend()`, `crbegin()`, `crend()`, 역방향 반복자 | ○ | × |
+| `size()` | ○ | × |
+| `front()`, `push_front()`, `pop_front()`, `emplace_front()`, `prepend_range()` | ○ | ○ |
+| `begin()`, `end()`, `empty()`, `clear()`, `resize()`, `swap()`, `max_size()` | ○ | ○ |
+| `assign()`, `assign_range()` | ○ | ○ |
+| `remove()`, `remove_if()`, `unique()`, `merge()`, `sort()`, `reverse()` | ○ | ○ |
+
+- 끝에 무언가를 붙이려면 마지막 원소의 반복자가 필요한데, `end()`로는 얻을 수 없어 처음부터 따라가야 함
+
+## array
+
+- 크기가 **고정된** `vector` 같은 것. `<array>`. 커지거나 줄지 않음 <CppRef path="cpp/container/array" />
+  - 크기를 고정하는 목적: `vector`처럼 늘 자유 공간을 쓰지 않고 **스택**에 둘 수 있게
+- 선언에 템플릿 매개변수 둘: 원소 타입과 원소 수. `std::array<int, 3> arr{ 9, 8, 7 };`
+- 기본 타입(정수, 부동소수점, 문자, 불리언 등)의 원소 **초기화**가 다른 컨테이너와 다름
+  - 초깃값을 주지 않으면 원소가 **초기화되지 않음**(쓰레기 값). C 스타일 배열과 같음
+  - `vector`, `list` 등은 늘 주어진 값이나 영 초기화로 초기화함
+  - 0으로 만들려면 `std::array<int, 3> a{};`
+- `vector`처럼 임의 접근 반복자를 지원하고 원소가 연속된 메모리에 있음
+  - `front()`, `back()`, `at()`, `operator[]`, 그리고 특정 값으로 채우는 `fill()`
+- 크기가 고정이라 `push_back()`, `pop_back()`, `insert()`, `erase()`, `clear()`, `resize()`, `reserve()`, `capacity()`, 범위 멤버 함수가 없음
+- `vector`보다 불리한 점: `swap()`이 선형 시간(`vector`는 상수 시간). 이동도 상수 시간에 되지 않음. 원소가 객체 안에 직접 들어 있기 때문
+- C 스타일 배열보다 나은 점: `size()`가 있음
+
+### std::get과 std::to_array
+
+- `std::get<n>(arr)`: n번째 원소. n은 **상수 표현식**이어야 함(반복문 변수는 안 됨) <CppRef path="cpp/container/array/get" />
+  - 컴파일러가 컴파일할 때 n이 올바른지 검사함. `std::get<10>(arr)`은 컴파일 오류
+- `std::to_array()` <Badge text="C++20" />: C 스타일 배열을 `std::array`로 바꿈(원소를 복사 초기화). 1차원 배열만 <CppRef path="cpp/container/array/to_array" />
+
+```cpp
+auto a1{ std::to_array({ 11, 22, 33 }) };   // std::array<int, 3>
+double raw[]{ 9, 8, 7, 6 };
+auto a2{ std::to_array(raw) };              // std::array<double, 4>
+```
+
+- `std::array`도 클래스 템플릿 인수 추론을 지원함: `std::array arr{ 11, 22, 33 };` <Badge text="C++17" />
+
+<RunCode client:load code={seqCode} />
+
+- 볼 것
+  - `deque`는 앞뒤 모두에서 넣고 뺌
+  - `list`는 `++it`로 자리를 찾아 `insert`, `splice`로 다른 리스트의 노드를 옮김(원래 리스트는 빔)
+  - 명단: 이어 붙이고, 정렬하고, 중복 제거하고, 철회한 학생을 빼서 가나다순 셋
+  - `forward_list`의 `splice_after(before_begin(), ...)`는 맨 앞에, `insert_after(begin(), 9)`는 첫 원소 다음에
+  - `array`의 `fill`, `get<1>`, `{}`로 0 초기화, `to_array`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `append_range`, `prepend_range`, `insert_range_after` 등, 컨테이너 출력 | C++23 | 범위 `insert`, 반복문 |
+| `std::to_array`, `remove()`가 지운 수를 돌려줌 | C++20 | 직접 복사, `void` 반환 |
+| `std::array` 인수 추론 | C++17 | `std::array<int, 3>`처럼 명시 |
+| `array`, `forward_list`, `emplace` 계열 | C++11 | C 스타일 배열, `list` |
+
+- `deque`, `list`, `splice`, `sort`, `unique`, `merge`는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={seqCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `list`에도 `operator[]`가 있다?
+  - 없음. 반복자로 하나씩 따라가야 함(`std::next(it, n)`은 n에 비례)
+- `list`를 `std::sort`로 정렬한다?
+  - 임의 접근 반복자가 없어 안 됨. 멤버 `sort()`
+- `unique()`는 모든 중복을 지운다?
+  - **이웃한** 중복만. 먼저 `sort()`
+- `forward_list`도 `size()`로 크기를 안다?
+  - 없음. `std::distance(begin, end)`로 셈(선형 시간)
+- `std::array<int, 3> a;`는 0으로 채워진다?
+  - 초기화되지 않음. `a{}`
+- `array`의 `swap()`도 상수 시간이다?
+  - 원소를 하나씩 바꾸므로 선형 시간
+
+## 정리
+
+| 컨테이너 | 특징 | 고유 연산 |
+| --- | --- | --- |
+| `deque` | 양 끝 상수 시간, 연속 아님 | `push_front`, `pop_front`, `emplace_front` |
+| `list` | 이중 연결, 양방향 반복자, 임의 접근 없음 | `splice`, `remove`, `unique`, `merge`, `sort`, `reverse` |
+| `forward_list` | 단일 연결, 최소 메모리, `size()` 없음 | `before_begin`, `*_after` |
+| `array` | 고정 크기, 스택, 기본 타입은 초기화 안 됨 | `fill`, `std::get<n>`, `std::to_array` |
+
+## 복습 질문
+
+<details>
+<summary>최근 이벤트 100개만 유지하면서 새 것은 뒤에 넣고 오래된 것은 앞에서 버린다. 어떤 컨테이너가 알맞은가?</summary>
+
+- `std::deque`. 앞에서 빼기(`pop_front`)와 뒤에 넣기(`push_back`)가 모두 상수 시간. (7편의 `queue` 어댑터를 써도 됨)
+
+</details>
+
+<details>
+<summary>`std::list<int> l`에서 짝수를 모두 지우는 가장 간단한 방법은?</summary>
+
+- `l.remove_if([](int x) { return x % 2 == 0; });`(또는 C++20 `std::erase_if(l, ...)`)
+
+</details>
+
+<details>
+<summary>`std::forward_list<int> f{ 1, 2, 3 };`에서 첫 원소를 지우려면 어떤 멤버를 쓰는가?</summary>
+
+- `f.pop_front();` 또는 `f.erase_after(f.before_begin());`
+
+</details>
