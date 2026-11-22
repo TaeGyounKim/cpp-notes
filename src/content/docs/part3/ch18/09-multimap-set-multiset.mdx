@@ -1,0 +1,176 @@
+---
+title: map 활용, multimap, set, multiset
+description: 객체의 한 필드를 키로 쓰는 map 예제, 같은 키에 여러 값을 두는 multimap과 equal_range·lower_bound·upper_bound, 값이 곧 키인 set, 중복을 허용하는 multiset을 익힙니다.
+sidebar:
+  order: 9
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import msCode from '../../../../examples/ch18/multi-and-set.cpp?raw';
+import msCpp11Code from '../../../../examples/ch18/multi-and-set-cpp11.cpp?raw';
+
+- 다루는 것: `map`을 실제로 쓰는 모양과, 나머지 정렬된 연관 컨테이너 셋
+- 이 글에서 배우는 요소: 등록부 예제, `multimap`의 범위 찾기, `set`, `multiset`
+
+## 예: 장치 등록부
+
+- 흔한 패턴: `map`에 저장하는 클래스의 **한 필드를 키**로 씀. 여기서는 장치의 일련번호
+- `Registry` 클래스: `std::map<int, Device>`를 감쌈
+  - `add()`: `emplace(일련번호, 장치)`의 결과 `pair`의 `second`(새로 넣었는지)를 돌려줌. 같은 번호는 두 번 등록되지 않음
+  - `remove()`: 키로 지움
+  - `find()`: `map::find()`로 찾고, 없으면 `std::out_of_range`를 던지고, 있으면 값의 **참조**를 돌려줌. 쓰는 쪽은 받은 참조로 바로 고칠 수 있음
+- 일련번호가 아닌 필드(예: 방 이름)로 찾으려면 키를 쓸 수 없으므로 모든 원소를 훑어야 함(선형 시간)
+  - 그런 검색이 잦다면 방 이름을 키로 하는 두 번째 `map`을 두는 방법도 있음
+- 두 등록부를 합칠 때는 8편의 `merge()`로 노드를 옮김
+
+## multimap
+
+- 같은 키를 가진 원소를 **여럿** 둘 수 있는 `map`. `<map>` <CppRef path="cpp/container/multimap" />
+  - 중괄호 초기화를 지원함. 인터페이스는 `map`과 거의 같음
+- `map`과 다른 점
+  - `operator[]`와 `at()`이 없음. 한 키에 원소가 여럿일 수 있어 의미가 맞지 않음
+  - 넣기는 **언제나 성공**함. 그래서 원소 하나를 넣는 `insert()`는 `pair`가 아니라 반복자만 돌려줌
+  - `insert_or_assign()`과 `try_emplace()`가 없음
+  - 같은 키의 원소들은 넣은 순서대로 이어서 저장됨 <Badge text="C++11" />
+
+:::note
+`multimap`은 키와 값이 모두 같은 쌍도 넣게 해 준다. 이런 중복을 피하려면 넣기 전에 직접 확인한다.
+:::
+
+### 같은 키의 원소 찾기
+
+- `multimap`에서 가장 까다로운 부분
+  - `operator[]`가 없음
+  - `find()`는 그 키의 원소 중 **아무거나 하나**를 참조하는 반복자를 돌려줌(첫 원소라는 보장이 없음)
+- 같은 키의 원소들은 모여 있으므로, 그 부분 범위의 반복자를 얻는 멤버를 씀
+
+| 멤버 | 돌려주는 것 |
+| --- | --- |
+| `lower_bound(키)` | 그 키의 첫 원소 |
+| `upper_bound(키)` | 그 키의 마지막 원소의 다음 |
+| `equal_range(키)` | 위 둘을 `pair`로. 따로 부르는 것보다 효율적 |
+| `count(키)` | 그 키의 원소 수 |
+
+- 그 키의 원소가 없으면 `lower_bound()`와 `upper_bound()`가 같은 반복자를 돌려줌
+- 이 멤버들은 `map`에도 있지만, 같은 키가 여럿일 수 없어 쓸모가 적음
+
+```cpp
+auto [first, last]{ schedule.equal_range("월") };
+for (auto it{ first }; it != last; ++it) { std::print("{} ", it->second); }
+```
+
+- 그 키의 원소 중 **하나만** 지우려면 키로 지우는 `erase(키)`를 쓸 수 없음(모두 지움). 범위를 훑어 값까지 맞는 원소의 반복자로 `erase()`
+- 값만 모아 `vector`로 만들기: 반복자 범위의 원소는 키-값 쌍이라 `vector::insert()`로 바로 넣을 수 없음. 하나씩 `second`를 꺼내거나, C++23이면 범위로 한 번에
+
+```cpp
+auto mondays{ std::ranges::subrange{ first, last } | std::views::values
+              | std::ranges::to<std::vector>() };
+```
+
+- 쓰임새: 사용자마다 친구 목록(키: 사용자, 값: 친구), 날짜마다 일정, 태그마다 사진
+
+## set
+
+- `<set>`의 `std::set`: `map`과 비슷하지만 키-값 쌍 대신 **값이 곧 키** <CppRef path="cpp/container/set" />
+  - 따로 키가 없지만 **중복 없이 정렬**해 두고, 넣기·찾기·지우기를 빠르게 하고 싶은 정보에 알맞음
+- 인터페이스는 `map`과 거의 같음. `operator[]`, `insert_or_assign()`, `try_emplace()`가 없음
+- 원소의 값을 **바꿀 수 없음**. 컨테이너 안에서 고치면 순서가 깨지기 때문. 반복자로 얻는 원소는 `const`
+  - 바꾸려면 지우고 새 값을 넣음(또는 `extract()`한 노드의 `value()`를 고쳐 다시 `insert()`)
+- 예: **접근 제어 목록** (access control list). 파일이나 장치마다 접근이 허용된 사용자 이름을 `set`으로 둠
+  - 사용자 추가는 `insert()`/`emplace()`, 제거는 `erase(이름)`, 확인은 `contains(이름)`
+  - 이미 있는 사용자를 다시 넣어도 무시됨
+
+## multiset
+
+- `<set>`의 `std::multiset`: **중복을 허용**하는 것 말고는 `set`과 같음 <CppRef path="cpp/container/multiset" />
+  - `map`에 대한 `multimap`의 관계와 같음. `count()`, `equal_range()`로 같은 값들을 다룸
+- 쓰임새: 정렬된 상태를 유지하며 같은 값이 여러 번 나올 수 있는 데이터(점수, 측정값)
+
+<RunCode client:load code={msCode} />
+
+- 볼 것
+  - 같은 번호로 다시 등록하면 `false`. `find()`가 돌려준 참조로 방을 바꿈
+  - 없는 번호는 예외 메시지
+  - `multimap`의 "월" 일정 셋이 넣은 순서대로 나오고, 범위로 `vector`를 만듦
+  - 없는 키 "수"는 `lower_bound`와 `upper_bound`가 같음
+  - `set`은 중복 "민수"를 무시하고, `multiset`은 5를 세 번 담음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `ranges::subrange \| views::values \| ranges::to` | C++23 | 반복문으로 `second`를 모음 |
+| `contains()` | C++20 | `count()` |
+| 구조적 바인딩 `auto [first, last]` | C++17 | `.first`, `.second` |
+| 같은 키 원소의 삽입 순서 보장, 중괄호 초기화 | C++11 | 순서 보장 없음, `insert` 반복 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={msCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `multimap`에서 `find(키)`는 그 키의 첫 원소다?
+  - 아무거나 하나. 첫 원소는 `lower_bound(키)`, 전부는 `equal_range(키)`
+- `multimap::erase(키)`로 그 키의 원소 하나를 지운다?
+  - 그 키의 원소를 **모두** 지움. 하나만이면 반복자로 지움
+- `multimap`에도 `m[키]`가 있다?
+  - 없음. `at()`도 없음
+- `set`의 원소를 반복자로 고칠 수 있다?
+  - `const`라 안 됨. 지우고 다시 넣음
+- `set`에 같은 값을 넣으면 오류가 난다?
+  - 오류 없이 무시됨. `insert()`의 결과 `pair`의 `bool`이 `false`
+
+## 정리
+
+| 컨테이너 | 원소 | 키 중복 | 특징 |
+| --- | --- | --- | --- |
+| `map` | 키-값 쌍 | 안 됨 | `[]`, `at`, `insert_or_assign`, `try_emplace` |
+| `multimap` | 키-값 쌍 | 됨 | `[]`·`at` 없음. `insert`는 늘 성공. `equal_range` |
+| `set` | 값(=키) | 안 됨 | 원소 `const`. 접근 제어 목록 같은 곳 |
+| `multiset` | 값(=키) | 됨 | `count`, `equal_range` |
+
+- 넷 모두 정렬된 상태, 로그 시간, 양방향 반복자, `lower_bound`/`upper_bound`/`equal_range`
+
+## 복습 질문
+
+<details>
+<summary>`std::multimap<std::string, std::string> tags`에서 태그 `"여행"`이 붙은 사진 수는?</summary>
+
+- `tags.count("여행")`. 또는 `equal_range`의 두 반복자 사이 거리(`std::distance`)
+
+</details>
+
+<details>
+<summary>`std::set<int> s{ 1, 5, 9 };`에서 5를 6으로 바꾸려면?</summary>
+
+- `s.erase(5); s.insert(6);`
+- 또는 C++17 노드 핸들로 노드를 재사용함
+
+```cpp
+auto n{ s.extract(5) };
+n.value() = 6;
+s.insert(std::move(n));
+```
+
+</details>
+
+<details>
+<summary>사용자별 친구 목록에서 `"민수"`의 친구 `"지은"` 한 명만 지우는 코드를 쓰면?</summary>
+
+```cpp
+auto [first, last]{ friends.equal_range("민수") };
+for (auto it{ first }; it != last; ++it) {
+    if (it->second == "지은") {
+        friends.erase(it);
+        break;   // 지운 반복자는 무효이므로 바로 멈춤
+    }
+}
+```
+
+</details>
