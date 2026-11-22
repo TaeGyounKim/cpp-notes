@@ -1,0 +1,309 @@
+---
+title: 알고리즘
+description: 컨테이너와 분리된 표준 알고리즘의 설계, 찾기·비교·세기·변경·분할·정렬·이진 탐색·집합·힙·최솟값과 최댓값·수치·순열 알고리즘의 종류, 범위 라이브러리와 C++23의 새 알고리즘, 표준 라이브러리에 없는 것을 훑습니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import algoCode from '../../../../examples/ch16/algorithms.cpp?raw';
+import algoCpp11Code from '../../../../examples/ch16/algorithms-cpp11.cpp?raw';
+
+- 다루는 것: 표준 라이브러리가 제공하는 100개가 넘는 제네릭 **알고리즘**의 종류. 코드 예와 자세한 사용법은 20장
+- 이 글에서 배우는 요소: 알고리즘과 컨테이너의 분리, 알고리즘 분류, 범위 라이브러리, 표준 라이브러리에 없는 것
+
+## 알고리즘과 컨테이너의 분리
+
+- **알고리즘** (algorithm): 정렬이나 찾기처럼 특정 일을 해내는 전략 <CppRef path="cpp/algorithm" />
+  - 함수 템플릿으로 구현되어 대부분의 컨테이너 타입에 쓰임
+  - 따로 밝히지 않으면 `<algorithm>`에 있음
+- 알고리즘은 대개 컨테이너의 일부가 **아님**. 표준 라이브러리는 데이터(컨테이너)와 기능(알고리즘)을 분리함
+  - 객체 지향의 정신과 어긋나 보이지만, 제네릭 프로그래밍을 하려면 필요함
+  - **직교성** (orthogonality) 원칙: 알고리즘과 컨테이너는 서로 독립이고, (거의) 모든 알고리즘이 (거의) 모든 컨테이너와 함께 동작함
+- 알고리즘은 컨테이너를 직접 다루지 않고 **반복자**나 **범위**로 다룸(17장). 아래에서 "순서열"이라 하면 반복자로 넘긴 원소들
+
+:::note
+이론상 독립이지만, 제네릭 알고리즘이 잘 동작하지 않는 일부 컨테이너는 그 알고리즘을 멤버 함수로 제공한다. 예: `set`의 멤버 `find()`는 제네릭 `find()`보다 빠르다. 컨테이너 전용 멤버가 있으면 그것을 쓴다.
+:::
+
+:::tip
+표준 라이브러리는 범용성을 염두에 두고 설계되어, 쓰이지 않을 수도 있지만 필요할 때는 꼭 필요한 일반성을 갖춘다. 모든 알고리즘이나 낯선 매개변수까지 알아야 하는 것은 아니다. 무엇이 있는지 알아 두면 된다.
+:::
+
+## 바꾸지 않는 알고리즘
+
+- 원소의 값이나 순서를 바꾸지 않고, 순서열을 살펴 정보를 돌려줌. 찾기, 비교, 세기. 이것들이 있으면 순서열을 훑으려고 `for` 문을 쓸 일이 드묾
+
+### 찾기
+
+- 순서열이 정렬되어 있지 않아도 됨. N은 찾는 순서열 크기, M은 찾을 패턴 크기
+
+| 알고리즘 | 하는 일 | 복잡도 |
+| --- | --- | --- |
+| `adjacent_find()` | 같은(또는 조건자에 따라 동등한) 이웃 두 원소를 처음 찾음 | O(N) |
+| `find()`, `find_if()` | 값과 같거나 조건자가 참인 첫 원소 | O(N) |
+| `find_if_not()` | 조건자가 거짓인 첫 원소 | O(N) |
+| `find_first_of()` | 여러 원소 중 하나를 한꺼번에 찾음 | O(N·M) |
+| `search()` | 다른 순서열과 일치하는 첫 부분 순서열 | O(N·M) |
+| `find_end()` | 다른 순서열과 일치하는 마지막 부분 순서열 | O(M·(N−M)) |
+| `search_n()` | 값과 같은 원소가 n개 연속한 첫 위치 | O(N) |
+
+- `search()`는 찾는 방식을 고르는 매개변수를 더 받을 수 있음: `default_searcher`, `boyer_moore_searcher`, `boyer_moore_horspool_searcher`. 보이어-무어 방식은 패턴이 없으면 최악 O(N+M)
+
+### 비교와 세기
+
+- 순서열이 정렬되어 있지 않아도 되고, 모두 최악 선형 시간
+
+| 알고리즘 | 하는 일 |
+| --- | --- |
+| `equal()` | 두 순서열의 같은 위치 원소가 모두 같은지(또는 조건자에 맞는지) |
+| `mismatch()` | 두 순서열에서 처음으로 다른 위치의 원소들 |
+| `lexicographical_compare()` | 두 순서열의 사전식 순서. 앞에서부터 비교해 처음 다른 원소로 결정 |
+| `lexicographical_compare_three_way()` <Badge text="C++20" /> | 사전식 삼중 비교. `strong_ordering` 등 비교 범주를 돌려줌 |
+| `all_of()` / `any_of()` / `none_of()` | 조건자가 모든 원소 / 하나 이상 / 어느 것도 참인지. 빈 순서열은 `all_of`·`none_of`가 참 |
+| `count()`, `count_if()` | 값과 같거나 조건자가 참인 원소 수 |
+
+## 바꾸는 알고리즘
+
+- 순서열의 원소 일부나 전부를 바꿈. 제자리에서 바꾸거나, 결과를 다른 순서열에 복사해 원본을 그대로 둠. 모두 최악 선형 시간
+
+| 알고리즘 | 하는 일 |
+| --- | --- |
+| `copy()`, `copy_backward()`, `copy_if()`, `copy_n()` | 다른 순서열로 복사(조건자가 참인 것만, n개만 등) |
+| `fill()`, `fill_n()` | 모든(또는 처음 n개) 원소를 새 값으로 |
+| `generate()`, `generate_n()` | 함수를 불러 각 원소의 새 값을 만듦 |
+| `move()`, `move_backward()` | 이동 의미론(9장)으로 다른 순서열에 옮김 |
+| `remove()`, `remove_if()`, `remove_copy()`, `remove_copy_if()` | 값과 같거나 조건자가 참인 원소를 지움(제자리 또는 복사) |
+| `replace()`, `replace_if()`, `replace_copy()`, `replace_copy_if()` | 그런 원소를 새 값으로 바꿈 |
+| `reverse()`, `reverse_copy()` | 순서를 뒤집음 |
+| `rotate()`, `rotate_copy()` | 앞쪽과 뒤쪽 "반"을 맞바꿈. 두 부분의 크기는 달라도 됨 |
+| `sample()` | n개 원소를 무작위로 고름 |
+| `shift_left()`, `shift_right()` <Badge text="C++20" /> | 원소를 왼쪽·오른쪽으로 밂. 끝으로 밀려난 원소는 사라짐 |
+| `shuffle()` | 원소를 무작위로 섞음. 난수 생성기를 정할 수 있음 |
+| `transform()` | 각 원소(또는 두 순서열의 같은 위치 원소)에 함수를 적용해 결과를 저장. 원본과 대상이 같으면 제자리 |
+| `unique()`, `unique_copy()` | 연속한 중복을 지움 |
+
+- `random_shuffle()`은 C++14에서 권장하지 않게 되고 C++17에서 제거됨. `shuffle()`을 씀
+
+## 그 밖의 알고리즘
+
+### 연산·맞바꾸기
+
+| 알고리즘 | 하는 일 |
+| --- | --- |
+| `for_each()` | 순서열의 각 원소에 함수를 실행 |
+| `for_each_n()` <Badge text="C++17" /> | 시작 반복자와 개수로 처음 n개에 실행 |
+| `iter_swap()`, `swap_ranges()` | 두 원소 또는 두 순서열을 맞바꿈 |
+
+### 분할
+
+- 조건자가 참인 원소가 모두 거짓인 원소 앞에 있으면 순서열이 그 조건자로 **분할되었다**고 함. 조건자를 만족하지 않는 첫 원소가 **분할점**
+
+| 알고리즘 | 하는 일 | 복잡도 |
+| --- | --- | --- |
+| `is_partitioned()` | 분할되었는지 | 선형 |
+| `partition()` | 분할함. 각 부분 안의 원래 순서는 지키지 않음 | 선형 |
+| `stable_partition()` | 분할하면서 원래 순서를 지킴 | 선형 로그 |
+| `partition_copy()` | 조건자 결과에 따라 두 순서열로 나눠 복사 | 선형 |
+| `partition_point()` | 분할점을 찾음 | 로그 |
+
+### 정렬과 이진 탐색
+
+| 알고리즘 | 하는 일 | 복잡도 |
+| --- | --- | --- |
+| `is_sorted()`, `is_sorted_until()` | 정렬되었는지 / 앞쪽에서 정렬된 가장 긴 부분 | 선형 |
+| `nth_element()` | n번째 원소를 정렬했을 때의 자리에 두고, 앞은 작게 뒤는 크게 | 선형 |
+| `partial_sort()`, `partial_sort_copy()` | 처음 n개만 정렬(제자리 또는 복사) | 선형 로그 |
+| `sort()`, `stable_sort()` | 제자리 정렬. `stable_sort()`는 같은 원소의 순서를 지킴 | 선형 로그 |
+| `lower_bound()` | 값 **이상**인 첫 원소 | 로그 |
+| `upper_bound()` | 값보다 **큰** 첫 원소 | 로그 |
+| `equal_range()` | `lower_bound()`와 `upper_bound()`의 결과를 쌍으로 | 로그 |
+| `binary_search()` | 값이 있는지 | 로그 |
+
+- 이진 탐색 알고리즘은 보통 정렬된 순서열에 씀. 엄밀히는 찾는 원소에 대해 **분할**만 되어 있으면 됨(`std::partition()`으로도 만들 수 있음)
+
+### 정렬된 순서열에 쓰는 것
+
+| 알고리즘 | 하는 일 | 복잡도 |
+| --- | --- | --- |
+| `includes()` | 한 정렬된 순서열의 모든 원소가 다른 쪽에 있는지 | 선형 |
+| `set_union()` 등 넷 | 두 정렬된 순서열의 합·교·차·대칭차 집합을 세 번째 순서열에 복사 | 선형 |
+| `merge()` | 두 정렬된 순서열을 새 순서열로 합침 | 선형 |
+| `inplace_merge()` | 두 정렬된 부분을 제자리에서 합침 | 선형 로그 |
+
+- 집합 알고리즘 넷: `set_union()`(합집합), `set_intersection()`(교집합), `set_difference()`(차집합), `set_symmetric_difference()`(대칭차집합)
+- 집합 알고리즘은 `set` 컨테이너의 순서열에 가장 알맞지만, 대부분의 컨테이너의 정렬된 순서열에 쓸 수 있음
+
+### 힙
+
+- **힙** (heap): 배열이나 순서열의 원소를 반쯤 정렬해 "꼭대기" 원소를 빨리 찾게 한 자료 구조. `priority_queue`를 구현할 때 흔히 씀
+
+| 알고리즘 | 하는 일 | 복잡도 |
+| --- | --- | --- |
+| `is_heap()`, `is_heap_until()` | 힙인지 / 앞쪽에서 힙인 가장 긴 부분 | 선형 |
+| `make_heap()` | 힙으로 만듦 | 선형 |
+| `push_heap()`, `pop_heap()` | 힙에 원소를 더하고 / 꺼냄 | 로그 |
+| `sort_heap()` | 힙을 오름차순 정렬된 순서열로 | 선형 로그 |
+
+### 최솟값과 최댓값
+
+| 알고리즘 | 하는 일 |
+| --- | --- |
+| `clamp()` <Badge text="C++17" /> | 값 v를 [lo, hi]로 제한. v &lt; lo면 lo, v &gt; hi면 hi, 아니면 v의 참조 |
+| `min()`, `max()` | 둘 이상의 값 중 최솟값 / 최댓값 |
+| `minmax()` | 최솟값과 최댓값을 쌍으로 |
+| `min_element()`, `max_element()`, `minmax_element()` | 순서열에서 최소·최대 원소(의 반복자) |
+
+### 수치 처리
+
+- `<numeric>`. 정렬되지 않아도 되고 모두 선형 시간 <CppRef path="cpp/header/numeric" />
+
+| 알고리즘 | 하는 일 |
+| --- | --- |
+| `iota()` | 주어진 값부터 1씩 늘어나는 값으로 채움 |
+| `adjacent_difference()` | 이웃한 두 원소의 차(또는 다른 이항 연산)로 새 순서열 |
+| `partial_sum()` | 각 원소와 그 앞 원소들의 합(부분합)으로 새 순서열. 왼쪽부터 |
+| `inclusive_scan()`, `exclusive_scan()` <Badge text="C++17" /> | `partial_sum()`과 비슷하지만 합하는 순서가 정해지지 않음(병렬 가능). inclusive는 i번째 원소를 i번째 합에 포함, exclusive는 포함하지 않음 |
+| `transform_inclusive_scan()`, `transform_exclusive_scan()` | 각 원소를 변환한 뒤 스캔 |
+| `accumulate()` | 모든 원소를 "누적". 기본은 합, 다른 이항 함수를 줄 수 있음. 왼쪽부터 |
+| `inner_product()` | 두 순서열에서 같은 위치끼리 곱하고(기본) 그 결과를 더함(기본). 수학 벡터의 내적 |
+| `reduce()` <Badge text="C++17" /> | `accumulate()`와 비슷하지만 병렬 실행을 지원. 계산 순서가 정해지지 않음 |
+| `transform_reduce()` | 각 원소를 변환한 뒤 `reduce()` |
+
+- `inclusive_scan()`, `reduce()`는 계산 순서가 정해지지 않으므로, 결합 법칙(그리고 `reduce()`는 교환 법칙)이 성립하지 않는 연산을 주면 결과가 일정하지 않음
+
+### 순열
+
+- 순서열의 **순열** (permutation): 같은 원소를 다른 순서로 놓은 것
+
+| 알고리즘 | 하는 일 | 복잡도 |
+| --- | --- | --- |
+| `is_permutation()` | 한 범위가 다른 범위의 순열인지 | 이차 |
+| `next_permutation()`, `prev_permutation()` | 사전식으로 다음·이전 순열로 바꿈. 정렬된 상태에서 시작해 거듭 부르면 모든 순열을 돎. 더 없으면 `false` | 선형 |
+
+## 범위 라이브러리
+
+- **범위 라이브러리** (ranges library) <Badge text="C++20" />: 원소 순서열을 더 쉽고 우아하게 다룸. `<ranges>`, `std::ranges` 네임스페이스 <CppRef path="cpp/ranges" />
+  - 읽기 쉬운 문법. 시작·끝 반복자를 잘못 짝지을 가능성을 없앰
+  - **범위 어댑터**로 바탕 순서열을 게으르게(필요할 때) 변환하고 거름. **범위 팩토리**로 범위를 만듦
+- 앞의 알고리즘 대부분에 반복자 판과 함께 **범위 판**이 있음
+  - **범위 기반 알고리즘** 또는 **제약된 알고리즘** (constrained algorithm)이라 함. 템플릿 타입 매개변수에 콘셉트로 제약이 걸려 있어(12장) 잘못 쓰면 더 나은 오류 메시지가 나옴
+  - 예: `std::sort(v.begin(), v.end())` 대신 `std::ranges::sort(v)`
+- <Badge text="C++23" /> 제약된 판으로만 있는 새 알고리즘(모두 선형 시간)
+
+| 알고리즘 | 하는 일 |
+| --- | --- |
+| `contains()`, `contains_subrange()` | 범위가 값 / 부분 범위를 담는지 |
+| `starts_with()`, `ends_with()` | 범위가 다른 범위로 시작하는지 / 끝나는지 |
+| `find_last()`, `find_last_if()`, `find_last_if_not()` | 값과 같거나 조건자가 참·거짓인 마지막 원소. 그 원소부터 끝까지의 부분 범위를 돌려줌 |
+| `fold_left()`, `fold_right()` | 초깃값을 받아 범위를 왼쪽·오른쪽부터 접음 |
+| `fold_left_first()`, `fold_right_last()` | 첫(마지막) 원소를 초깃값으로. 결과를 `optional`로(빈 범위면 빈 `optional`) |
+| `fold_left_with_iter()`, `fold_left_first_with_iter()` | 접은 결과와 함께 끝 반복자도 돌려줌 |
+
+- 범위 라이브러리는 17장, 제약되지 않은·제약된 알고리즘의 예는 20장
+
+<RunCode client:load code={algoCode} />
+
+- 볼 것
+  - `find`, `count`, `all_of`로 `for` 문 없이 살펴봄
+  - `sort` 뒤에 `binary_search`, `lower_bound`(4 이상인 첫 원소는 5)
+  - `set_intersection`은 정렬된 두 `set`의 교집합을 `back_inserter`로 벡터에 넣음
+  - `std::ranges::sort(v)`처럼 컨테이너를 통째로 넘기고, C++23의 `contains`, `fold_left`
+
+## 표준 라이브러리에 없는 것
+
+- 강력하지만 완벽하지는 않음. 예 둘
+  - 여러 스레드에서 컨테이너에 동시에 접근할 때의 스레드 안전성을 보장하지 않음
+  - 범용 트리나 그래프 구조가 없음. `map`과 `set`은 보통 균형 이진 트리로 구현하지만 인터페이스로 드러내지 않음. 파서 등에 트리나 그래프가 필요하면 직접 구현하거나 다른 라이브러리를 씀
+- 표준 라이브러리는 **확장할 수 있음**. 기존 알고리즘·컨테이너와 함께 동작하는 자기 컨테이너와 알고리즘을 쓸 수 있음(25장). 표준을 따르는 서드파티 라이브러리를 쓰는 방법도 있음(4장)
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `ranges::contains`, `ranges::fold_left` 등 | C++23 | `std::find(...) != end`, `std::accumulate` |
+| 범위 라이브러리, `shift_left`/`shift_right` | C++20 | 반복자 쌍, `std::rotate` 등 |
+| `clamp`, `reduce`, 스캔 알고리즘, `sample`, `for_each_n` | C++17 | `std::min(std::max(...))`, `accumulate`, `partial_sum` |
+| `all_of`/`any_of`/`none_of`, `iota`, `minmax_element`, `is_sorted`, `copy_if`, `shuffle` 등 | C++11 | 직접 `for` 문, `random_shuffle` |
+
+- 나머지 대부분의 알고리즘은 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={algoCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 알고리즘은 컨테이너의 멤버 함수다?
+  - 대부분 `<algorithm>`의 독립 함수 템플릿. 반복자나 범위를 받음
+- `set`에도 `std::find`를 쓰는 것이 좋다?
+  - 멤버 `set::find`가 로그 시간이라 더 빠름
+- 이진 탐색은 아무 순서열에나 된다?
+  - 정렬(적어도 분할)되어 있어야 함
+- `reduce`와 `accumulate`는 언제나 같은 결과다?
+  - 결합·교환 법칙이 성립하지 않는 연산에서는 `reduce`의 결과가 달라질 수 있음
+- `remove()`를 부르면 컨테이너 크기가 준다?
+  - 남길 원소를 앞으로 모을 뿐 크기는 그대로(20장에서 지우기 관용구)
+
+## 정리
+
+| 분류 | 대표 |
+| --- | --- |
+| 찾기·비교·세기 | `find`, `search`, `equal`, `mismatch`, `all_of`, `count` |
+| 바꾸기 | `copy`, `transform`, `remove`, `replace`, `reverse`, `rotate`, `shuffle`, `unique` |
+| 분할·정렬 | `partition`, `sort`, `stable_sort`, `nth_element`, `partial_sort` |
+| 이진 탐색 | `lower_bound`, `upper_bound`, `equal_range`, `binary_search` |
+| 정렬된 순서열 | `includes`, `set_union` 등, `merge` |
+| 힙·최소최대 | `make_heap`, `push_heap`, `pop_heap`, `min`, `max`, `clamp`, `minmax_element` |
+| 수치 | `iota`, `accumulate`, `reduce`, `partial_sum`, 스캔, `inner_product` |
+| 순열 | `next_permutation`, `is_permutation` |
+| 범위 | `std::ranges::sort(v)` 등. C++23: `contains`, `fold_left` 등 |
+
+## 복습 질문
+
+<details>
+<summary>정렬된 `std::vector<int>`에서 7 이상 10 미만인 원소의 개수를 로그 시간에 구하려면?</summary>
+
+- 10 이상인 첫 위치에서 7 이상인 첫 위치를 뺌
+
+```cpp
+auto n{ std::lower_bound(v.begin(), v.end(), 10)
+         - std::lower_bound(v.begin(), v.end(), 7) };
+```
+
+</details>
+
+<details>
+<summary>성적 중 상위 3개만 정렬된 순서로 필요하다. 전체를 `sort`하는 것보다 나은 것은?</summary>
+
+- `std::partial_sort`로 처음 3개만 정렬함
+
+```cpp
+std::partial_sort(v.begin(), v.begin() + 3, v.end(), std::greater{});
+```
+
+</details>
+
+<details>
+<summary>`std::vector<int>`의 원소를 모두 제곱해 다른 벡터에 담으려면 어떤 알고리즘을 쓰는가?</summary>
+
+- `std::transform`. `dst`는 같은 크기로 미리 만들거나 `std::back_inserter(dst)`를 넘김
+
+```cpp
+std::transform(src.begin(), src.end(), dst.begin(),
+               [](int x) { return x * x; });
+```
+
+</details>
+
+## 16장을 마치며
+
+- 코드에서 가장 많이 쓰게 될 C++ 표준 라이브러리를 훑어봄
+  - C 라이브러리를 포함하고, 문자열, 입출력, 오류 처리 등의 기능을 더함
+  - 제네릭 컨테이너, 알고리즘, 범위 라이브러리
+- 이어지는 장들에서 표준 라이브러리를 자세히 다룸
+- 다음 장(17장): 반복자와 범위 라이브러리
