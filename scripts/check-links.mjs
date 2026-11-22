@@ -15,7 +15,7 @@ for (const path of [...paths].sort()) {
 	const [page, anchor] = path.split('#');
 	if (!pages.has(page)) {
 		const res = await fetch(`https://en.cppreference.com/w/${page}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-		pages.set(page, { status: res.status, html: res.ok ? await res.text() : '' });
+		pages.set(page, { status: res.status, html: res.ok ? (await res.text()).replaceAll('&#95;', '_') : '' });
 	}
 	const { status, html } = pages.get(page);
 	const anchorOk = !anchor || html.includes(`id="${anchor}"`);
