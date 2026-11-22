@@ -1,0 +1,205 @@
+---
+title: regex_iterator, regex_token_iterator, regex_replace
+description: 패턴이 나오는 모든 곳을 훑는 regex_iterator, 원하는 캡처 그룹만 훑거나 -1로 문자열을 토큰화하는 regex_token_iterator, $1·$&·$` 같은 치환 이스케이프와 format_no_copy·format_first_only 플래그를 쓰는 regex_replace를 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import irCode from '../../../../examples/ch21/regex-iter-replace.cpp?raw';
+import irCpp11Code from '../../../../examples/ch21/regex-iter-replace-cpp11.cpp?raw';
+
+- 다루는 것: 패턴과 일치하는 곳을 **모두** 찾고, 문자열을 나누고, 찾은 곳을 바꾸는 법
+- 이 글에서 배우는 요소: `regex_iterator`, `regex_token_iterator`(그룹 선택, 토큰화), `regex_replace`
+
+## regex_iterator
+
+- 3편에서 말한 대로, 원본에서 패턴이 나오는 모든 곳을 꺼낼 때 `regex_search()`를 반복문에 쓰지 않음. `regex_iterator`나 `regex_token_iterator`를 씀 <CppRef path="cpp/regex/regex_iterator" />
+  - 표준 컨테이너의 반복자와 비슷하게 동작함
+- 끝 반복자가 조금 다름
+  - 보통은 특정 컨테이너의 끝 반복자를 지정하지만, `regex_iterator`의 "끝"은 하나뿐: **기본 생성한** `regex_iterator`
+- 시작 반복자는 원본의 시작·끝 반복자와 정규식을 받음. 일치하는 곳마다 반복문 본문이 한 번씩 실행됨
+- 역참조하면 `smatch` 같은 `match_results` 객체. `[0]`이 일치한 부분 문자열, `[1]`부터 캡처 그룹
+
+```cpp
+const std::regex word{ R"(\w+)" };
+const std::sregex_iterator end;
+for (std::sregex_iterator it{ str.cbegin(), str.cend(), word }; it != end;
+     ++it) {
+    std::println("\"{}\"", (*it)[0].str());
+}
+```
+
+- 입력이 `"This, is   a test."`라면 `This`, `is`, `a`, `test`가 따로 나옴. 간단한 정규식으로도 강력한 문자열 처리를 할 수 있음
+
+:::caution
+`regex_iterator`와 `regex_token_iterator`는 받은 정규식의 **포인터**를 안에 저장한다. 그래서 우측값 참조 정규식을 받는 생성자를 명시적으로 삭제해, 임시 `regex` 객체로 만들 수 없게 했다. `std::sregex_iterator it{ b, e, std::regex{ "..." } }`는 컴파일되지 않는다. 정규식은 이름 있는 변수로 둔다.
+:::
+
+## regex_token_iterator
+
+- `regex_iterator`는 일치하는 곳마다 `match_results`를 주고, 거기서 캡처 그룹을 꺼냄
+- `regex_token_iterator`: 모든 일치에 걸쳐 **모든 또는 선택한 캡처 그룹**을 자동으로 훑음 <CppRef path="cpp/regex/regex_token_iterator" />
+- 생성자 넷이 모두 이 모양
+
+```text
+regex_token_iterator(시작, 끝, 정규식[, 하위 일치[, 플래그]]);
+```
+
+- **하위 일치**(선택): 어떤 캡처 그룹을 훑을지
+  - 정수 하나: 그 번호의 그룹
+  - 정수 `vector`, 초기화 리스트, C 스타일 배열: 그 번호들의 그룹을 차례로
+  - 생략하거나 0: 0번 그룹, 즉 정규식 전체와 일치한 부분 문자열
+- 역참조하면 `sub_match`. `it->str()`로 바로 문자열을 얻음(`(*it)[0].str()`가 필요 없음)
+- 예: 날짜에서 월과 일만(`{ 2, 3 }`) 훑기
+  - `regex_match()`는 자동으로 입력 전체와 맞추지만 반복자는 찾기처럼 동작하므로, 입력 전체여야 한다면 패턴에 `^`와 `$`를 붙임
+
+### 토큰화
+
+- 하위 일치 번호로 **-1**을 주면 **토큰화** 모드: 입력 중 정규식과 **일치하지 않는** 부분 문자열들을 훑음
+  - 오래된 C 함수 `strtok()`보다 훨씬 안전하고 유연한 필드 나누기
+- 예: `,`와 `;`(앞뒤 공백 포함)로 나누기
+
+```cpp
+// 공백 0개 이상, 쉼표나 세미콜론, 공백 0개 이상
+const std::regex sep{ R"(\s*[,;]\s*)" };
+std::vector<std::string> tokens{
+    std::sregex_token_iterator{ str.cbegin(), str.cend(), sep, -1 },
+    std::sregex_token_iterator{} };
+```
+
+- 정규식이 구분자와 그 주변 공백을 함께 일치시키므로, 토큰에서 공백이 모두 빠짐
+- 반복자 쌍을 `vector` 생성자에 넘겨 모든 토큰을 한 번에 담음
+
+## regex_replace
+
+- 정규식과 **서식 문자열**을 받아, 일치하는 부분 문자열을 바꿈 <CppRef path="cpp/regex/regex_replace" />
+- 서식 문자열에서 일치한 부분을 가리키는 이스케이프
+
+| 이스케이프 | 바뀌는 것 |
+| --- | --- |
+| `$n` | n번째 캡처 그룹과 일치한 문자열. `$1`, `$2`, … (n > 0) |
+| `$&` | 정규식 전체와 일치한 문자열 |
+| `` $` `` | 입력 중 일치한 부분의 왼쪽 |
+| `$'` | 입력 중 일치한 부분의 오른쪽 |
+| `$$` | 달러 기호 하나 |
+
+- 오버로드 여섯
+  - 넷: `std::string regex_replace(입력, 정규식, 서식[, 플래그]);` 바꾼 결과 문자열을 돌려줌. 입력과 서식은 `std::string`이나 C 스타일 문자열
+  - 둘: `출력 반복자 regex_replace(출력 반복자, 시작, 끝, 정규식, 서식[, 플래그]);` 결과를 출력 반복자에 씀
+- 예: `<body><h1>Header</h1><p>Some text</p></body>`에 정규식 `<h1>(.*)</h1><p>(.*)</p>`이면
+
+| 이스케이프 | 바뀌는 것 |
+| --- | --- |
+| `$1` | `Header` |
+| `$2` | `Some text` |
+| `$&` | `<h1>Header</h1><p>Some text</p>` |
+| `` $` `` | `<body>` |
+| `$'` | `</body>` |
+
+- 서식 `"H1=$1 and P=$2"`로 바꾸면 `<body>H1=Header and P=Some text</body>`
+
+### 플래그
+
+| 플래그 | 동작 |
+| --- | --- |
+| `format_default` | 기본. 패턴이 나오는 곳을 모두 바꾸고, 일치하지 않는 부분도 출력에 복사함 |
+| `format_no_copy` | 모두 바꾸되, 일치하지 않는 부분은 출력에 복사하지 않음 |
+| `format_first_only` | 첫 일치만 바꿈 |
+
+- 모두 `std::regex_constants` 네임스페이스. 위 예에 `format_no_copy`를 주면 `H1=Header and P=Some text`만 남음
+- 예: 반복문 없이 낱말마다 한 줄로. 낱말 `(\w+)`을 `"$1\n"`으로 바꾸고 `format_no_copy`로 공백과 구두점은 버림
+
+<RunCode client:load code={irCode} />
+
+- 볼 것
+  - `sregex_iterator`로 이름=값 쌍을 모두 꺼냄. 기본 생성한 `end`와 비교
+  - `sregex_token_iterator`에 2를 주면 값만, `{ 1, 2 }`를 주면 이름과 값이 번갈아
+  - -1로 `,`와 `;`에서 나눔(주변 공백 제거)
+  - `regex_replace`의 `$1`, `$2`, `$&`, 그리고 `format_first_only`, `format_no_copy`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 컨테이너 출력 `println("{}", v)` | C++23 | 반복문 |
+| 임시 `regex`를 받는 반복자 생성자 삭제 | C++14(결함 보고라 C++11 모드에도 적용하는 구현이 많음) | 오래된 구현에서는 컴파일되었지만 매달린 포인터 |
+| `regex_iterator`, `regex_token_iterator`, `regex_replace` | C++11 | `strtok`, 외부 라이브러리 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={irCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `regex_iterator`의 끝은 `str.end()`로 만든다?
+  - 기본 생성한 `regex_iterator`가 끝
+- 반복자에 `std::regex{ "..." }` 임시 객체를 넘겨도 된다?
+  - 삭제된 생성자라 컴파일되지 않음. 정규식 변수를 둠
+- 토큰화 모드(-1)는 일치하는 부분을 훑는다?
+  - 일치하지 **않는** 부분(구분자 사이)
+- `$0`이 전체 일치다?
+  - 전체 일치는 `$&`. `$n`은 n > 0
+- `regex_replace`는 첫 일치만 바꾼다?
+  - 기본은 모두. 첫 일치만이면 `format_first_only`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `regex_iterator` | 모든 일치를 훑음. 역참조는 `match_results`. 끝은 기본 생성 |
+| `regex_token_iterator` | 선택한 그룹(정수, 목록)만. `it->str()` |
+| 토큰화 | 하위 일치 -1: 일치하지 않는 부분. `strtok` 대신 |
+| `regex_replace` | `$n`, `$&`, `` $` ``, `$'`, `$$` |
+| 플래그 | `format_default`, `format_no_copy`, `format_first_only` |
+
+## 복습 질문
+
+<details>
+<summary>CSV 한 줄 `"kim, 23 ,seoul"`을 쉼표로 나누고 앞뒤 공백도 없애려면?</summary>
+
+```cpp
+const std::regex sep{ R"(\s*,\s*)" };
+std::vector<std::string> fields{
+    std::sregex_token_iterator{ line.cbegin(), line.cend(), sep, -1 },
+    std::sregex_token_iterator{} };
+```
+
+- 줄 맨 앞과 맨 뒤의 공백은 구분자 주변이 아니라 남을 수 있으므로 필요하면 따로 다듬음
+
+</details>
+
+<details>
+<summary>"2026-11-23"을 "23/11/2026"으로 바꾸는 `regex_replace` 호출은?</summary>
+
+```cpp
+const std::regex ymd{ R"((\d{4})-(\d{2})-(\d{2}))" };
+std::string dmy{ std::regex_replace(date, ymd, "$3/$2/$1") };
+```
+
+</details>
+
+<details>
+<summary>글에서 모든 해시태그(`#` 뒤 단어 문자들)를 `std::vector<std::string>`으로 모으려면?</summary>
+
+```cpp
+const std::regex tag{ R"(#(\w+))" };
+std::vector<std::string> tags{
+    std::sregex_token_iterator{ text.cbegin(), text.cend(), tag, 1 },
+    std::sregex_token_iterator{} };
+```
+
+</details>
+
+## 21장을 마치며
+
+- 지역화를 염두에 두고 코딩하는 법을 다룸. 지역화를 해 본 사람이라면, 미리 계획해 두면(유니코드 문자를 쓰고 로캘을 의식하면) 새 언어나 로캘을 지원하는 일이 훨씬 쉽다고 말할 것
+- 정규식 라이브러리를 다룸. 문법을 익히면 문자열 다루기가 훨씬 쉬워짐
+  - 문자열 검증, 입력 안에서 부분 문자열 찾기, 찾아 바꾸기 등
+  - 정규식을 익혀서, 문자열을 직접 다루는 코드 대신 쓰기를 강력히 권함
+- 다음 장(22장): 날짜와 시간 도구
