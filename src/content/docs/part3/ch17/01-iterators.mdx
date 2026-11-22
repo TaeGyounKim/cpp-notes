@@ -1,0 +1,272 @@
+---
+title: 반복자
+description: 컨테이너와 알고리즘을 잇는 반복자, 여섯 가지 반복자 범주, begin·end가 만드는 반열린 범위, 비멤버 begin()과 인수 의존 이름 찾기, iterator_traits, 반복자 범주에 따라 구현을 고르는 법을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import itCode from '../../../../examples/ch17/iterators.cpp?raw';
+import itCpp11Code from '../../../../examples/ch17/iterators-cpp11.cpp?raw';
+
+- 다루는 것: 표준 라이브러리의 큰 부분에 깔린 **반복자**의 개념. 이 장의 뒷부분은 무엇을 원하는지 쓰면 되는 함수형 스타일의 **범위 라이브러리**
+- 이 글에서 배우는 요소: 반복자 범주, `begin()`/`end()`와 반열린 범위, `cbegin()`·`rbegin()` 등, 비멤버 `std::begin()`과 ADL, `iterator_traits`, 범주에 따른 함수 고르기
+
+## 반복자란
+
+- 표준 라이브러리는 **반복자 패턴**으로 컨테이너의 원소에 접근하는 일반적인 추상화를 제공함 <CppRef path="cpp/iterator" />
+  - 컨테이너마다 그 컨테이너의 원소를 훑는 법을 아는 전용 **반복자** (iterator)가 있음. 일종의 거창한 포인터
+  - 반복자들은 표준이 정한 인터페이스를 따르므로, 컨테이너의 기능이 달라도 원소를 다루는 코드에는 같은 인터페이스를 보여 줌
+- 장점
+  - 읽고 쓰기 쉬움. 포인터 산술보다 바르게 쓰기 쉬워 실수가 적음
+  - 효율적임. 특히 `list`, `forward_list`처럼 임의 접근을 지원하지 않는 컨테이너에서
+  - 디버깅이 쉬움. 디버그 빌드에서 범위 검사를 할 수 있음
+  - 컨테이너의 내부 구현이 완전히 바뀌어도 반복자 기반 코드는 영향받지 않음
+- 반복자는 컨테이너의 특정 원소를 가리키는 포인터처럼 생각할 수 있음
+  - `++`로 다음 원소로 감. 보통 `*`, `->`로 원소나 원소의 필드에 접근함
+  - 어떤 반복자는 `==`, `!=` 비교와 `--`(이전 원소로)를 지원함
+- 모든 반복자는 복사 생성·복사 대입·소멸이 가능해야 하고, 좌측값끼리 맞바꿀 수 있어야 함
+
+## 반복자 범주
+
+- 표준은 반복자를 **여섯 범주**로 나눔 <CppRef path="cpp/iterator" />
+
+| 범주 | 필요한 연산 | 설명 |
+| --- | --- | --- |
+| 입력 (input, 읽기) | `++`, `*`, `->`, `=`, `==`, `!=`, 복사 생성자 | 읽기 전용, 앞으로만(`--` 없음). 대입·복사·같음 비교 |
+| 출력 (output, 쓰기) | `++`, `*`, `=`, 복사 생성자 | 쓰기 전용, 앞으로만. 대입은 되지만 같음 비교는 안 됨. `*iter = value`. `->` 없음. 전위·후위 `++` |
+| 순방향 (forward) | 입력 반복자 + 기본 생성자 | 읽기, 앞으로만. 대입·복사·같음 비교 |
+| 양방향 (bidirectional) | 순방향 + `--` | 이전 원소로도 감. 전위·후위 `--` |
+| 임의 접근 (random access) | 양방향 + `+`, `-`, `+=`, `-=`, `<`, `>`, `<=`, `>=`, `[]` | 날 포인터와 같음. 포인터 산술, 배열 첨자, 모든 비교 |
+| 연속 (contiguous) <Badge text="C++20" /> | 임의 접근 + 논리적으로 이웃한 원소가 메모리에서도 이웃 | `std::array`, `vector`(`vector<bool>` 제외), `string`, `string_view`의 반복자 |
+
+- 정식 클래스 계층은 없지만, 요구되는 기능으로 계층을 생각할 수 있음
+
+```text
+연속 ⊂ 임의 접근 ⊂ 양방향 ⊂ 순방향 ⊂ 입력
+                                   (출력은 따로)
+```
+
+- 모든 연속 반복자는 임의 접근 반복자이고, 모든 임의 접근은 양방향, 모든 양방향은 순방향, 모든 순방향은 입력 반복자
+- 출력 반복자의 요구도 함께 만족하면 **가변 반복자** (mutable iterator), 아니면 **상수 반복자** (constant iterator)
+
+### 범주 요구는 어디서 검사되는가
+
+- 예전 방식: 알고리즘이 템플릿 타입 매개변수 이름을 `InputIterator`, `RandomAccessIterator`처럼 지어 요구를 알림
+  - 이름일 뿐이라 타입 검사를 하지 않음. 양방향 반복자를 임의 접근 반복자를 기대하는 알고리즘에 넘겨도 인스턴스화는 됨
+  - 대신 함수 안에서 임의 접근 기능을 쓰는 곳에서 컴파일이 실패함. 예상한 곳이 아니라서 오류 메시지가 헷갈림
+- 예: 양방향 반복자만 주는 `list`에 임의 접근 반복자가 필요한 `std::sort()`를 쓰면 GCC는 알고리즘 내부에서 이렇게 알림
+
+```text
+no match for 'operator-' (operand types are 'std::_List_iterator<int>'
+                                        and 'std::_List_iterator<int>')
+```
+
+- 범위 라이브러리의 **제약된 알고리즘**(3편)은 템플릿 타입 매개변수에 콘셉트 제약이 있어(12장) 더 분명한 오류를 냄. `std::ranges::sort(l)`은 `random_access_range` 요구를 만족하지 않는다고 알림
+
+:::note
+반복자는 알고리즘과 컨테이너 사이를 중재한다. 컨테이너의 원소를 차례로 훑는 표준 인터페이스를 제공하므로, 컨테이너가 알고리즘이 요구하는 범주의 반복자를 제공하기만 하면 어떤 알고리즘이든 어떤 컨테이너에 쓸 수 있다.
+:::
+
+- 반복자는 스마트 포인터처럼 필요한 연산자를 오버로드해 구현함(15장)
+  - 기본 연산이 날 포인터와 비슷해서 날 포인터가 어떤 컨테이너의 정당한 반복자가 될 수도 있음. `vector`의 반복자는 날 포인터로 구현할 수도 있음
+  - 쓰는 쪽은 구현을 신경 쓰지 않고 반복자 추상화만 쓰면 됨
+- 반복자가 내부적으로 포인터인지 아닌지 모르므로, 이 사이트에서는 반복자가 원소를 "가리킨다" 대신 "참조한다"고도 씀
+
+## 컨테이너에서 반복자 얻기
+
+- 반복자를 지원하는 표준 자료 구조는 반복자 타입의 공개 별칭을 제공함
+  - `iterator`, `const_iterator`. 예: `std::vector<int>::const_iterator`
+  - 거꾸로 훑을 수 있는 컨테이너는 `reverse_iterator`, `const_reverse_iterator`도
+  - `const_iterator`와 `const_reverse_iterator`는 원소를 읽기만 할 수 있음
+- `begin()`: 첫 원소를 참조하는 반복자
+- `end()`: 원소 순서열의 **끝 다음** (past-the-end) 위치. 마지막 원소를 참조하는 반복자에 `++`를 한 결과와 같음
+  - `begin()`과 `end()`는 첫 원소는 포함하고 끝은 포함하지 않는 **반열린 범위** [begin, end)를 이룸
+  - 이렇게 하는 이유: 빈 범위(원소가 없는 컨테이너)를 지원하려고. 그때는 `begin() == end()`
+- 그 밖의 멤버
+  - `cbegin()`, `cend()`: `const` 반복자
+  - `rbegin()`, `rend()`: 역방향 반복자
+  - `crbegin()`, `crend()`: `const` 역방향 반복자
+- 두 반복자로 지정한 순서열을 범위 라이브러리의 범위와 구별해 **공통 범위** (common range)라 부름
+
+### 비멤버 함수와 ADL
+
+- `<iterator>`에는 같은 이름의 **비멤버** 함수도 있음 <CppRef path="cpp/iterator/begin" />
+  - `std::begin()`, `std::end()`: `const`가 아닌 반복자. C 배열에도 씀
+  - `std::cbegin()`, `std::cend()`: `const` 반복자
+  - `std::rbegin()`, `std::rend()`: 역방향
+  - `std::crbegin()`, `std::crend()`: `const` 역방향
+- 멤버 판보다 이 비멤버 판을 쓰기를 권함
+- 특히 제네릭 코드에서는 다음처럼 씀
+
+```cpp
+using std::begin;
+begin(container);   // 네임스페이스를 붙이지 않음
+```
+
+- **인수 의존 이름 찾기** (argument-dependent lookup, ADL): 네임스페이스 없이 부른 함수를, 먼저 인수의 네임스페이스에서 찾음. 없으면 보통의 이름 찾기 규칙을 따름
+  - `using std::begin;`과 ADL을 함께 쓰면, 인수 타입의 네임스페이스에 알맞은 오버로드가 있으면 그것을, 없으면 `std`의 것을 씀
+  - `using` 선언 없이 `begin()`만 부르면 ADL로 찾는 사용자 정의 오버로드만 쓰이고, `std::begin()`으로 부르면 `std`만 찾음
+  - ADL은 이 함수들만의 것이 아니라 모든 함수에 적용됨
+- 내 타입을 위해 이런 비멤버 함수를 특수화할 때는 `std` 네임스페이스에 둘 수도, 그 타입과 같은 네임스페이스에 둘 수도 있음. **같은 네임스페이스**를 권함. ADL로 네임스페이스 없이 부를 수 있음
+
+:::note
+보통 `std` 네임스페이스에 무언가를 더하는 것은 허용되지 않는다. 하지만 표준 라이브러리 템플릿의 특수화를 `std`에 두는 것은 허용된다.
+:::
+
+## 반복자 특성
+
+- 어떤 알고리즘은 반복자에 대한 정보가 더 필요함. 예: 임시 값을 저장하려고 원소 타입을 알아야 하거나, 반복자가 양방향인지 임의 접근인지 알아야 함
+- `<iterator>`의 **`std::iterator_traits`** 클래스 템플릿: 반복자 타입으로 인스턴스화해 다섯 별칭에 접근함 <CppRef path="cpp/iterator/iterator_traits" />
+
+| 별칭 | 뜻 |
+| --- | --- |
+| `value_type` | 참조하는 원소의 타입 |
+| `difference_type` | 두 반복자 사이의 거리(원소 수)를 나타내는 타입 |
+| `iterator_category` | 반복자 범주 태그: `input_iterator_tag`, `output_iterator_tag`, `forward_iterator_tag`, `bidirectional_iterator_tag`, `random_access_iterator_tag`, `contiguous_iterator_tag` |
+| `pointer` | 원소를 가리키는 포인터 타입 |
+| `reference` | 원소에 대한 참조 타입 |
+
+```cpp
+template <typename Iter>
+void showFirst(Iter it)
+{
+    typename std::iterator_traits<Iter>::value_type temp;   // 원소 타입
+    temp = *it;
+    std::println("{}", temp);
+}
+```
+
+- `iterator_traits` 앞의 `typename`: 템플릿 타입 매개변수에 기대는 타입에 접근할 때는 늘 `typename`을 명시해야 함(26장)
+- 물론 이 예는 `auto`로 줄일 수 있음
+
+## 반복자 쓰기
+
+- `for` 문과 반복자로 `vector`의 모든 원소를 출력
+
+```cpp
+for (auto it{ std::cbegin(values) }; it != std::cend(values); ++it) {
+    std::print("{} ", *it);
+}
+```
+
+- 범위의 끝을 `it < std::cend(values)`로 검사하고 싶을 수 있지만 권하지 않음
+  - 정석은 `!=`. `!=`는 모든 반복자에서 되지만 `<`는 양방향·순방향 반복자가 지원하지 않음
+- 반복자 범위를 받는 함수 템플릿. `std::input_iterator` 콘셉트로 입력 반복자만 받게 제약함
+
+```cpp
+template <std::input_iterator Iter>
+Iter findValue(Iter begin, Iter end,
+               const typename std::iterator_traits<Iter>::value_type& value)
+{
+    for (auto it{ begin }; it != end; ++it) {
+        if (*it == value) { return it; }
+    }
+    return end;   // 없으면 끝 반복자
+}
+```
+
+- `std::distance(first, last)`: 두 반복자 사이의 거리 <CppRef path="cpp/iterator/distance" />
+
+## 반복자 범주에 따라 구현 고르기
+
+- `std::advance(iter, n)`: 반복자를 n칸 옮김. 모든 반복자에 쓰임 <CppRef path="cpp/iterator/advance" />
+  - 임의 접근 반복자면 그냥 `iter += n`
+  - 그 밖이면 n이 양수인지 음수인지에 따라 `++iter`나 `--iter`를 n번 반복
+- 이런 동작은 **함수 디스패치** (function dispatching)로 구현할 수 있음. 반복자 범주에 따라 요청을 특정 도우미 함수로 보냄
+  - `iterator_traits<Iter>::iterator_category` 타입의 태그 객체를 만들어 넘기면, 오버로드 결정이 그 범주에 맞는 도우미를 고름
+  - 태그 타입들은 상속 관계(예: `random_access_iterator_tag`는 `bidirectional_iterator_tag`에서 파생)라 가장 가까운 것이 골라짐
+- 콘셉트(12장)를 쓰면 도우미 없이 제약이 다른 오버로드로 간단해짐
+
+```cpp
+template <std::input_iterator Iter>
+void moveBy(Iter& it, int n) { while (n-- > 0) { ++it; } }
+
+template <std::bidirectional_iterator Iter>
+void moveBy(Iter& it, int n)
+{
+    while (n > 0) { ++it; --n; }
+    while (n < 0) { --it; ++n; }
+}
+
+template <std::random_access_iterator Iter>
+void moveBy(Iter& it, int n) { it += n; }
+```
+
+- 임의 접근 반복자는 세 콘셉트를 모두 만족하지만, 제약 포섭(12장) 덕분에 가장 구체적인 `random_access_iterator` 판이 골라짐
+
+<RunCode client:load code={itCode} />
+
+- 볼 것
+  - 같은 `show()`가 `vector`의 `const` 반복자, 역방향 반복자, `list` 반복자에 모두 쓰임
+  - `vector` 반복자는 임의 접근 판, `list` 반복자는 양방향 판이 골라짐
+  - `vector`의 반복자는 연속 반복자, `list`는 아님
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 반복자 콘셉트(`std::input_iterator` 등), 연속 반복자 범주 | C++20 | `iterator_traits`의 범주 태그로 함수 디스패치 |
+| `std::cbegin`, `std::crbegin` 등 | C++14 | 멤버 `cbegin()`(C++11) 또는 `const` 참조로 `begin()` |
+| 비멤버 `std::begin`, `std::end` | C++11 | 멤버 `begin()`, C 배열은 포인터 산술 |
+
+- 반복자 범주, `iterator_traits`, `std::advance`, `std::distance`는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨. 범주 태그로 디스패치함
+
+<RunCode client:load code={itCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `end()`는 마지막 원소를 가리킨다?
+  - 마지막 원소의 다음 위치. 역참조하면 안 됨
+- 반복 조건은 `it < end`가 더 안전하다?
+  - `<`는 임의 접근 반복자만 지원. `!=`를 씀
+- 반복자 범주는 클래스 계층이다?
+  - 정식 계층이 아니라 요구되는 기능에 따른 개념상의 계층
+- `std::sort`를 `list`에 쓰면 알기 쉬운 오류가 난다?
+  - 알고리즘 내부에서 헷갈리는 오류. `list`는 멤버 `sort()`를 쓰고, 제약된 `std::ranges::sort`는 더 나은 오류를 냄
+- 제네릭 코드에서 `std::begin(x)`를 쓰면 된다?
+  - `using std::begin;` 뒤에 `begin(x)`로 불러야 사용자 정의 오버로드도 ADL로 찾음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 반복자 | 컨테이너 원소를 훑는 표준 인터페이스. 알고리즘과 컨테이너를 이음 |
+| 범주 | 입력, 출력, 순방향, 양방향, 임의 접근, 연속(C++20) |
+| 반열린 범위 | [begin, end). 빈 범위는 `begin == end` |
+| 변형 | `cbegin`(const), `rbegin`(역방향), `crbegin`(const 역방향) |
+| 비멤버 | `std::begin` 등. 제네릭 코드는 `using std::begin; begin(x);`(ADL) |
+| `iterator_traits` | `value_type`, `difference_type`, `iterator_category`, `pointer`, `reference` |
+| 범주별 구현 | 태그 디스패치(C++98~) 또는 콘셉트 오버로드(C++20) |
+
+## 복습 질문
+
+<details>
+<summary>`std::forward_list`의 반복자로 `--it`를 할 수 있는가? `std::deque`의 반복자로 `it + 5`는?</summary>
+
+- `forward_list`는 순방향 반복자라 `--`가 없음
+- `deque`는 임의 접근 반복자라 `it + 5`가 됨(연속 반복자는 아님)
+
+</details>
+
+<details>
+<summary>빈 `std::vector<int> v`에서 `for (auto it{ v.begin() }; it != v.end(); ++it)`의 본문은 몇 번 실행되는가?</summary>
+
+- 0번. 빈 컨테이너는 `begin() == end()`라 조건이 처음부터 거짓
+
+</details>
+
+<details>
+<summary>반복자 타입 `Iter`가 가리키는 원소의 타입으로 변수를 선언하려면?</summary>
+
+- `typename std::iterator_traits<Iter>::value_type x;`
+- C++20부터는 `std::iter_value_t<Iter> x;`도 됨
+- 초깃값이 있다면 `auto x{ *it };`가 가장 간단함
+
+</details>
