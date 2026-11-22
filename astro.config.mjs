@@ -21,7 +21,10 @@ const parts = [
 	{
 		label: 'Part 1 · C++ 입문',
 		link: '/part1/ch01/01-hello-world/',
-		items: [chapter('1장. C++와 표준 라이브러리 속성 코스', 'part1/ch01')],
+		items: [
+			chapter('1장. C++와 표준 라이브러리 속성 코스', 'part1/ch01'),
+			chapter('2장. 문자열과 문자열 뷰', 'part1/ch02'),
+		],
 	},
 ];
 
