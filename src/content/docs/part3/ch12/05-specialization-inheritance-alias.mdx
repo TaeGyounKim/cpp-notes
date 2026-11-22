@@ -1,0 +1,235 @@
+---
+title: 특수화, 상속, 별칭 템플릿
+description: 특정 타입에만 다른 구현을 주는 클래스 템플릿 전체 특수화, 클래스 템플릿에서 파생하기와 기반 멤버를 this->로 부르는 이유, 상속과 특수화의 차이, 일부 인수만 고정하는 별칭 템플릿을 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import specCode from '../../../../examples/ch12/specialization.cpp?raw';
+import specCpp11Code from '../../../../examples/ch12/specialization-cpp11.cpp?raw';
+
+- 다루는 것: 특정 타입에만 다른 구현 주기, 클래스 템플릿을 상속하기, 템플릿에 다른 이름 붙이기
+- 이 글에서 배우는 요소: 클래스 템플릿 전체 특수화, `template <>`, 클래스 템플릿에서 파생, `this->`, 상속과 특수화 비교, 별칭 템플릿
+
+## 클래스 템플릿 특수화
+
+- 특정 타입에서는 템플릿의 동작이 맞지 않을 때가 있음
+- 예: `Table<const char*>`(C 스타일 문자열)
+  - 칸에는 `std::optional<const char*>`, 즉 **포인터**가 저장됨
+  - 복사 생성자와 대입 연산자는 포인터만 복사하는 얕은 복사(9장)를 함
+  - 원본 문자 배열이 바뀌거나 사라지면 표의 값도 함께 바뀌거나 사라짐
+- `const char*`에는 문자열을 깊게 복사하는 것이 맞음. 가장 쉬운 방법은 `const char*`용 구현을 따로 써서 `std::string`으로 바꿔 저장하는 것
+- 템플릿의 다른 구현을 **템플릿 특수화** (template specialization)라 함 <CppRef path="cpp/language/template_specialization" />
+
+```cpp
+template <>
+class Table<const char*>
+{
+public:
+    explicit Table(std::size_t rows = 2, std::size_t cols = 2);
+    std::optional<std::string>& at(std::size_t row, std::size_t col);
+    // 나머지 생략
+
+private:
+    std::size_t m_cols{ 0 };
+    std::vector<std::optional<std::string>> m_cells;
+};
+```
+
+- 특수화에서는 `T` 같은 타입 매개변수를 쓰지 않음. `const char*`와 `std::string`을 직접 씀
+- 모듈로 나눈다면 원래 템플릿과 특수화를 각각 인터페이스 파티션에 두고, 특수화 파티션이 원래 템플릿의 파티션을 가져옴. 특수화를 쓸 때 원래 템플릿도 보여야 하기 때문
+
+### `template <>`는 왜 필요한가
+
+- `template <> class Table<const char*>`: 이 클래스가 `Table` 클래스 템플릿의 `const char*` 특수화라고 컴파일러에게 알림
+- 그냥 `class Table`이라고 쓰면? 이미 `Table`이라는 클래스 템플릿이 있으므로 컴파일러가 허락하지 않음. 특수화해야만 이름을 다시 쓸 수 있음
+- 특수화의 가장 큰 장점: **쓰는 사람에게 보이지 않음**
+  - `Table<int>`나 `Table<Reading>`을 만들면 원래 템플릿에서 코드가 만들어짐
+  - `Table<const char*>`를 만들면 특수화가 쓰임. 모두 "뒤에서" 일어남
+
+```cpp
+Table<int> scores;                 // 원래 템플릿
+Table<const char*> labels{ 2, 2 }; // const char* 특수화
+labels.at(0, 0) = "온도";
+Table<const char*> copy{ labels }; // std::string을 깊게 복사
+```
+
+### 특수화는 아무것도 물려받지 않음
+
+- 특수화는 파생과 다름. 원래 템플릿의 코드를 하나도 물려받지 않음. **구현 전체를 다시 써야 함**
+- 같은 이름의 멤버 함수나 같은 동작을 제공해야 한다는 규칙도 없음
+  - 위 특수화의 `at()`은 `std::optional<const char*>`가 아니라 `std::optional<std::string>`을 돌려줌
+  - 원래 것과 전혀 관계없는 클래스를 쓸 수도 있지만, 특수화 기능을 남용하는 것이므로 이유 없이 그러지 않음
+- 특수화의 멤버를 클래스 밖에서 정의할 때는 `template <>`를 다시 쓰지 않음
+
+```cpp
+std::optional<std::string>& Table<const char*>::at(std::size_t row,
+                                                   std::size_t col)
+{
+    return m_cells[row * m_cols + col];
+}
+```
+
+- 모든 템플릿 타입 매개변수를 실제 타입으로 바꾼 이 특수화를 **전체 특수화** (full specialization)라 함
+  - 전체 특수화는 더 이상 클래스 템플릿이 아니라 **클래스 정의**
+  - 일부만 바꾸는 **부분 특수화** (partial specialization)는 26장
+
+## 클래스 템플릿에서 파생하기
+
+- 클래스 템플릿을 상속할 수 있음
+  - 템플릿 자체를 상속하면 파생 클래스도 템플릿이어야 함
+  - 특정 인스턴스(예: `Table<int>`)를 상속하면 파생 클래스는 템플릿이 아니어도 됨
+- 예: `Table`에 칸의 값을 다른 칸으로 옮기는 `move()`를 더한 `MovableTable`
+
+```cpp
+template <typename T>
+class MovableTable : public Table<T>
+{
+public:
+    using Table<T>::Table;   // 생성자 상속(10장)
+
+    void move(std::size_t r1, std::size_t c1,
+              std::size_t r2, std::size_t c2);
+};
+```
+
+- `Table`의 기능을 모두 물려받음. `at()` 등을 다시 쓸 필요가 없음
+- 동적으로 할당한 메모리가 없으므로 복사 생성자, 대입 연산자, 소멸자도 필요 없음
+- 기반 클래스가 `Table`이 아니라 `Table<T>`
+  - `MovableTable` 템플릿이 범용 `Table` 템플릿에서 파생하는 것이 아님
+  - `MovableTable`의 각 인스턴스가 **같은 타입의** `Table` 인스턴스에서 파생함
+  - 예: `MovableTable<Reading>`을 만들면 컴파일러가 `Table<Reading>`의 코드도 만듦
+
+### 기반 멤버는 this->로
+
+```cpp
+template <typename T>
+void MovableTable<T>::move(std::size_t r1, std::size_t c1,
+                           std::size_t r2, std::size_t c2)
+{
+    this->at(r2, c2) = std::move(this->at(r1, c1));
+    this->at(r1, c1).reset();          // 옮긴 칸은 비움
+    // 또는 Table<T>::at(r2, c2) = ...
+}
+```
+
+- C++의 이름 찾기 규칙상, **기반 클래스 템플릿**의 데이터 멤버와 멤버 함수는 `this->`나 `Table<T>::`를 붙여 불러야 함
+  - 기반 클래스가 `T`에 따라 달라지므로(특수화가 있을 수도 있음), 템플릿 정의를 처음 검사하는 단계(2편)에서는 기반 클래스의 멤버를 찾지 않음
+  - 그냥 `at(...)`이라 쓰면 GCC가 `at`의 선언을 찾지 못함
+
+```text
+there are no arguments to 'at' that depend on a template parameter,
+so a declaration of 'at' must be available
+```
+
+  - 이 규칙을 엄격히 지키지 않는 컴파일러도 있음
+- `Table`의 멤버 함수를 재정의하려면 `Table` 클래스 템플릿에서 그 함수를 `virtual`로 표시해야 함(10장)
+
+## 상속과 특수화 비교
+
+| | 상속 | 특수화 |
+| --- | --- | --- |
+| 코드 재사용 | 함. 파생 클래스가 기반의 데이터 멤버와 멤버 함수를 모두 가짐 | 안 함. 필요한 코드를 모두 다시 씀 |
+| 이름 재사용 | 안 함. 파생 클래스 이름은 기반과 달라야 함 | 함. 원래 템플릿과 같은 이름이어야 함 |
+| 다형성 | 지원. 파생 객체가 기반 객체를 대신할 수 있음 | 지원 안 함. 타입마다 인스턴스가 서로 다른 타입 |
+
+:::tip
+구현을 확장하거나 다형성이 필요하면 상속을, 특정 타입에 맞게 구현을 바꾸려면 특수화를 쓴다.
+:::
+
+## 별칭 템플릿
+
+- 1장의 **타입 별칭**(`using`)과 `typedef`는 타입에 다른 이름을 붙임: `using Count = int;`
+- 클래스 템플릿에도 붙일 수 있음. 템플릿 인수를 모두 지정하면 보통의 타입 별칭
+
+```cpp
+using Scores = Table<int>;
+using NameToLimit = std::map<std::string, double>;   // typedef로도 됨
+```
+
+- 인수 **일부만** 지정하고 나머지는 템플릿 타입 매개변수로 남길 수도 있음. 이것이 **별칭 템플릿** (alias template) <CppRef path="cpp/language/type_alias" />
+
+```cpp
+template <typename V>
+using ByName = std::map<std::string, V>;
+
+ByName<double> limits;   // std::map<std::string, double>
+ByName<int> counts;      // std::map<std::string, int>
+```
+
+- `typedef`로는 할 수 없는 일
+
+<RunCode client:load code={specCode} />
+
+- 볼 것
+  - `buffer`를 바꿔도 `labels`의 값은 "온도" 그대로. 특수화가 `std::string`으로 복사해 둠
+  - `move()` 뒤에 (0, 0)은 비고 (2, 2)가 42
+  - `ByName<double>`은 `std::map<std::string, double>`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 별칭 템플릿 | C++11 | 클래스 템플릿 안에 `typedef`를 두고 `ByName<V>::type`처럼 씀 |
+| 생성자 상속 | C++11 | 파생 클래스에서 생성자를 다시 쓰고 기반 생성자를 부름 |
+| `std::optional` | C++17 | 값을 그대로 저장 |
+
+- 전체 특수화와 클래스 템플릿 파생은 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={specCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 특수화는 원래 템플릿의 멤버를 물려받는다?
+  - 아무것도 물려받지 않음. 전부 다시 씀
+- 특수화의 멤버 정의 앞에도 `template <>`를 쓴다?
+  - 클래스 정의 앞에만. 멤버 정의 앞에는 쓰지 않음
+- 기반 클래스 템플릿의 멤버는 그냥 이름으로 부른다?
+  - `this->`나 `Table<T>::`를 붙임
+- `MovableTable<T>`는 `Table` 템플릿에서 파생한다?
+  - 각 인스턴스가 같은 타입의 `Table<T>` 인스턴스에서 파생함
+- 별칭 템플릿을 `typedef`로도 만들 수 있다?
+  - 일부 인수를 남기는 것은 `using`으로만
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 전체 특수화 | `template <> class Table<const char*>`. 쓰는 사람에게 보이지 않음 |
+| 특수화의 구현 | 물려받는 것 없음. 멤버 정의 앞에 `template <>` 없음 |
+| 템플릿 파생 | `class MovableTable : public Table<T>` |
+| 기반 멤버 | `this->at()` 또는 `Table<T>::at()` |
+| 상속 vs 특수화 | 확장·다형성은 상속, 타입별 맞춤은 특수화 |
+| 별칭 템플릿 | `template <typename V> using ByName = std::map<std::string, V>;` |
+
+## 복습 질문
+
+<details>
+<summary>`Table<bool>`만 비트 단위로 압축해 저장하고 싶다. 쓰는 쪽 코드를 바꾸지 않으려면?</summary>
+
+- `template <> class Table<bool>`로 전체 특수화를 만듦. 쓰는 쪽은 그대로 `Table<bool>`이라고 씀
+
+</details>
+
+<details>
+<summary>파생 클래스 템플릿에서 기반의 `rows()`를 그냥 `rows()`라고 부르면?</summary>
+
+- 컴파일 오류(GCC는 `rows`의 선언이 있어야 한다고 알림). `this->rows()` 또는 `Table<T>::rows()`로 부름
+
+</details>
+
+<details>
+<summary>값 타입만 바꿔 쓰는 `std::vector<std::pair<std::string, V>>`에 짧은 이름을 붙이려면?</summary>
+
+```cpp
+template <typename V>
+using NamedList = std::vector<std::pair<std::string, V>>;
+```
+
+</details>
