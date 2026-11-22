@@ -1,0 +1,256 @@
+---
+title: 함수 호출 연산자와 역참조 연산자
+description: 객체를 함수처럼 부르게 하는 operator()와 함수 객체의 장점, C++23의 static 함수 호출 연산자, 객체를 포인터처럼 쓰게 하는 operator*와 operator->, 쓸 일이 거의 없는 ->*를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import cdCode from '../../../../examples/ch15/call-and-deref.cpp?raw';
+import cdCpp11Code from '../../../../examples/ch15/call-and-deref-cpp11.cpp?raw';
+
+- 다루는 것: 객체를 함수처럼 부르기, 객체를 포인터처럼 쓰기
+- 이 글에서 배우는 요소: `operator()`, 함수 객체, `static operator()` <Badge text="C++23" />, `operator*`, `operator->`, `operator->*`
+
+## 함수 호출 연산자
+
+- `operator()`를 쓰면 그 클래스의 객체를 함수 포인터처럼 부를 수 있음 <CppRef path="cpp/language/operators" />
+- 함수 호출 연산자를 가진 클래스의 객체를 **함수 객체** (function object), 줄여서 **펑터** (functor)라 함
+
+```cpp
+class Squarer
+{
+public:
+    int operator()(int value) const { return square(value); }   // 함수 호출 연산자
+    int square(int value) const { return value * value; }       // 보통 멤버 함수
+};
+
+Squarer sq;
+int a{ sq(3) };          // 함수 호출 연산자: 9
+int b{ sq.square(a) };   // 보통 멤버 함수: 81
+```
+
+### 왜 함수 객체인가
+
+- 처음에는 이상해 보임. 객체를 함수 포인터처럼 보이게 하는 멤버를 왜 따로 쓰는가? 전역 함수나 보통 멤버 함수를 쓰면 되지 않는가?
+- 보통 멤버 함수보다 나은 점: 함수 객체는 함수 포인터 **흉내**를 낼 수 있음. 다른 함수에 콜백으로 넘길 수 있음(19장)
+- 전역 함수보다 나은 점은 둘
+  - **호출 사이에 상태를 기억함**: 데이터 멤버에 정보를 남김. 예: 부를 때마다 받은 수를 누적해 평균을 냄
+  - **데이터 멤버로 동작을 바꿈**: 예: 인수를 데이터 멤버와 비교하는 함수 객체. 그 멤버를 설정해 원하는 비교로 맞춤
+- 둘 다 전역 변수나 정적 변수로도 할 수 있지만, 함수 객체가 더 깔끔함. 전역·정적 변수는 피해야 하고 멀티스레드 프로그램에서 문제를 일으킬 수 있음
+- 함수 객체의 진짜 장점은 표준 라이브러리 알고리즘과 함께 쓸 때 드러남(20장)
+
+```cpp
+class Above
+{
+public:
+    explicit Above(double limit) : m_limit{ limit } {}
+    bool operator()(double value) const { return value > m_limit; }
+private:
+    double m_limit;
+};
+
+Above hot{ 25.0 };
+hot(26.0);   // true
+```
+
+- 보통 멤버 함수의 오버로딩 규칙을 따르므로 `operator()`를 원하는 만큼 둘 수 있음
+
+```cpp
+int operator()(int value) const;
+double operator()(double value) const;
+```
+
+### static 함수 호출 연산자
+
+- <Badge text="C++23" /> 구현에 `this`가 필요 없으면(정적이 아닌 데이터 멤버나 멤버 함수를 쓰지 않으면) `operator()`를 `static`으로 표시할 수 있음. 4편의 `static operator[]`와 같음
+  - 컴파일러가 `this`를 신경 쓰지 않아도 되어 더 잘 최적화함
+
+```cpp
+struct Squarer
+{
+    static constexpr int operator()(int v) noexcept { return v * v; }
+};
+
+int x{ Squarer::operator()(3) };   // 객체 없이
+int y{ Squarer{}(x) };             // 임시 객체로
+```
+
+- 또 다른 장점: 주소를 쉽게 얻어 보통 함수 포인터처럼 쓸 수 있음: `&Squarer::operator()`
+  - 함수 객체로 동작을 바꾸는 표준 알고리즘(20장)에 `static` 함수 호출 연산자의 주소를 넘기면, 컴파일러가 `this`를 신경 쓰지 않아도 되어 더 빠른 코드를 만들 수 있음
+
+## 역참조 연산자
+
+- 오버로드할 수 있는 역참조 연산자는 셋: `*`, `->`, `->*`
+- 기본 의미
+  - `*`: 포인터를 역참조해 가리키는 값에 바로 접근함
+  - `->`: `*` 역참조 다음에 `.` 멤버 선택을 하는 것의 줄임
+
+```cpp
+Reading* r{ new Reading{} };
+(*r).set(5);   // 역참조 + 멤버 선택
+r->set(5);     // 둘을 한 번에
+```
+
+- 역참조 연산자를 오버로드하면 객체가 포인터처럼 동작함
+  - 주된 쓰임: 스마트 포인터(7장)
+  - 반복자(17장)에도 쓰임. 표준 라이브러리가 많이 씀
+- 간단한 스마트 포인터 클래스 템플릿으로 기본 원리를 봄
+
+:::caution
+C++에는 표준 스마트 포인터 `std::unique_ptr`와 `std::shared_ptr`가 있다. 직접 만들지 말고 그것을 쓴다. 여기의 예는 역참조 연산자를 어떻게 쓰는지 보이기 위한 것이다.
+:::
+
+```cpp
+template <typename T>
+class Owner
+{
+public:
+    explicit Owner(T* ptr) : m_ptr{ ptr } {}
+    ~Owner() { delete m_ptr; }
+    Owner(const Owner&) = delete;              // 복사 금지
+    Owner& operator=(const Owner&) = delete;
+    // 역참조 연산자는 아래에
+private:
+    T* m_ptr{ nullptr };
+};
+```
+
+- 날 포인터 하나를 저장하고, 소멸할 때 가리키는 것을 지우는 것이 전부. 이렇게 쓰고 싶음
+
+```cpp
+Owner<int> n{ new int{ 5 } };
+*n += 1;                         // 스마트 포인터 역참조
+Owner<std::string> s{ new std::string{ "센서" } };
+s->append("-7");                 // 역참조 + 멤버 함수 선택
+```
+
+:::caution
+`operator*`와 `operator->` 중 하나만 구현하는 일은 거의 없어야 한다. 둘을 늘 함께 쓴다. 하나만 있으면 쓰는 쪽이 헷갈린다.
+:::
+
+### `operator*`
+
+- 포인터를 역참조하면 가리키는 메모리에 접근할 수 있어야 함
+  - `int` 같은 기본 타입이면 값을 바로 바꿀 수 있어야 함
+  - 객체면 `.`로 데이터 멤버나 멤버 함수에 접근할 수 있어야 함
+- 그래서 `operator*`는 **참조**를 돌려줌
+
+```cpp
+T& operator*() { return *m_ptr; }
+const T& operator*() const { return *m_ptr; }
+```
+
+- 첨자 연산자처럼 `const` 판과 비 `const` 판을 둠
+
+### `operator->`
+
+- 화살표 연산자는 조금 까다로움
+  - 결과가 객체의 멤버나 멤버 함수여야 하는데, 그러려면 `operator*` 다음에 `operator.`를 구현해야 함
+  - C++은 `operator.` 오버로드를 허용하지 않음. 가능한 모든 멤버 선택을 담는 원형을 하나로 쓸 수 없기 때문
+  - 그래서 `operator->`를 특별하게 다룸
+- `s->append("-7");`을 C++은 이렇게 바꿈
+
+```cpp
+(s.operator->())->append("-7");
+```
+
+- 오버로드한 `operator->`가 돌려준 것에 C++이 **다시 `->`를 적용함**. 그래서 **포인터**를 돌려줘야 함
+
+```cpp
+T* operator->() { return m_ptr; }
+const T* operator->() const { return m_ptr; }
+```
+
+- `operator*`(참조)와 `operator->`(포인터)가 비대칭이라 헷갈리지만 몇 번 보면 익숙해짐
+
+### `operator.*`와 `operator->*`
+
+- C++에서는 클래스의 데이터 멤버와 멤버 함수의 주소를 얻어 그것을 가리키는 포인터를 만들 수 있음
+  - 하지만 정적이 아닌 멤버는 객체 없이 접근할 수 없음. 객체마다 따로 있기 때문
+  - 그래서 그 포인터로 멤버에 접근하려면 객체를 두고 역참조해야 함
+  - 그때 쓰는 것이 `.*`와 `->*`. 문법은 함수 포인터를 다루는 19장에서
+- `operator.*`는 오버로드할 수 없음(`operator.`처럼). `operator->*`는 할 수 있지만 까다롭고, 멤버 포인터를 아는 사람도 적어 들일 가치가 거의 없음
+  - 표준 `std::shared_ptr`도 `operator->*`는 오버로드하지 않음
+
+<RunCode client:load code={cdCode} />
+
+- 볼 것
+  - `avg(t)`는 부를 때마다 이전 값을 기억해 평균을 냄. 인수 없는 `avg()`는 다른 오버로드
+  - `static operator()`의 주소 `&Squarer::operator()`가 보통 함수 포인터처럼 불림
+  - `*n += 1`은 참조를 통해 값을 바꾸고, `s->append()`는 `operator->`가 돌려준 포인터에 다시 `->`가 적용됨
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `static operator()` | C++23 | 보통 멤버 `operator()` |
+| `= delete` | C++11 | 복사 생성자와 대입 연산자를 `private`에 선언만 함 |
+| 표준 스마트 포인터 | C++11 | `std::auto_ptr`(C++17에서 제거) |
+
+- 함수 호출 연산자와 역참조 연산자 오버로딩은 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={cdCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 함수 객체는 전역 함수보다 느리다?
+  - 컴파일러가 인라인으로 처리하기 쉬워 오히려 빠른 경우가 많음. 상태를 깔끔하게 담을 수 있는 것이 장점
+- `operator()`는 하나만 둘 수 있다?
+  - 매개변수가 다르면 여럿 둘 수 있음
+- `operator->`는 참조를 돌려준다?
+  - 포인터(또는 다시 `->`를 쓸 수 있는 객체)를 돌려줌. C++이 그 결과에 `->`를 다시 적용함
+- `operator*`만 있으면 충분하다?
+  - `operator->`도 함께 제공함
+- `operator.`도 오버로드할 수 있다?
+  - 없음. `.`, `.*`는 오버로드할 수 없음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `operator()` | 객체를 함수처럼 부름. 여러 오버로드 가능 |
+| 함수 객체 | 상태를 기억하고, 데이터 멤버로 동작을 바꿈. 콜백으로 넘김 |
+| `static operator()` | `this`가 필요 없을 때(C++23). 주소가 보통 함수 포인터 |
+| `operator*` | 가리키는 것의 참조. `const` 판도 |
+| `operator->` | 포인터를 돌려줌. 결과에 `->`가 다시 적용됨 |
+| `->*` | 오버로드할 수 있지만 거의 하지 않음. `.*`는 불가 |
+
+## 복습 질문
+
+<details>
+<summary>부를 때마다 1, 2, 3, …을 돌려주는 함수 객체를 만들려면?</summary>
+
+```cpp
+class Counter
+{
+public:
+    int operator()() { return ++m_next; }
+private:
+    int m_next{ 0 };
+};
+```
+
+- 상태(`m_next`)를 바꾸므로 `operator()`는 `const`가 아님
+
+</details>
+
+<details>
+<summary>`Owner<Reading> r{ ... }; r->value();`가 실제로 어떻게 풀리는가?</summary>
+
+- `(r.operator->())->value()`. 오버로드한 `operator->`가 `Reading*`을 돌려주고, 그 포인터에 기본 화살표 연산자가 적용됨
+
+</details>
+
+<details>
+<summary>`static operator()`로 바꿀 수 없는 함수 객체는?</summary>
+
+- 데이터 멤버(상태나 설정)를 쓰는 것. 예: `Above`는 `m_limit`를 쓰므로 `this`가 필요함
+
+</details>
