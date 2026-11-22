@@ -65,6 +65,7 @@ const parts = [
 		link: '/part4/ch25/01-allocators-and-algorithms/',
 		items: [
 			chapter('25장. 표준 라이브러리 맞춤과 확장', 'part4/ch25'),
+			chapter('26장. 고급 템플릿', 'part4/ch26'),
 		],
 	},
 ];

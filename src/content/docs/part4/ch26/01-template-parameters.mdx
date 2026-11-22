@@ -1,0 +1,229 @@
+---
+title: 템플릿 매개변수 더 알기
+description: 템플릿 매개변수 세 종류, 저장 컨테이너를 타입 매개변수로 받고 콘셉트로 제약하기, 의존 이름과 typename, 매개변수 기본값, 템플릿 템플릿 매개변수, 앞의 타입을 쓰는 타입이 아닌 매개변수, C++20에서 넓어진 타입이 아닌 매개변수(실수, 구조적 클래스 타입)를 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import tpCode from '../../../../examples/ch26/template-params.cpp?raw';
+import tpCpp11Code from '../../../../examples/ch26/template-params-cpp11.cpp?raw';
+
+- 다루는 것: 12장의 템플릿 기초를 넘어서는 고급 템플릿. 이 장은 템플릿의 힘을 끝까지 알고 싶은 사람을 위한 것
+  - 표준 라이브러리를 이해하거나 간단한 템플릿을 쓰는 정도라면 건너뛰어도 됨
+- 이 글에서 배우는 요소: 템플릿 매개변수 세 종류, 컨테이너 타입 매개변수, `typename`과 의존 이름, 템플릿 템플릿 매개변수, 타입이 아닌 매개변수의 확장
+
+## 템플릿 매개변수 세 종류
+
+- 템플릿 매개변수는 세 종류 <CppRef path="cpp/language/template_parameters" />
+
+| 종류 | 예 | 12장 |
+| --- | --- | --- |
+| **템플릿 타입 매개변수** (template type parameter) | `template <typename T>` | 다룸 |
+| **타입이 아닌 템플릿 매개변수** (non-type template parameter) | `template <std::size_t N>` | 다룸 |
+| **템플릿 템플릿 매개변수** (template template parameter) | `template <template <typename> class C>` | 이 글 |
+
+- 앞의 두 종류에도 12장에서 다루지 않은 까다로운 점이 있음
+
+## 타입 매개변수로 컨테이너 받기
+
+- 타입 매개변수는 몇 개든 둘 수 있음
+- 12장의 `Table<T>`는 칸을 `vector`에 담음. 사용자가 `deque`를 고를 수 있게 하려면 **저장 컨테이너 타입**을 두 번째 매개변수로 받음
+- `Table`이 컨테이너에 요구하는 것: 임의 접근, `resize()`, `value_type` 별칭. 이를 콘셉트(12장)로 표현
+
+```cpp
+template <typename C>
+concept TableStorage = std::ranges::random_access_range<C> && requires(C c) {
+    typename C::value_type;
+    c.resize(1);
+};
+
+template <typename T, TableStorage Storage>
+class Table {
+public:
+    typename Storage::value_type& at(std::size_t r, std::size_t c);
+private:
+    Storage m_cells;
+    // ...
+};
+```
+
+- 이제 클래스 이름은 `Table<T>`가 아니라 `Table<T, Storage>`. 클래스 밖 멤버 정의의 머리도 바뀜
+- 기술적으로는 `T`를 쓰지 않으므로 빼도 되지만, 다음 절에서 쓰려고 남겨 둠
+
+```cpp
+Table<int, std::vector<std::optional<int>>> a;
+Table<int, std::deque<std::optional<int>>> b;
+// Table<int, double> bad;   // 오류: double은 TableStorage를 만족하지 않음
+```
+
+### 의존 이름과 typename
+
+- `Storage::value_type`은 템플릿 매개변수 `Storage`에 **의존하는 이름** (dependent name) <CppRef path="cpp/language/dependent_name" />
+- 컴파일러는 보통 의존 이름을 **타입이 아니라고** 봄. 그러면 알기 어려운 오류가 남
+- 타입이라고 알려 주려면 앞에 `typename`: `typename Storage::value_type`
+  - 그래서 `at()`의 반환 타입이 `typename Storage::value_type&`
+
+:::note
+C++20부터는 반환 타입, 별칭 선언의 오른쪽처럼 타입만 올 수 있는 자리에서는 `typename`을 생략해도 된다. 함수 본문 안의 변수 선언처럼 모호한 자리에서는 여전히 필요하다.
+:::
+
+### 매개변수 기본값
+
+- 함수 매개변수처럼 템플릿 매개변수에도 기본값을 줌
+- 기본값에서 **앞의 매개변수** `T`를 쓸 수 있음
+
+```cpp
+template <typename T, TableStorage Storage = std::vector<std::optional<T>>>
+class Table { /* ... */ };
+
+Table<int> a;                                   // vector<optional<int>>
+Table<int, std::deque<std::optional<int>>> b;
+```
+
+- 클래스 밖 멤버 정의의 템플릿 머리에서는 기본값을 **다시 쓰지 않음**
+- 표준 라이브러리도 이 방식: `stack`, `queue`, `priority_queue`, `flat_set`, `flat_map` 등이 기본값 있는 `Container` 매개변수로 바탕 컨테이너를 받음(18장)
+
+## 템플릿 템플릿 매개변수
+
+- 위 방식의 불편함: `Table<int, std::vector<std::optional<int>>>`에서 `int`를 두 번 씀
+  - 실수로 `Table<int, std::vector<std::optional<double>>>`이라고 써도 막을 수 없음
+- 원하는 것: `Table<int, std::vector>`. 원소 타입은 `Table`이 알아서 채움
+  - 그러나 `std::vector` 혼자는 **타입이 아니라 템플릿**이라 타입 매개변수에 넘길 수 없음
+- 템플릿을 인수로 받으려면 **템플릿 템플릿 매개변수**
+  - 함수 포인터 매개변수가 반환 타입과 매개변수 타입을 다 적듯, 받을 템플릿의 매개변수 목록을 다 적음
+- `vector`, `deque`의 템플릿 매개변수 목록은 대략 이렇게 생김
+
+```cpp
+template <typename E, typename Allocator = std::allocator<E>>
+class vector;
+```
+
+- 이 선언을 복사해 클래스 이름 자리에 매개변수 이름을 넣으면 됨
+
+```cpp
+template <typename T,
+          template <typename E, typename A = std::allocator<E>> class Storage
+              = std::vector>
+class Table2 {
+    // ...
+private:
+    Storage<std::optional<T>> m_cells;   // 원소 타입을 여기서 채움
+};
+
+Table2<int> c;                 // vector
+Table2<int, std::deque> d;     // deque
+```
+
+- 일반 문법: `template <..., template <매개변수들> class 이름, ...>`. `class` 대신 `typename`도 됨 <Badge text="C++17" />
+- 기본값은 `std::vector<T>`가 아니라 템플릿 `std::vector`
+- 코드에서 `Storage` 혼자가 아니라 `Storage<std::optional<T>>`로 씀
+
+:::caution
+문법이 꽤 복잡하다. 되도록 템플릿 템플릿 매개변수는 피한다. 표준 라이브러리도 이 기능을 쓰지 않는다.
+:::
+
+## 타입이 아닌 매개변수 더 알기
+
+- 앞의 타입 매개변수를 타입이 아닌 매개변수의 **타입**으로 쓸 수 있음
+- 예: 모든 칸을 채울 기본값. 기본값 `T{}`(0 초기화)
+
+```cpp
+template <typename T, T Fill = T{}>
+class FilledTable {
+public:
+    explicit FilledTable(std::size_t n = 4) : m_cells(n, Fill) {}
+    // ...
+};
+
+FilledTable<int> zeros;        // 0으로 채움
+FilledTable<int, -1> minus;    // -1로 채움
+```
+
+- 값은 **컴파일 시간**에 알아야 함. 실행 중에 만든 객체 `cell`로 `FilledTable<Cell, cell>`은 안 됨
+- 어떤 타입이 타입이 아닌 매개변수가 될 수 있나
+  - C++20 전: 정수 계열 타입, 열거형, 포인터, 참조(와 `std::nullptr_t`)
+  - C++20부터: 실수 타입(`double` 등)과 일부 클래스 타입도 됨 <Badge text="C++20" />
+- 클래스 타입은 **구조적 타입** (structural type)이어야 함. 제약이 많음
+  - 리터럴 타입이고, 모든 기반 클래스와 비정적 데이터 멤버가 `public`이며 `mutable`이 아니고, 그것들도 구조적 타입
+  - 예: `public` 정수 멤버만 가진 단순한 구조체
+
+```cpp
+struct Range { int lo; int hi; };
+template <double Scale, Range R>
+int scaled(int v);
+
+scaled<1.5, Range{ 0, 100 }>(90);   // 135를 100으로 잘라 냄
+```
+
+<RunCode client:load code={tpCode} />
+
+- 볼 것
+  - `Table<int>`는 기본 `vector`, 두 번째 인수로 `deque`를 고름
+  - `Table2<int, std::deque>`: 템플릿만 넘기고 원소 타입은 `Table2`가 채움
+  - `FilledTable<char, '#'>`: 타입이 아닌 매개변수의 타입이 첫 매개변수 `char`
+  - `double`과 구조체를 타입이 아닌 매개변수로(C++20)
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 콘셉트, 실수·구조적 클래스 타입의 타입이 아닌 매개변수, 일부 `typename` 생략 | C++20 | 제약 없는 템플릿 또는 `static_assert`, 정수 계열만 |
+| 템플릿 템플릿 매개변수에 `typename` | C++17 | `class`만 |
+| `optional` | C++17 | 기본값이나 플래그 |
+| 템플릿 템플릿 매개변수, 클래스 템플릿 매개변수 기본값 | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={tpCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `Storage::value_type&`라고만 써도 컴파일러가 타입으로 안다?
+  - 의존 이름은 타입이 아니라고 봄. `typename`을 붙임(C++20에서 일부 자리는 생략 가능)
+- 템플릿 템플릿 매개변수에 `std::vector<int>`를 넘긴다?
+  - 템플릿 `std::vector`를 넘김. 원소 타입은 받는 쪽이 채움
+- 클래스 밖 멤버 정의에도 기본값을 다시 적는다?
+  - 적지 않음. 선언에만
+- 타입이 아닌 매개변수에 지역 변수 값을 넘긴다?
+  - 컴파일 시간 상수만 됨
+- C++20이면 아무 클래스나 타입이 아닌 매개변수가 된다?
+  - 구조적 타입만. `private` 멤버나 `std::string` 멤버가 있으면 안 됨
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 세 종류 | 타입, 타입이 아닌, 템플릿 템플릿 매개변수 |
+| 컨테이너 매개변수 | 콘셉트로 요건을 제약, 기본값 `vector<optional<T>>` |
+| `typename` | 의존 이름이 타입임을 알림 |
+| 템플릿 템플릿 | `template <typename E, typename A = std::allocator<E>> class C`. 되도록 피함 |
+| 타입이 아닌 | 앞의 `T`를 타입으로, 컴파일 시간 값. C++20부터 실수, 구조적 클래스 |
+
+## 복습 질문
+
+<details>
+<summary>`template <typename C> void f(const C& c)` 안에서 `C::size_type n{ c.size() };`가 컴파일되지 않는 이유는?</summary>
+
+- `C::size_type`은 의존 이름이라 타입으로 해석되지 않음. `typename C::size_type n{ c.size() };`
+
+</details>
+
+<details>
+<summary>`template <typename T, std::size_t N = 8> class Ring`에서 `Ring<int>`와 `Ring<int, 8>`은 같은 타입인가?</summary>
+
+- 같은 타입. 기본값을 쓴 것과 같은 값을 적은 것은 같은 인수 목록
+
+</details>
+
+<details>
+<summary>표준 라이브러리는 `stack`의 바탕 컨테이너를 왜 템플릿 템플릿 매개변수가 아니라 타입 매개변수(`std::stack<T, Container = std::deque<T>>`)로 받는가?</summary>
+
+- 할당자 매개변수 수 등 템플릿의 모양이 조금만 달라도 템플릿 템플릿 매개변수에 맞지 않아 유연성이 떨어짐. 타입 매개변수는 원소 타입이 정해진 어떤 컨테이너든 받을 수 있음(원소 타입 중복은 감수함)
+
+</details>
