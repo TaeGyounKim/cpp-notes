@@ -1,0 +1,255 @@
+---
+title: 난수 엔진과 난수 만들기
+description: C 스타일 srand·rand의 문제, 난수 라이브러리의 세 구성 요소(엔진, 엔진 어댑터, 분포), random_device와 의사 난수 엔진 셋, 엔진 어댑터, 미리 정의된 엔진, 씨앗 주기와 분포로 난수 만들기, 생성기를 함수에 넘기는 법과 스레드 주의점을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import enCode from '../../../../examples/ch23/engines.cpp?raw';
+import enCpp11Code from '../../../../examples/ch23/engines-cpp11.cpp?raw';
+
+- 다루는 것: 좋은 품질의 난수를 표준 라이브러리로 만드는 법. 난수를 만드는 수학 공식은 다루지 않음
+- 이 글에서 배우는 요소: `rand()`의 문제, `random_device`, 의사 난수 엔진, 엔진 어댑터, `mt19937`, 씨앗, `uniform_int_distribution`
+
+## 난수 라이브러리의 구성 <Badge text="C++11" />
+
+- `<random>`, `std` 네임스페이스 <CppRef path="cpp/numeric/random" />
+- 세 구성 요소
+
+| 구성 요소 | 하는 일 |
+| --- | --- |
+| **엔진** (engine) | 실제 난수를 만들고, 다음 난수를 만들기 위한 **상태**를 저장함 |
+| **엔진 어댑터** (engine adapter) | 연결된 엔진의 결과를 바꿈 |
+| **분포** (distribution) | 만들어지는 난수의 범위와, 그 범위 안에서 수학적으로 어떻게 퍼지는지를 정함 |
+
+## C 스타일 난수와 그 문제
+
+- C++11 이전에는 C의 `srand()`와 `rand()`(`<cstdlib>`)를 씀 <CppRef path="cpp/numeric/random/rand" />
+  - `srand(씨앗)`: 프로그램에서 한 번 불러 생성기를 초기화. **씨앗 주기** (seeding)
+  - `rand()`: 0부터 `RAND_MAX`까지의 난수
+- **씨앗** (seed)이 같으면 매번 같은 순서열이 나옴. 그래서 보통 현재 시각 `time(nullptr)`(`<ctime>`)을 씨앗으로 씀
+
+```cpp
+std::srand(static_cast<unsigned>(std::time(nullptr)));
+int r{ std::rand() };
+int die{ std::rand() % 6 + 1 };   // 1부터 6: 권하지 않음
+```
+
+- 문제
+  - `RAND_MAX`는 최소 32,767로만 정해져 있음. 그보다 큰 난수를 만들 수 없음
+    - GCC처럼 `RAND_MAX`가 `int`의 최댓값(2,147,483,647)인 곳에서는 `max + 1 - min` 계산이 넘칠 수 있어 부호 없는 `long`으로 계산해야 함
+  - 낮은 자리 비트가 그다지 무작위적이지 않은 구현이 많음. `% 6`처럼 작은 범위로 줄이면 품질이 나쁨
+  - 분포를 바꿀 수 없는 등 유연하지 않음
+- 결론: `srand()`와 `rand()`는 그만 쓰고 `<random>`을 씀
+
+:::note
+소프트웨어로 만든 난수는 진짜 무작위가 될 수 없다. 수학 공식으로 무작위처럼 보이게 할 뿐이라서 **의사 난수 생성기** (pseudorandom number generator, PRNG)라고 부른다.
+:::
+
+## 난수 엔진
+
+- 엔진 넷
+
+| 엔진 | 특징 |
+| --- | --- |
+| `random_device` | 소프트웨어 생성기가 아님. 하드웨어 장치로 진짜 비결정적 난수 |
+| `linear_congruential_engine` | 상태가 정수 하나로 가장 작음. 주기가 최대 2의 64제곱이지만 보통 더 짧아 품질이 낮음 |
+| `mersenne_twister_engine` | 셋 중 품질이 가장 좋고 가장 빠른 편. 상태가 큼 |
+| `subtract_with_carry_engine` | 상태가 약 100바이트. 메르센 트위스터보다 품질이 낮고 느림 |
+
+### random_device
+
+- 하드웨어 장치로 물리 법칙을 이용해 만든 난수 <CppRef path="cpp/numeric/random/random_device" />
+  - 예: 방사성 동위원소의 붕괴를 세거나, 역방향 바이어스 다이오드의 잡음을 재는 방식
+  - 그런 장치가 없으면 소프트웨어 알고리즘을 써도 됨(라이브러리가 정함). 요즘 컴퓨터는 대부분 제대로 지원함
+- 품질은 **엔트로피** (entropy)로 잼
+  - `entropy()`: 소프트웨어 의사 난수면 `0.0`, 하드웨어면 그 엔트로피의 추정값(0이 아닌 값)
+- `min()`, `max()`: 나오는 값의 범위. 함수 호출 연산자로 난수를 얻음
+
+```cpp
+std::random_device rnd;
+std::println("{} [{}, {}] {}", rnd.entropy(), rnd.min(), rnd.max(), rnd());
+```
+
+- 의사 난수 엔진보다 **훨씬 느림**. 난수가 많이 필요하면 의사 난수 엔진을 쓰고, 그 씨앗만 `random_device`로 만듦
+
+### 의사 난수 엔진 셋
+
+- **선형 합동 엔진** (linear congruential engine) <CppRef path="cpp/numeric/random/linear_congruential_engine" />
+  - 상태: 마지막에 만든 난수(아직 없으면 씨앗) 정수 하나
+  - 주기는 알고리즘 매개변수에 달렸고 짧은 편이라 높은 품질이 필요하면 쓰지 않음
+- **메르센 트위스터** (Mersenne twister) <CppRef path="cpp/numeric/random/mersenne_twister_engine" />
+  - 주기가 **메르센 소수**(2의 거듭제곱보다 1 작은 소수)라 선형 합동보다 훨씬 김
+  - 예: `mt19937`은 주기가 2의 19937제곱 - 1이고, 상태는 정수 625개(약 2.5KB)
+- **빼기와 받아내림 엔진** (subtract with carry engine) <CppRef path="cpp/numeric/random/subtract_with_carry_engine" />
+  - 상태 약 100바이트. 품질과 속도 모두 메르센 트위스터에 못 미침
+- 의사 난수 엔진을 직접 만들려면 수학적 매개변수를 많이 정해야 함
+  - `mersenne_twister_engine`은 템플릿 매개변수가 14개. 매개변수 선택이 품질을 크게 좌우함
+  - 전문가가 아니면 매개변수를 바꾸지 말고 **미리 정의된 별칭**(`mt19937` 등)을 씀
+
+## 엔진 어댑터
+
+- **기반 엔진** (base engine)의 결과를 바꿈. 어댑터 패턴의 한 예
+- 어댑터 셋
+
+| 어댑터 | 하는 일 |
+| --- | --- |
+| `discard_block_engine<Engine, p, r>` | 기반 엔진으로 p개를 만들고 그중 p - r개를 버린 뒤 r개를 돌려줌 <CppRef path="cpp/numeric/random/discard_block_engine" /> |
+| `independent_bits_engine<Engine, w, UIntT>` | 기반 엔진의 난수 여러 개를 합쳐 w비트 난수를 만듦 <CppRef path="cpp/numeric/random/independent_bits_engine" /> |
+| `shuffle_order_engine<Engine, k>` | 기반 엔진과 같은 난수를 다른 순서로. 크기 k인 내부 표에서 무작위로 하나 꺼내고 그 자리를 새 난수로 채움 <CppRef path="cpp/numeric/random/shuffle_order_engine" /> |
+
+## 미리 정의된 엔진
+
+- 매개변수를 직접 정하지 말고 표준이 정의한 것을 씀. 템플릿 인수가 복잡하지만 몰라도 쓸 수 있음
+
+| 미리 정의된 생성기 | 클래스 템플릿 |
+| --- | --- |
+| `minstd_rand0`, `minstd_rand` | `linear_congruential_engine` |
+| `mt19937`, `mt19937_64` | `mersenne_twister_engine` |
+| `ranlux24_base`, `ranlux48_base` | `subtract_with_carry_engine` |
+| `ranlux24`, `ranlux48` | `discard_block_engine` |
+| `knuth_b` | `shuffle_order_engine` |
+| `default_random_engine` | 구현이 정함 |
+
+- 무엇을 쓸지 모르겠으면 `mt19937`(32비트)이나 `mt19937_64`(64비트)
+- `default_random_engine`은 컴파일러마다 달라 결과를 재현하기 어려움
+
+## 난수 만들기
+
+- 순서: 엔진 만들기 → (소프트웨어 엔진이면) 씨앗 주기 → 분포 정하기 → 분포에 엔진을 넘겨 호출
+- 씨앗: `random_device`로 만드는 것을 권함
+
+```cpp
+std::random_device seeder;
+std::mt19937 engine{ seeder() };
+```
+
+- `random_device`의 엔트로피가 제대로인지 확신할 수 없으면 시각을 대신 씀
+
+```cpp
+std::random_device seeder;
+const auto seed{ seeder.entropy() ? seeder() : std::time(nullptr) };
+std::mt19937 engine{ static_cast<std::mt19937::result_type>(seed) };
+```
+
+- **분포**: 범위 안에서 수가 어떻게 퍼지는지 정하는 수학 공식(2편)
+  - 1부터 99까지 고르게: `uniform_int_distribution<int> dist{ 1, 99 };` <CppRef path="cpp/numeric/random/uniform_int_distribution" />
+- 난수 하나: `dist(engine)`. 분포의 함수 호출 연산자에 엔진을 넘김
+
+### 엔진과 분포를 하나로 묶기
+
+- 매번 엔진과 분포를 함께 써야 하므로, 인수 없이 부를 수 있게 묶으면 편함
+- 람다로 묶음. 엔진을 **참조로** 캡처
+
+```cpp
+auto roll{ [&] { return dist(engine); } };
+std::vector<int> values(10);
+std::ranges::generate(values, roll);
+```
+
+- `std::bind(dist, engine)`(19장)으로도 묶을 수 있지만, `bind`는 인수를 **복사**함
+  - 묶인 복사본 엔진이 진행되고, 원래 `engine`은 그대로. 원본과 같은 순서열이 따로 나옴
+  - 원본을 쓰려면 `std::bind(dist, std::ref(engine))`
+- `generate()`는 원소를 덮어쓰고 새로 넣지 않음(20장). `vector`를 먼저 필요한 크기로 만듦
+
+### 생성기를 함수에 넘기기
+
+- 생성기의 정확한 타입을 몰라도 넘길 수 있음
+  - `std::function<int()>` 매개변수
+  - 함수 템플릿(`template <std::invocable G>`), 또는 축약 함수 템플릿(`auto&`)
+
+```cpp
+void fill(std::vector<int>& values, const std::function<int()>& gen)
+{
+    std::ranges::generate(values, gen);
+}
+
+void fill2(std::vector<int>& values, auto& gen)   // C++20 축약 템플릿
+{
+    std::ranges::generate(values, gen);
+}
+```
+
+:::caution
+난수 생성기는 스레드 안전하지 않다. 여러 스레드에서 난수가 필요하면 생성기 하나를 공유하지 말고 스레드마다 하나씩 만든다(멀티스레딩은 27장).
+:::
+
+<RunCode client:load code={enCode} />
+
+- 볼 것
+  - `random_device`의 엔트로피와 범위
+  - `rollDice`가 엔진을 참조로 받아, 두 번 부르면 다른 값이 이어서 나옴
+  - 같은 씨앗 2026을 준 두 엔진은 같은 순서열
+  - `bind`로 묶은 복사본과 원본이 같은 값을 냄. `std::ref`로 묶으면 원본이 진행됨
+  - 씨앗을 주지 않은 `mt19937`의 첫 값은 표준이 정한 기본 씨앗 때문에 어디서나 `3499211612`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 축약 함수 템플릿, `std::invocable`, `ranges::generate` | C++20 | 템플릿, `std::generate` |
+| `<random>`의 엔진, 어댑터, 분포 | C++11 | `srand()`, `rand()` |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={enCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `rand() % 6 + 1`이면 충분하다?
+  - 낮은 비트 품질과 치우침 문제. `uniform_int_distribution`
+- 난수가 필요할 때마다 `random_device`를 쓴다?
+  - 느림. 씨앗만 만들고 의사 난수 엔진을 씀
+- 매번 엔진을 새로 만들어 쓴다?
+  - 엔진은 상태를 가짐. 하나를 만들어 참조로 넘겨 계속 씀
+- `std::bind(dist, engine)`는 원래 엔진을 쓴다?
+  - 복사함. `std::ref(engine)`
+- 엔진 하나를 여러 스레드가 함께 쓴다?
+  - 스레드 안전하지 않음. 스레드마다 하나
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `srand`/`rand` | 범위, 품질, 유연성 문제. 쓰지 않음 |
+| `random_device` | 하드웨어 난수. 느림. 씨앗용. `entropy()` |
+| 의사 난수 엔진 | 선형 합동, 메르센 트위스터, 빼기와 받아내림 |
+| 어댑터 | `discard_block`, `independent_bits`, `shuffle_order` |
+| 미리 정의 | `mt19937`, `mt19937_64` 등 |
+| 만들기 | `engine{ seeder() }`, `dist(engine)`, 람다로 묶기 |
+
+## 복습 질문
+
+<details>
+<summary>테스트에서 매번 같은 "무작위" 결과가 나오게 하려면?</summary>
+
+- 고정된 씨앗으로 엔진을 만듦: `std::mt19937 engine{ 42 };`
+- 분포의 구현은 표준 라이브러리마다 다를 수 있음. 엔진의 출력은 같아도 분포를 거친 값은 다른 컴파일러에서 달라질 수 있음
+
+</details>
+
+<details>
+<summary>0부터 n - 1 사이의 인덱스를 무작위로 고르는 함수를 쓰려면?</summary>
+
+```cpp
+std::size_t pick(std::mt19937& engine, std::size_t n)
+{
+    std::uniform_int_distribution<std::size_t> dist{ 0, n - 1 };
+    return dist(engine);
+}
+```
+
+</details>
+
+<details>
+<summary>64비트 난수가 필요하면 어떤 엔진을 쓰는가?</summary>
+
+- `std::mt19937_64`. 결과 타입이 64비트 부호 없는 정수
+
+</details>

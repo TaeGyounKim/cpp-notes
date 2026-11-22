@@ -56,6 +56,7 @@ const parts = [
 			chapter('20장. 표준 라이브러리 알고리즘', 'part3/ch20'),
 			chapter('21장. 문자열 지역화와 정규식', 'part3/ch21'),
 			chapter('22장. 날짜와 시간 도구', 'part3/ch22'),
+			chapter('23장. 난수 기능', 'part3/ch23'),
 		],
 	},
 ];
