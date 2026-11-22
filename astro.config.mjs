@@ -49,6 +49,7 @@ const parts = [
 			chapter('13장. C++ 입출력 자세히 보기', 'part3/ch13'),
 			chapter('14장. 오류 처리', 'part3/ch14'),
 			chapter('15장. 연산자 오버로딩', 'part3/ch15'),
+			chapter('16장. C++ 표준 라이브러리 둘러보기', 'part3/ch16'),
 		],
 	},
 ];
