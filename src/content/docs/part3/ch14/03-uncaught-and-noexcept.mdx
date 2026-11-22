@@ -1,0 +1,212 @@
+---
+title: 잡지 않은 예외와 noexcept
+description: 아무도 잡지 않은 예외가 프로그램을 끝내는 과정, terminate와 set_terminate, abort·_Exit·exit의 차이, 예외를 던지지 않는다고 밝히는 noexcept 지정자와 noexcept 연산자, 사라진 throw 목록을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import neCode from '../../../../examples/ch14/noexcept.cpp?raw';
+import neCpp11Code from '../../../../examples/ch14/noexcept-cpp11.cpp?raw';
+
+- 다루는 것: 예외를 아무도 잡지 않으면 어떻게 되는가, 그리고 함수가 예외를 던지지 않는다고 약속하는 법
+- 이 글에서 배우는 요소: 잡지 않은 예외, `std::terminate()`, `std::set_terminate()`, `std::abort()`, `std::_Exit()`, `std::exit()`, `noexcept` 지정자, `noexcept(식)` 지정자, `noexcept` 연산자, throw 목록
+
+## 잡지 않은 예외
+
+- 던진 예외를 어디서도 잡지 않으면 **프로그램이 끝남**
+- `main()` 호출을 감싼 `try`/`catch`가 있다고 생각하면 됨. 처리되지 않은 예외를 모두 잡아 다음처럼 동작함(의사 코드)
+
+```cpp
+try {
+    main(argc, argv);
+} catch (...) {
+    // 오류 메시지를 내고 프로그램을 끝냄
+}
+// 정상 종료 코드
+```
+
+- 보통 원하는 동작이 아님. 예외의 목적은 바람직하지 않거나 예상치 못한 상황을 프로그램이 처리하고 바로잡을 기회를 주는 것
+
+:::caution
+프로그램에서 던지는 예외는 되도록 모두 잡아서 처리한다.
+:::
+
+### terminate와 set_terminate
+
+- 잡지 않은 예외를 만나면 프로그램은 내장 함수 `std::terminate()`를 부름. 이 함수는 기본으로 `<cstdlib>`의 `std::abort()`를 불러 프로그램을 죽임 <CppRef path="cpp/error/terminate" />
+- `std::set_terminate()`로 자기 **종료 처리기** (terminate handler)를 정할 수 있음 <CppRef path="cpp/error/set_terminate" />
+  - 인수가 없고 아무것도 돌려주지 않는 함수의 포인터를 넘김
+  - `terminate()`, `set_terminate()`, `terminate_handler`는 모두 `<exception>`에 선언됨
+
+```cpp
+try {
+    main(argc, argv);
+} catch (...) {
+    if (terminate_handler != nullptr) {
+        terminate_handler();
+    } else {
+        terminate();
+    }
+}
+// 정상 종료 코드
+```
+
+- 너무 기대하지는 말 것: 종료 처리기도 결국 **프로그램을 끝내야** 함. 오류를 무시하고 계속할 수 없음
+- 프로그램을 끝내는 함수(모두 `<cstdlib>`)
+
+| 함수 | 소멸자 등 정리 | 운영체제에 돌려줄 값 |
+| --- | --- | --- |
+| `std::abort()` | 하지 않음 | 받지 않음(비정상 종료) |
+| `std::_Exit(코드)` <Badge text="C++11" /> | 하지 않음 | 정수. `0`이나 `EXIT_SUCCESS`면 오류 없이 끝났다는 뜻 |
+| `std::exit(코드)` | 함(정적 객체의 소멸자 등) | 정수 |
+
+- 종료 처리기에서는 `abort()`나 `_Exit()`를 씀. `exit()`를 부르는 것은 권하지 않음
+- 쓸모: 끝내기 전에 도움이 되는 오류 메시지를 출력함
+
+```cpp
+[[noreturn]] void onTerminate()
+{
+    std::println(std::cerr, "잡지 않은 예외!");
+    std::_Exit(1);
+}
+
+int main()
+{
+    std::set_terminate(onTerminate);
+    std::vector<int> numbers{ readNumbers("numbers.txt") };   // 잡지 않음
+}
+```
+
+- `[[noreturn]]`(1장): 이 함수는 호출한 곳으로 돌아가지 않는다는 뜻
+- `set_terminate()`는 새 처리기를 정하면서 **이전 처리기**를 돌려줌
+  - 종료 처리기는 프로그램 전체에 적용되므로, 새 처리기가 필요한 코드가 끝나면 이전 것으로 되돌리는 것이 좋은 습관
+  - 프로그램 전체에 필요하다면 되돌릴 필요가 없음
+- `set_terminate()`를 아는 것은 중요하지만 좋은 예외 처리 방법은 아님. 예외를 하나하나 잡아 정확하게 처리하기를 권함
+
+:::note
+상용 소프트웨어에서는 종료 처리기에서 흔히 프로세스를 끝내기 전에 **크래시 덤프**를 남긴다. 잡지 않은 예외가 났을 때의 호출 스택과 지역 변수 등을 담아, 나중에 디버거로 열어 원인을 찾는다. 크래시 덤프를 쓰는 방법은 플랫폼마다 달라 여기서는 다루지 않는다.
+:::
+
+## noexcept 지정자
+
+- 기본으로 함수는 어떤 예외든 던질 수 있음
+- **`noexcept` 지정자** <Badge text="C++11" />: 함수가 예외를 던지지 않는다고 밝힘 <CppRef path="cpp/language/noexcept_spec" />
+
+```cpp
+void printValues(const std::vector<int>& values) noexcept;
+```
+
+- `noexcept`로 표시한 함수는 예외를 던지면 안 됨
+  - 그래도 던지면 C++은 바로 `std::terminate()`를 불러 프로그램을 끝냄. 바깥에 `try`/`catch`가 있어도 잡을 기회가 없음
+  - GCC는 `noexcept` 함수 안의 `throw`에 경고(`-Wterminate`)를 냄. `throw`가 언제나 `terminate`를 부른다는 내용
+- 가상 함수 재정의
+  - 기반 클래스의 판이 `noexcept`가 아니어도, 파생 클래스에서 재정의한 판은 `noexcept`로 표시해도 됨
+  - 반대는 안 됨. GCC: `looser exception specification on overriding virtual function`
+
+### noexcept(식) 지정자
+
+- `noexcept(식)`: 식이 `true`일 때만 함수를 `noexcept`로 표시함
+  - `noexcept`는 `noexcept(true)`와 같음
+  - `noexcept(false)`는 그 반대. 어떤 예외든 던질 수 있음(기본값과 같음)
+
+### noexcept 연산자
+
+- `noexcept(식)` **연산자**: 주어진 식이 `noexcept`이면 `true`. 컴파일할 때 계산함 <CppRef path="cpp/language/noexcept" />
+- 지정자와 모양이 같으니 주의. 함수 선언 뒤에 오면 지정자, 값으로 쓰이면 연산자
+
+```cpp
+void f1() noexcept {}
+void f2() noexcept(false) {}
+void f3() noexcept(noexcept(f1())) {}   // 지정자 안에 연산자
+void f4() noexcept(noexcept(f2())) {}
+
+std::println("{} {} {} {}", noexcept(f1()), noexcept(f2()),
+             noexcept(f3()), noexcept(f4()));   // true false true false
+```
+
+- `f1()`은 `noexcept`로 표시했으므로 `true`
+- `f2()`는 `noexcept(false)`로 표시했으므로 `false`
+- `f3()`은 `f1()`이 `noexcept`일 때만 `noexcept`. `f1()`이 그러므로 `true`
+- `f4()`는 `f2()`가 `noexcept`일 때만 `noexcept`. 그렇지 않으므로 `false`
+
+<RunCode client:load code={neCode} />
+
+- 볼 것
+  - 컴파일러 창에 `-Wterminate` 경고가 보임. 일부러 둔 것
+  - `process(-1)`은 `try` 안에서 불렀지만 `catch (...)`도 잡지 못하고 종료 처리기가 불림. 종료 코드 3
+  - 종료 처리기의 메시지는 표준 오류로 나감
+
+## throw 목록
+
+- 예전 C++은 함수가 던질 예외를 나열할 수 있었음. **throw 목록** (throw list) 또는 **예외 명세** (exception specification)라 함. 예: `void f() throw(int);`
+
+:::danger
+C++11에서 `noexcept`와 `throw()`를 뺀 예외 명세가 권장되지 않게 되었고, C++17에서 제거되었다(GCC: `ISO C++17 does not allow dynamic exception specifications`). `throw()`는 `noexcept`와 같은 뜻이었지만 C++20에서 이것도 제거되었다. 새 코드에서는 `noexcept`만 쓴다.
+:::
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `noexcept` 지정자·연산자 | C++11 | `throw()` 예외 명세 |
+| `[[noreturn]]` | C++11 | 컴파일러 확장(`__attribute__((noreturn))` 등) |
+| `std::_Exit` | C++11 | C의 `_Exit`(C99) 또는 `abort()` |
+
+- 잡지 않은 예외가 `terminate()`를 부르는 것, `set_terminate()`는 C++98부터 같음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={neCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 잡지 않은 예외는 조용히 무시된다?
+  - `terminate()`가 불려 프로그램이 끝남
+- 종료 처리기에서 오류를 처리하고 계속 실행할 수 있다?
+  - 반드시 프로그램을 끝내야 함(`abort()`나 `_Exit()`)
+- `noexcept` 함수가 던진 예외는 바깥 `try`에서 잡힌다?
+  - 잡히지 않고 바로 `terminate()`
+- `noexcept(f())`는 언제나 지정자다?
+  - 함수 선언 뒤면 지정자, 값으로 쓰면 연산자(컴파일 시간 `bool`)
+- `throw()`를 써도 된다?
+  - C++20에서 제거됨. `noexcept`를 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 잡지 않은 예외 | `std::terminate()` → 기본은 `std::abort()` |
+| `set_terminate()` | 종료 처리기 지정. 이전 처리기 반환. 처리기는 프로그램을 끝내야 함 |
+| 종료 함수 | `abort()`, `_Exit()`(정리 없음), `exit()`(정리함) |
+| `noexcept` | 예외를 던지지 않는다는 약속. 어기면 `terminate()` |
+| `noexcept(식)` 지정자 | 식이 참일 때만 `noexcept` |
+| `noexcept(식)` 연산자 | 식이 `noexcept`인지 컴파일할 때 `bool`로 |
+| throw 목록 | C++17·C++20에서 제거 |
+
+## 복습 질문
+
+<details>
+<summary>`void g() noexcept { h(); }`에서 `h()`가 예외를 던지면?</summary>
+
+- 예외가 `g()` 밖으로 나가려는 순간 `std::terminate()`가 불려 프로그램이 끝남. `g()`를 부른 쪽의 `try`/`catch`로는 잡을 수 없음
+
+</details>
+
+<details>
+<summary>템플릿 함수 `template <typename T> void swapBoth(T& a, T& b)`를 `T`의 맞바꾸기가 예외를 던지지 않을 때만 `noexcept`로 만들려면?</summary>
+
+- `noexcept(noexcept(std::swap(a, b)))`처럼 지정자 안에 연산자를 씀. `noexcept` 지정자는 매개변수 목록 뒤에 오므로 매개변수 이름 `a`, `b`를 쓸 수 있음
+
+</details>
+
+<details>
+<summary>종료 처리기에서 `std::exit()` 대신 `std::_Exit()`나 `std::abort()`를 쓰는 이유는?</summary>
+
+- 잡지 않은 예외로 프로그램 상태를 믿을 수 없는 때라, 정적 객체의 소멸자 등을 실행하는 `exit()`는 더 문제를 일으킬 수 있음. 정리 없이 바로 끝내는 쪽을 씀
+
+</details>
