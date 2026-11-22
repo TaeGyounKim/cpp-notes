@@ -1,0 +1,224 @@
+---
+title: 스트림 반복자와 반복자 어댑터
+description: 스트림을 알고리즘의 입력과 출력으로 쓰게 하는 스트림 반복자(ostream_iterator, istream_iterator, istreambuf_iterator)와, 삽입·역방향·이동 반복자 어댑터를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import streamCode from '../../../../examples/ch17/stream-iterators.cpp?raw';
+import adaptCode from '../../../../examples/ch17/adapters.cpp?raw';
+import adaptCpp11Code from '../../../../examples/ch17/adapters-cpp11.cpp?raw';
+
+- 다루는 것: 컨테이너가 아닌 곳(스트림)을 반복자로 다루는 법, 반복자에 다른 동작을 덧씌우는 법
+- 이 글에서 배우는 요소: 스트림 반복자 넷, 삽입 반복자, 역방향 반복자와 `base()`, 이동 반복자
+
+## 스트림 반복자
+
+- **스트림 반복자** (stream iterator): 입력·출력 스트림을 입력·출력 반복자처럼 다루게 하는 반복자 비슷한 클래스 템플릿. `<iterator>`
+  - 스트림을 표준 알고리즘의 원본이나 대상으로 쓸 수 있게 됨
+
+| 스트림 반복자 | 종류 | 대상 |
+| --- | --- | --- |
+| `ostream_iterator` | 출력 반복자 | `basic_ostream`에 씀(`<<`) |
+| `istream_iterator` | 입력 반복자 | `basic_istream`에서 읽음(`>>`) |
+| `ostreambuf_iterator` | 출력 반복자 | `basic_streambuf`에 글자를 씀 |
+| `istreambuf_iterator` | 입력 반복자 | `basic_streambuf`에서 글자를 읽음 |
+
+### ostream_iterator
+
+- 원소 타입을 템플릿 타입 매개변수로 받음 <CppRef path="cpp/iterator/ostream_iterator" />
+- 생성자는 출력 스트림과, 각 원소 뒤에 쓸 **구분 문자열**을 받음. 원소는 `operator<<`로 씀
+- 원본 범위를 대상 반복자로 복사하는 알고리즘에 넘기면, 복사 대신 출력이 됨
+
+```cpp
+std::copy(v.begin(), v.end(), std::ostream_iterator<int>{ std::cout, " " });
+```
+
+- 출력 반복자에 `*target = value`를 하면 값이 스트림에 쓰이고, `++target`은 아무 일도 하지 않음
+- 그래서 대상 범위가 "충분히 큰지" 걱정할 필요가 없음(보통의 대상 반복자는 대상이 원본만큼 커야 함)
+
+### istream_iterator
+
+- 원소 타입을 템플릿 타입 매개변수로, 입력 스트림을 생성자 인수로 받음. 원소는 `operator>>`로 읽음 <CppRef path="cpp/iterator/istream_iterator" />
+- **기본 생성한** `istream_iterator`가 끝 반복자. 스트림이 끝나거나 읽기가 실패하면 끝 반복자와 같아짐
+- 알고리즘이나 컨테이너 생성자·멤버 함수의 원본으로 씀
+
+```cpp
+std::istream_iterator<int> first{ std::cin };
+std::istream_iterator<int> last;                // 끝
+std::vector<int> values(first, last);           // 입력이 끝날 때까지 읽음
+```
+
+- 콘솔에서 입력의 끝을 알리려면 Windows는 Ctrl+Z 뒤 Enter, Linux·macOS는 Enter 뒤 Ctrl+D
+
+### istreambuf_iterator
+
+- 스트림 버퍼에서 **글자 그대로** 읽음. `>>`와 달리 공백을 건너뛰지 않음 <CppRef path="cpp/iterator/istreambuf_iterator" />
+- 쓰임새: 파일 전체를 문장 하나로 읽기. 기본 생성한 것이 끝 반복자
+
+```cpp
+std::ifstream file{ path };
+std::string contents{ std::istreambuf_iterator<char>{ file },
+                      std::istreambuf_iterator<char>{} };
+```
+
+## 반복자 어댑터
+
+- **반복자 어댑터** (iterator adapter): 특별한 반복자. 모두 `<iterator>`. 두 무리
+  - **컨테이너로 만드는** 것. 보통 출력 반복자로 씀: `back_insert_iterator`, `front_insert_iterator`, `insert_iterator`
+  - **다른 반복자로 만드는** 것. 보통 입력 반복자로 씀: `reverse_iterator`, `move_iterator` 등
+- 직접 반복자 어댑터를 만들 수도 있음(이 사이트에서는 다루지 않음)
+
+### 삽입 반복자
+
+- 보통 대상 반복자에 복사하면 대상 범위의 원래 원소를 **덮어씀**. 대상이 원본만큼 커야 함
+- **삽입 반복자** (insert iterator): 컨테이너에 원소를 실제로 **넣음**. 컨테이너 타입으로 매개변수화되고 생성자에서 컨테이너 참조를 받음
+
+| 삽입 반복자 | 부르는 멤버 | 만드는 도우미 함수 |
+| --- | --- | --- |
+| `back_insert_iterator` | `push_back(원소)` | `std::back_inserter(c)` |
+| `front_insert_iterator` | `push_front(원소)` | `std::front_inserter(c)` |
+| `insert_iterator` | `insert(위치, 원소)` | `std::inserter(c, 위치)` |
+
+```cpp
+std::vector<int> target;                                    // 크기 0
+std::copy(src.begin(), src.end(), std::back_inserter(target));
+// C++17부터 클래스 템플릿 인수 추론으로
+std::copy(src.begin(), src.end(), std::back_insert_iterator{ target });
+```
+
+- 대상 컨테이너의 크기를 미리 맞출 필요가 없음
+- `insert_iterator`는 생성자에서 처음 위치도 받고, 그 위치를 첫 `insert()`에 넘김. 다음 위치는 각 `insert()`의 반환값으로 정함(방금 넣은 원소의 다음)
+- `insert_iterator`의 장점: **연관 컨테이너**를 바꾸는 알고리즘의 대상으로 쓸 수 있음 <CppRef path="cpp/iterator/insert_iterator" />
+  - 연관 컨테이너는 키를 고칠 수 없지만(20장), `insert_iterator`는 원소를 고치는 대신 새로 넣음
+  - 연관 컨테이너의 `insert(위치, 원소)`는 위치를 **힌트**로만 쓰고 무시해도 됨. `begin()`이나 `end()`를 넘기면 됨
+
+```cpp
+std::set<int> unique;
+std::copy(src.begin(), src.end(), std::inserter(unique, unique.begin()));
+```
+
+<RunCode client:load code={streamCode} stdin="7 3 9 3 5" />
+
+- 볼 것
+  - 입력 칸의 정수가 `istream_iterator`로 `vector`에 모두 들어옴. 값을 바꿔 다시 실행해 볼 것
+  - `ostream_iterator`의 구분 문자열은 마지막 원소 뒤에도 붙음
+  - `istreambuf_iterator`는 공백과 줄바꿈까지 바이트 그대로 읽음(한글은 UTF-8로 글자당 3바이트)
+  - `back_inserter`와 `inserter` 덕분에 빈 `vector`와 `set`에 바로 넣음
+
+### 역방향 반복자
+
+- `std::reverse_iterator`: 양방향·임의 접근 반복자를 **거꾸로** 훑음 <CppRef path="cpp/iterator/reverse_iterator" />
+- 거꾸로 훑을 수 있는 컨테이너(`forward_list`와 정렬되지 않은 연관 컨테이너를 뺀 모든 표준 컨테이너)는 `reverse_iterator` 별칭과 `rbegin()`, `rend()`를 제공함
+  - `rbegin()`: 마지막 원소를 참조. `rend()`: 첫 원소의 **앞** 위치
+  - 역방향 반복자에 `++`를 하면 바탕 반복자에 `--`를 함(반대도 마찬가지). 그래서 거꾸로 훑을 때도 `++it`를 씀
+
+```cpp
+for (auto it{ std::rbegin(c) }; it != std::rend(c); ++it) { /* ... */ }
+```
+
+- 쓰임새: 거꾸로 하는 판이 없는 알고리즘을 거꾸로 쓸 때. 예: `std::find`에 역방향 반복자를 넘기면 **마지막** 일치를 찾음
+- 역방향 반복자로 부른 알고리즘은 역방향 반복자를 돌려줌. `base()`로 바탕 반복자를 얻음
+  - `base()`가 돌려주는 반복자는 늘 **한 칸 뒤**의 원소를 참조함. 같은 원소를 얻으려면 하나 빼야 함
+
+```text
+원소        11   22   33   22   11
+위치         0    1    2    3    4    (end)
+rev ──────────────────────▲              rev는 위치 3의 22를 참조
+rev.base() ────────────────────▲         base()는 위치 4
+```
+
+### 이동 반복자
+
+- `std::move_iterator`: 역참조 연산자가 값을 **우측값 참조**로 바꿔 줌. 그래서 복사 없이 새 대상으로 **이동**할 수 있음(9장) <CppRef path="cpp/iterator/move_iterator" />
+  - 객체가 이동 의미론을 지원해야 효과가 있음
+- `std::make_move_iterator(it)`로 만들거나, C++17부터 `std::move_iterator{ it }`
+
+```cpp
+std::vector<Sample> moved(std::make_move_iterator(src.begin()),
+                          std::make_move_iterator(src.end()));
+```
+
+:::caution
+다른 객체로 이동한 원본 객체는 더 이상 (값을 새로 대입하기 전에는) 쓰지 않는다.
+:::
+
+- `vector`가 커질 때 원소를 옮기면서 이동 생성자가 불릴 수 있음. 처음 용량과 늘리는 방식은 표준이 정하지 않으므로 출력이 컴파일러마다 다를 수 있음. 아래 예제는 `reserve()`로 이를 막음
+
+<RunCode client:load code={adaptCode} />
+
+- 볼 것
+  - 역방향으로 찾은 22는 위치 3. `base()`에서 하나를 뺌
+  - 보통 반복자 범위로 만들면 복사 생성자, 이동 반복자로 만들면 이동 생성자가 불림
+  - 옮긴 뒤 원본의 문자열은 비어 있음. 표준은 "유효하지만 지정되지 않은 상태"만 보장하므로 이 값에 기대면 안 됨
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `back_insert_iterator{ v }`처럼 도우미 없이 쓰기 | C++17(클래스 템플릿 인수 추론) | `std::back_inserter(v)` 등 도우미 함수 |
+| `move_iterator`, `make_move_iterator` | C++11 | 복사만 가능 |
+
+- 스트림 반복자, 삽입 반복자, 역방향 반복자는 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={adaptCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::copy`의 대상이 빈 `vector`의 `begin()`이어도 된다?
+  - 대상이 원본만큼 커야 함. 빈 `vector`라면 `std::back_inserter(v)`를 씀
+- 거꾸로 훑을 때는 `--it`를 쓴다?
+  - 역방향 반복자도 `++it`. 바탕 반복자에서 `--`가 일어남
+- `rev.base()`는 `rev`와 같은 원소를 참조한다?
+  - 한 칸 뒤. 같은 원소는 `std::prev(rev.base())`
+- `istream_iterator`는 공백까지 읽는다?
+  - `>>`로 읽으므로 공백을 건너뜀. 글자 그대로는 `istreambuf_iterator`
+- C++11 예제의 `readings((std::istream_iterator<int>(input)), ...)`에 괄호가 왜 한 겹 더 있나?
+  - 없으면 컴파일러가 변수 정의가 아니라 **함수 선언**으로 읽음(이른바 가장 성가신 구문 해석, most vexing parse). 중괄호 초기화(`{}`)를 쓰면 생기지 않음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `ostream_iterator<T>{ os, 구분자 }` | 알고리즘의 출력을 스트림으로 |
+| `istream_iterator<T>{ is }` | 스트림에서 `>>`로 읽는 입력 반복자. 기본 생성이 끝 |
+| `istreambuf_iterator<char>` | 글자 그대로 읽음. 파일 통째로 읽기 |
+| 삽입 반복자 | `back_inserter`, `front_inserter`, `inserter`. 덮어쓰지 않고 넣음 |
+| `reverse_iterator` | `rbegin()`/`rend()`. `base()`는 한 칸 뒤 |
+| `move_iterator` | 역참조가 우측값 참조. `make_move_iterator` |
+
+## 복습 질문
+
+<details>
+<summary>`std::vector<std::string> words`의 원소를 쉼표로 구분해 출력하는 한 줄은?</summary>
+
+```cpp
+std::copy(words.begin(), words.end(),
+          std::ostream_iterator<std::string>{ std::cout, ", " });
+```
+
+- 마지막 원소 뒤에도 `", "`가 붙는다는 점에 주의
+
+</details>
+
+<details>
+<summary>`std::list<int> l`의 원소를 순서를 뒤집어 다른 `std::list`에 넣으려면 어떤 삽입 반복자를 쓰는가?</summary>
+
+- `std::front_inserter(target)`. 앞에 차례로 넣으므로 순서가 뒤집힘(또는 `rbegin()`/`rend()`와 `back_inserter`)
+
+</details>
+
+<details>
+<summary>`std::vector<std::unique_ptr<int>>`의 원소를 다른 벡터로 옮기려면 보통 반복자 범위로는 왜 안 되고 무엇을 써야 하는가?</summary>
+
+- `unique_ptr`는 복사할 수 없어 복사 생성자가 필요한 보통 범위 생성은 컴파일되지 않음
+- `std::make_move_iterator`로 감싼 범위를 넘겨 이동시킴
+
+</details>
