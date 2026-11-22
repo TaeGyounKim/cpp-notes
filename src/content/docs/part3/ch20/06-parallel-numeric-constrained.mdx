@@ -1,0 +1,227 @@
+---
+title: 병렬·수치·제약된 알고리즘
+description: 실행 정책으로 알고리즘을 병렬·벡터화하기와 그 제약, iota, accumulate·reduce·inner_product·transform_reduce 같은 줄이기 알고리즘, inclusive_scan·exclusive_scan, 범위와 프로젝션을 받는 제약된 알고리즘과 C++23의 contains·fold 알고리즘을 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import npCode from '../../../../examples/ch20/numeric-parallel.cpp?raw';
+import npCpp11Code from '../../../../examples/ch20/numeric-parallel-cpp11.cpp?raw';
+
+- 다루는 것: 알고리즘을 여러 코어로 돌리는 법, 수를 다루는 알고리즘, 반복자 쌍 대신 범위를 받는 알고리즘
+- 이 글에서 배우는 요소: 실행 정책, `iota`, 줄이기, 스캔, 제약된 알고리즘, C++23 전용 알고리즘
+
+## 병렬 알고리즘
+
+- <Badge text="C++17" /> 60개가 넘는 반복자 기반 표준 알고리즘을 **병렬**로 실행해 성능을 높일 수 있음. 예: `for_each()`, `all_of()`, `copy()`, `count_if()`, `find()`, `replace()`, `search()`, `sort()`, `transform()` 등 <CppRef path="cpp/algorithm/execution_policy_tag_t" />
+- 병렬 실행을 지원하는 알고리즘은 첫 매개변수로 선택적인 **실행 정책** (execution policy)을 받음
+  - 알고리즘이 벡터화하거나 병렬로 실행해도 되는지 정함
+  - **벡터화** (vectorization): 컴파일러가 여러 CPU 명령을 벡터 CPU 명령 하나로 바꿈. 벡터 명령은 하드웨어 명령 하나로 여러 데이터에 같은 연산을 함. **SIMD** (single instruction multiple data) 명령이라고도 함
+- 표준 실행 정책 타입 넷과 그 전역 인스턴스. 모두 `<execution>`의 `std::execution` 네임스페이스
+
+| 정책 타입 | 전역 인스턴스 | 허용하는 것 |
+| --- | --- | --- |
+| `sequenced_policy` | `seq` | 병렬화도 벡터화도 안 됨 |
+| `parallel_policy` | `par` | 병렬화는 되고 벡터화는 안 됨 |
+| `parallel_unsequenced_policy` | `par_unseq` | 병렬화와 벡터화. 실행이 스레드 사이를 옮겨 다녀도 됨 |
+| `unsequenced_policy` <Badge text="C++20" /> | `unseq` | 벡터화는 되고 병렬화는 안 됨 |
+
+- 구현은 실행 정책을 더 추가할 수 있음
+
+```cpp
+std::sort(std::execution::par, v.begin(), v.end());
+```
+
+:::caution
+병렬 알고리즘에 넘긴 콜백이 잡히지 않은 예외를 던지면 `std::terminate()`가 불려 프로그램이 끝난다.
+:::
+
+- `par_unseq`, `unseq`에서는 콜백 호출이 서로 끼어들 수 있음(순서가 정해지지 않음). 벡터화를 돕지만 콜백이 할 수 있는 일에 제약이 많음
+  - 메모리 할당·해제, 뮤텍스 잡기, 잠금 없는 것이 아닌 `std::atomic`(27장) 사용 등을 하면 안 됨
+  - 다른 표준 정책에서는 호출이 순서대로 일어나지만 그 순서가 정해지지 않음. 콜백에 이런 제약은 없음
+- 병렬 알고리즘은 **데이터 경쟁**과 **교착 상태**를 막아 주지 않음. 병렬로 실행할 때 피하는 것은 쓰는 쪽의 책임(27장)
+- 병렬 오버로드는 `constexpr`가 아님(비병렬 오버로드가 `constexpr`여도)
+- 일부 병렬 오버로드는 반환 타입이 다름. 예: 비병렬 `for_each()`는 콜백을 돌려주지만 병렬 판은 아무것도 돌려주지 않음
+
+:::tip
+데이터가 크거나 원소마다 할 일이 많으면 병렬 오버로드로 성능을 높인다. 다만 병렬이 늘 빠른 것은 아니다. 원소가 적으면 병렬화 부담 때문에 더 느릴 수 있고, 임의 접근 반복자를 지원하지 않는 컨테이너도 그렇다. 둘 다 측정(29장)해서 고른다.
+:::
+
+- 구현에 따라 병렬 백엔드가 필요함. 예: GCC의 표준 라이브러리는 Intel TBB가 있으면 그것으로 병렬화하고, 없으면 순차로 실행할 수 있음(이 사이트의 실행 환경에서는 결과만 같고 병렬로 빨라지지 않을 수 있음)
+
+## 수치 처리 알고리즘
+
+- 모두 `<numeric>`. 1편의 `accumulate()`도 그중 하나 <CppRef path="cpp/header/numeric" />
+
+### iota
+
+- `std::iota(first, last, value)`: 지정한 값에서 시작해 `operator++`로 다음 값을 만들며 범위를 채움 <CppRef path="cpp/algorithm/iota" />
+  - 정수가 아니라도 `operator++`를 구현한 원소 타입이면 됨
+
+```cpp
+std::vector<int> v(10);
+std::iota(v.begin(), v.end(), 5);   // 5, 6, ..., 14
+```
+
+### 줄이기 알고리즘
+
+- 넷: `accumulate()`, `reduce()`, `inner_product()`, `transform_reduce()`
+  - 범위(또는 두 범위)의 원소 둘을 합치는 연산을 하나만 남을 때까지 거듭 적용함
+  - 누적(accumulate), 집계(aggregate), 압축(compress), 주입(inject), **접기**(fold) 알고리즘이라고도 부름
+- `reduce()` <Badge text="C++17" />: `accumulate()`는 병렬 실행을 지원하지 않는 몇 안 되는 알고리즘. 병렬로 일반화된 합을 구하려면 `reduce()` <CppRef path="cpp/algorithm/reduce" />
+
+```cpp
+int r1{ std::accumulate(v.cbegin(), v.cend(), 0) };
+int r2{ std::reduce(std::execution::par_unseq, v.cbegin(), v.cend(), 0) };
+```
+
+- 둘 다 시작값 Init과 이항 연산 op로 Init op x0 op x1 op … op x(n−1)을 계산함. 기본 연산은 `accumulate()`가 `operator+`, `reduce()`가 `std::plus`
+  - 차이: `accumulate()`는 **왼쪽부터** 순서대로, `reduce()`는 순서가 **정해지지 않음**. 그래서 결합·교환 법칙이 성립하지 않는 연산(예: 부동소수점의 미세한 오차, 뺄셈)에서는 결과가 달라질 수 있음
+- `inner_product()`: 두 순서열의 **내적**. 예: (1·9)+(2·8)+(3·7)+(4·6) = 70 <CppRef path="cpp/algorithm/inner_product" />
+  - 계산에 쓸 두 이항 연산(기본 `operator+`와 `operator*`)을 추가로 받을 수 있음
+  - 병렬 실행을 지원하지 않음. 병렬이 필요하면 `transform_reduce()`
+- `transform_reduce()` <Badge text="C++17" />: 병렬 실행을 지원하고, 범위 하나나 둘에 씀 <CppRef path="cpp/algorithm/transform_reduce" />
+  - 범위 하나: 단항 함수 f를 먼저 적용하고 줄임. Init op f(x0) op f(x1) op …(op 기본은 `std::plus`)
+  - 범위 둘: `inner_product()`와 같지만 기본 연산으로 `std::plus`와 `std::multiplies`를 씀
+
+```cpp
+int sumSq{ std::transform_reduce(a.cbegin(), a.cend(), 0, std::plus<>{},
+                                 [](int x) { return x * x; }) };
+```
+
+### 스캔 알고리즘
+
+- **스캔** (scan) 알고리즘: **누적 합**(prefix sum, cumulative sum, partial sum)이라고도 함. 결과는 원본 원소들의 부분 합을 담은 또 다른 범위
+- 다섯: `exclusive_scan()`, `inclusive_scan()`/`partial_sum()`, `transform_exclusive_scan()`, `transform_inclusive_scan()`
+
+| 위치 | `exclusive_scan()` | `inclusive_scan()`, `partial_sum()` |
+| --- | --- | --- |
+| y0 | Init | Init op x0 |
+| y1 | Init op x0 | Init op x0 op x1 |
+| y(n−1) | Init op x0 op … op x(n−2) | Init op x0 op … op x(n−1) |
+
+- `inclusive_scan`은 i번째 원소를 i번째 합에 **포함**하고, `exclusive_scan`은 **포함하지 않음**(`partial_sum`의 Init은 0)
+- `transform_..._scan()`은 원소에 단항 함수를 먼저 적용한 뒤 스캔함
+- `partial_sum()`을 뺀 스캔 알고리즘은 실행 정책을 받아 병렬화할 수 있음. 계산 순서는 정해지지 않음
+  - `partial_sum()`과 `accumulate()`는 왼쪽부터 순서가 보장되므로 병렬화할 수 없음
+
+## 제약된 알고리즘
+
+- 대부분의 알고리즘에는 `std::ranges` 네임스페이스에 **제약된** 판이 있음 <Badge text="C++20" /> <CppRef path="cpp/algorithm/ranges" />
+  - 역시 `<algorithm>`, `<numeric>`에 정의되지만, 템플릿 타입 매개변수를 콘셉트(12장)로 제약함
+  - 그래서 잘못된 인수에 더 나은 오류 메시지가 나옴. 예: `std::list`의 반복자를 `std::sort()`에 넘기면 알아보기 어려운 오류가 쏟아지지만, `ranges::sort()`는 반복자가 임의 접근이 아니라고 알려 줌
+- 또 다른 장점
+  - 원소 나열을 시작·끝 반복자 쌍으로도, **범위**로도 줄 수 있음
+  - **프로젝션**을 지원함(17장)
+
+:::note
+제약된 알고리즘은 아직 병렬 실행을 지원하지 않아 실행 정책을 인수로 받지 않는다.
+:::
+
+```cpp
+auto it1{ std::ranges::find(v.cbegin(), v.cend(), 2) };   // 반복자 쌍
+auto it2{ std::ranges::find(v, 2) };   // 범위: 읽기 쉽고 실수가 적음
+```
+
+- 제약된 `generate`도 콜백을 **복사**함. 람다의 상태를 이어 쓰려면 `std::ref()`(1편)
+- 뷰와 함께: `ranges::for_each(v | views::filter(...), [](int& x) { x *= 10; })`는 걸러진 원소만 바꾸고, 그 변화가 원래 `vector`에 반영됨
+
+### C++23 제약된 판에만 있는 알고리즘
+
+- <Badge text="C++23" /> `std::ranges`에만 있는 새 알고리즘(16장 3편 표)
+  - 바꾸지 않는 알고리즘: `contains()`, `contains_subrange()`, `starts_with()`, `ends_with()`, `find_last()`, `find_last_if()`, `find_last_if_not()`
+  - 접기 알고리즘: `fold_left()`, `fold_left_first()`, `fold_right()`, `fold_right_last()`, `fold_left_with_iter()`, `fold_left_first_with_iter()` <CppRef path="cpp/algorithm/ranges/fold_left" />
+- `fold_left()`, `fold_right()`는 시작값을 인수로 받음. `fold_left_first()`는 첫 원소를, `fold_right_last()`는 마지막 원소를 시작값으로 쓰고 `optional`을 돌려줌(빈 범위면 빈 `optional`). `value_or()`로 처리함
+- 왼쪽 접기와 오른쪽 접기의 차이: `{ 500.0, 10.0, 2.0 }`을 `std::divides<>`로
+  - 왼쪽: ((500 / 10) / 2) = 25
+  - 오른쪽: (500 / (10 / 2)) = 100
+
+<RunCode client:load code={npCode} />
+
+- 볼 것
+  - `par` 정책으로 백만 개를 내림차순 정렬
+  - `accumulate`와 `reduce`의 결과가 같음(정수 덧셈은 결합·교환 법칙이 성립)
+  - `inner_product`와 `transform_reduce`의 내적 70, 단항 변환 뒤 제곱합 30
+  - `inclusive_scan`은 1, 3, 6, 10이고 `exclusive_scan`은 0, 1, 3, 6
+  - `std::ref`로 넘긴 생성기가 이어서 6을 돌려줌
+  - 걸러진 뷰를 통해 홀수만 10배, C++23 `contains`, `starts_with`, 접기
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `contains`, `starts_with`, `fold_left` 등 | C++23 | `find(...) != end`, `equal`, `accumulate` |
+| 제약된 알고리즘, `unseq` | C++20 | 반복자 쌍, 다른 세 정책 |
+| 실행 정책, `reduce`, `transform_reduce`, 스캔 알고리즘 | C++17 | `accumulate`, `inner_product`, `partial_sum`(모두 순차), OpenMP 같은 외부 도구 |
+| `iota` | C++11 | 반복문 |
+
+- `accumulate`, `inner_product`, `partial_sum`은 C++98부터 있음
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={npCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::execution::par`를 주면 언제나 빨라진다?
+  - 원소가 적거나 반복자가 임의 접근이 아니면 더 느릴 수 있음. 구현에 병렬 백엔드가 없으면 순차로 돎. 측정
+- 병렬 알고리즘의 콜백이 예외를 던지면 알고리즘을 부른 곳에서 잡을 수 있다?
+  - `std::terminate()`로 끝남
+- `reduce`와 `accumulate`는 언제나 같은 결과다?
+  - `reduce`는 순서가 정해지지 않아 결합·교환 법칙이 성립하지 않는 연산에서 다를 수 있음
+- `exclusive_scan`과 `inclusive_scan`의 첫 원소는 같다?
+  - exclusive는 시작값, inclusive는 시작값 op 첫 원소
+- `std::ranges::sort(std::execution::par, v)`로 병렬 정렬한다?
+  - 제약된 알고리즘은 실행 정책을 받지 않음
+
+## 정리
+
+| 분류 | 핵심 |
+| --- | --- |
+| 실행 정책 | `seq`, `par`, `par_unseq`, `unseq`(C++20). 첫 인수. 콜백 예외는 `terminate` |
+| `iota` | 시작값부터 `++`로 채움 |
+| 줄이기 | `accumulate`(순차), `reduce`(병렬 가능), `inner_product`, `transform_reduce` |
+| 스캔 | `inclusive_scan`/`partial_sum`, `exclusive_scan`, `transform_..._scan` |
+| 제약된 알고리즘 | `std::ranges::`. 범위·프로젝션, 나은 오류. 실행 정책 없음 |
+| C++23 | `contains`, `starts_with`, `find_last`, `fold_left`, `fold_right` 등 |
+
+## 복습 질문
+
+<details>
+<summary>백만 개 원소의 제곱합을 병렬로 구하려면 어떤 알고리즘과 정책을 쓰는가?</summary>
+
+```cpp
+auto sq{ [](long long x) { return x * x; } };
+auto sumSq{ std::transform_reduce(std::execution::par_unseq,
+                                  v.cbegin(), v.cend(), 0LL,
+                                  std::plus<>{}, sq) };
+```
+
+</details>
+
+<details>
+<summary>일별 판매량 `sales`로 그날까지의 누적 판매량 벡터를 만들려면?</summary>
+
+- `std::inclusive_scan(sales.cbegin(), sales.cend(), total.begin());`(`total`은 같은 크기). C++17 이전이면 `std::partial_sum`
+
+</details>
+
+<details>
+<summary>`{ 2.0, 3.0, 2.0 }`을 거듭제곱 함수(`std::pow`를 부르는 람다)로 `fold_left_first` 하면 어떤 식이 되는가?</summary>
+
+- `pow(pow(2, 3), 2)` = 64. 오른쪽 접기(`fold_right_last`)라면 `pow(2, pow(3, 2))` = 512
+
+</details>
+
+## 20장을 마치며
+
+- 표준 라이브러리 알고리즘을 분류별로 골라 예제로 다룸
+- 알고리즘을 람다 표현식과 함께 쓰면 우아하고 이해하기 쉬운 코드를 쓸 수 있음
+- 앞 장들과 함께, 표준 라이브러리의 컨테이너와 알고리즘이 얼마나 쓸모 있고 강력한지 알게 됨
+- 이어지는 장들: 정규식(21장), 날짜와 시간(22장), 난수(23장), 그 밖의 어휘 타입(24장), 표준 라이브러리 맞춤과 확장(25장)
+- 다음 장(21장): 문자열 지역화와 정규식
