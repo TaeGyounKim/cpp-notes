@@ -1,0 +1,234 @@
+---
+title: 타입 트레이트
+description: 컴파일 시간에 타입에 대해 묻고 타입을 바꾸는 타입 트레이트의 분류, integral_constant와 true_type·false_type, _v와 _t 별칭, 태그 디스패치로 오버로드 고르기, is_same 같은 관계 트레이트, conditional로 타입 고르기(move_assign_if_noexcept), 타입 변경 트레이트를 직접 만들어 보기를 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import ttCode from '../../../../examples/ch26/type-traits.cpp?raw';
+import ttCpp11Code from '../../../../examples/ch26/type-traits-cpp11.cpp?raw';
+
+- 다루는 것: 타입에 따라 **컴파일 시간**에 결정을 내리는 도구
+- 이 글에서 배우는 요소: 타입 트레이트 분류, `integral_constant`, `_v`/`_t`, 태그 디스패치, `is_same`, `conditional`, 타입 변경 트레이트
+
+## 타입 트레이트 <Badge text="C++11" />
+
+- **타입 트레이트** (type trait): 컴파일 시간에 타입에 대해 묻거나(정수 계열인가, 다른 타입에서 파생되었나, 변환되나) 타입을 바꿈(`const`를 붙이거나 포인터를 떼기)
+- 모두 `<type_traits>` <CppRef path="cpp/header/type_traits" />
+- 아주 많으므로 분류별 예만 들고, 몇 가지 쓰임을 봄
+
+| 분류 | 예 |
+| --- | --- |
+| 기본 타입 범주 | `is_void`, `is_integral`, `is_floating_point`, `is_pointer`, `is_function` |
+| 복합 타입 범주 | `is_arithmetic`, `is_reference`, `is_object`, `is_scalar` |
+| 타입 속성 | `is_const`, `is_polymorphic`, `is_unsigned`, `is_constructible`, `is_copy_constructible`, `is_move_constructible`, `is_assignable`, `is_trivially_copyable`, `is_swappable`, `has_virtual_destructor`, `is_scoped_enum`(C++23) |
+| 속성 조회 | `alignment_of`, `rank`, `extent` |
+| 타입 관계 | `is_same`, `is_base_of`, `is_convertible`, `is_invocable`, `is_nothrow_invocable` |
+| `const`·`volatile` 바꾸기 | `remove_const`, `add_const` |
+| 부호 바꾸기 | `make_signed`, `make_unsigned` |
+| 참조 바꾸기 | `remove_reference`, `add_lvalue_reference`, `add_rvalue_reference` |
+| 포인터 바꾸기 | `remove_pointer`, `add_pointer` |
+| 배열 바꾸기 | `remove_extent`, `remove_all_extents` |
+| 논리 연산 | `conjunction`, `disjunction`, `negation`(7편) |
+| 그 밖의 변환 | `enable_if`(7편), `conditional`, `invoke_result`, `type_identity`, `remove_cvref`, `common_reference`, `decay` |
+| 상수 평가 문맥 | `is_constant_evaluated` |
+
+## integral_constant와 true_type
+
+- 표준은 타입 하나와 컴파일 시간 값 하나를 담는 `integral_constant`를 정의함(22장의 `ratio`에서 잠깐 봄) <CppRef path="cpp/types/integral_constant" />
+
+```cpp
+template <class T, T v>
+struct integral_constant {
+    static constexpr T value = v;
+    using value_type = T;
+    using type = integral_constant;
+    constexpr operator value_type() const noexcept { return value; }
+    constexpr value_type operator()() const noexcept { return value; }
+};
+
+template <bool B>
+using bool_constant = integral_constant<bool, B>;
+using true_type = bool_constant<true>;
+using false_type = bool_constant<false>;
+```
+
+- `is_integral`, `is_class` 같은 질문 트레이트는 `true_type`이나 `false_type`을 **상속**함 <CppRef path="cpp/types/is_integral" />
+  - 표준 라이브러리 안에서 예: `template <> struct is_integral<bool> : true_type {};`(직접 쓸 필요 없음)
+  - 그래서 `std::is_integral<bool>::value`는 `true`
+
+### _v와 _t
+
+- `value` 멤버가 있는 트레이트마다 이름 끝에 `_v`가 붙은 **변수 템플릿**이 있음 <Badge text="C++17" />
+  - `std::is_integral<T>::value` 대신 `std::is_integral_v<T>`
+  - 정의는 `template <class T> inline constexpr bool is_integral_v = is_integral<T>::value;`
+- `type` 멤버가 있는 트레이트마다 `_t`가 붙은 **별칭 템플릿**이 있음 <Badge text="C++14" />
+  - `typename std::remove_pointer<T>::type` 대신 `std::remove_pointer_t<T>`
+- 값이 컴파일 시간 상수이므로 `if constexpr (std::is_integral_v<T>)`로도 씀
+
+## 타입 범주로 오버로드 고르기
+
+- 트레이트를 `if`에 바로 쓰는 것보다, 템플릿에서 **타입의 성질에 따라 다른 코드**를 고를 때 쓸모가 있음
+- **태그 디스패치** (tag dispatch): 트레이트 객체를 추가 인수로 넘겨 오버로드를 고름
+
+```cpp
+template <typename T>
+void describe_impl(const T& v, std::true_type)  { /* 정수 계열 */ }
+template <typename T>
+void describe_impl(const T& v, std::false_type) { /* 그 밖 */ }
+
+template <typename T>
+void describe(const T& v)
+{
+    describe_impl(v, std::is_integral<T>{});
+}
+```
+
+- `std::is_integral<T>{}`: 트레이트 객체를 만듦. `true_type`이나 `false_type`을 상속했으므로 알맞은 오버로드로 감
+- 오버로드의 그 매개변수는 이름이 없음. 본문에서 쓰지 않고 **오버로드 선택에만** 씀
+- 함수 하나와 `if constexpr`로도 같은 일을 할 수 있지만, 이것은 트레이트로 오버로드를 고르는 방법을 보여 줌
+
+## 타입 관계
+
+- `is_same`, `is_base_of`, `is_convertible` 등 <CppRef path="cpp/types/is_same" />
+
+```cpp
+template <typename A, typename B>
+void same_type(const A& a, const B& b)
+{
+    bool same{ std::is_same_v<A, B> };
+    // ...
+}
+// same_type(1, 32)는 같은 타입, same_type(1, 3.5)는 다른 타입
+```
+
+- 트레이트 없이 오버로드만으로도 됨: `template <typename T> void same_type(const T&, const T&)`가 두 인수의 타입이 같을 때 더 구체적이라 선택됨
+
+## conditional로 타입 고르기
+
+- 18장의 `std::move_if_noexcept()`: 이동 생성자가 `noexcept`면 우측값 참조로, 아니면 `const` 참조로 바꿔 줌 <CppRef path="cpp/utility/move_if_noexcept" />
+- **대입**용은 표준에 없음. 트레이트로 직접 만들 수 있음
+- **`std::conditional<B, T, F>`**: `B`가 참이면 `T`, 거짓이면 `F`를 `type`으로 가짐 <CppRef path="cpp/types/conditional" />
+
+```cpp
+template <bool B, class T, class F>
+struct conditional { using type = T; };
+template <class T, class F>
+struct conditional<false, T, F> { using type = F; };   // 부분 특수화
+```
+
+- `is_nothrow_move_assignable`: 이동 대입이 예외를 던지지 않는지(클래스면 이동 대입 연산자가 `noexcept`인지) <CppRef path="cpp/types/is_move_assignable" />
+
+```cpp
+template <typename T>
+constexpr std::conditional_t<std::is_nothrow_move_assignable_v<T>,
+                             T&&, const T&>
+move_assign_if_noexcept(T& t) noexcept
+{
+    return std::move(t);
+}
+
+a = move_assign_if_noexcept(b);   // noexcept면 이동 대입, 아니면 복사 대입
+```
+
+- 이동 대입이 도중에 예외를 던지면 원본이 망가질 수 있으므로, 안전할 때만 이동함
+
+## 타입 변경 트레이트
+
+- 주어진 타입을 바꾼 새 타입을 `type`으로 줌. 예: `add_const`, `remove_pointer` <CppRef path="cpp/types/remove_pointer" />
+
+```cpp
+static_assert(std::is_same_v<std::remove_pointer_t<int*>, int>);
+static_assert(std::is_same_v<std::add_const_t<int>, const int>);
+```
+
+- 직접 만들기도 어렵지 않음: 기본 템플릿과 부분 특수화(2편)
+
+```cpp
+template <typename T> struct strip_ptr { using type = T; };
+template <typename T> struct strip_ptr<T*> { using type = T; };
+template <typename T> using strip_ptr_t = typename strip_ptr<T>::type;
+```
+
+- 실제 `remove_pointer`는 `T* const`, `T* volatile` 같은 경우도 처리함
+
+<RunCode client:load code={ttCode} />
+
+- 볼 것
+  - `describe`가 `is_integral`로 오버로드를 고름(태그 디스패치)
+  - `Risky`(이동 대입이 `noexcept` 아님)는 복사 대입, `Safe`는 이동 대입
+  - 직접 만든 `strip_ptr_t`가 표준 `remove_pointer_t`처럼 동작
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `is_scoped_enum` 등 일부 트레이트 | C++23 | 직접 만들기 |
+| `remove_cvref`, `type_identity` | C++20 | `remove_cv_t<remove_reference_t<T>>`, 직접 만들기 |
+| `_v` 변수 템플릿, `bool_constant` | C++17 | `::value`, `integral_constant<bool, B>` |
+| `_t` 별칭 템플릿 | C++14 | `typename ...::type` |
+| `<type_traits>`, `integral_constant`, `conditional` | C++11 | 외부 라이브러리 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={ttCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `std::is_integral<T>`를 `if`에 바로 넣으면 값이 나온다?
+  - 그것은 타입. `std::is_integral<T>::value`나 `std::is_integral_v<T>`(또는 객체 `std::is_integral<T>{}`의 변환)
+- `std::remove_pointer<T>`가 곧 새 타입이다?
+  - 새 타입은 `::type`. `std::remove_pointer_t<T>`
+- 태그 디스패치의 두 번째 매개변수에 이름을 붙여 써야 한다?
+  - 오버로드 선택에만 쓰므로 이름이 필요 없음
+- `conditional`은 두 타입 중 하나의 값을 고른다?
+  - 값이 아니라 **타입**을 고름
+- 트레이트를 직접 특수화해 표준 동작을 바꿔도 된다?
+  - 대부분의 표준 타입 트레이트는 사용자가 특수화하면 정의되지 않은 동작. 필요하면 자기 트레이트를 만듦
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 타입 트레이트 | `<type_traits>`. 묻는 트레이트(`value`), 바꾸는 트레이트(`type`) |
+| `integral_constant` | `true_type`, `false_type`. 질문 트레이트가 상속 |
+| 별칭 | `_v`(C++17), `_t`(C++14) |
+| 태그 디스패치 | `f(v, std::is_integral<T>{})`로 오버로드 선택 |
+| `conditional` | 조건으로 타입 고르기. `move_assign_if_noexcept` |
+| 직접 만들기 | 기본 템플릿 + 부분 특수화 |
+
+## 복습 질문
+
+<details>
+<summary>`T`가 포인터면 가리키는 값을, 아니면 값을 출력하는 `show(const T&)`를 `if constexpr`로 쓰려면?</summary>
+
+```cpp
+template <typename T>
+void show(const T& v)
+{
+    if constexpr (std::is_pointer_v<T>) { std::println("{}", *v); }
+    else { std::println("{}", v); }
+}
+```
+
+</details>
+
+<details>
+<summary>`std::conditional_t<(sizeof(void*) == 8), long long, int>`은 어떤 타입인가?</summary>
+
+- 64비트 환경(포인터 8바이트)이면 `long long`, 아니면 `int`
+
+</details>
+
+<details>
+<summary>`const int&`에서 `const`와 참조를 모두 떼어 `int`를 얻으려면?</summary>
+
+- `std::remove_cvref_t<const int&>`(C++20). 그 전에는 `std::remove_cv_t<std::remove_reference_t<const int&>>`(순서 주의: 참조를 먼저 뗌)
+
+</details>
