@@ -1,0 +1,204 @@
+---
+title: 부분 특수화와 오버로딩
+description: 완전 특수화와 부분 특수화의 차이, 일부 매개변수만 정하는 부분 특수화와 멤버 정의의 템플릿 머리, 모든 포인터 타입을 위한 부분 특수화(U*에서 U의 뜻, 깊은 복사), 함수 템플릿 부분 특수화를 오버로딩으로 흉내 내는 법과 오버로드 선택 규칙을 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import psCode from '../../../../examples/ch26/partial-spec.cpp?raw';
+import psCpp11Code from '../../../../examples/ch26/partial-spec-cpp11.cpp?raw';
+
+- 다루는 것: 템플릿의 일부 인수에 대해서만 다른 구현을 주는 법
+- 이 글에서 배우는 요소: 부분 특수화, 포인터 타입 부분 특수화, 함수 템플릿 오버로딩
+
+## 완전 특수화와 부분 특수화
+
+- 12장의 특수화는 **완전 특수화** (full specialization): 모든 템플릿 매개변수를 정해, 남은 매개변수가 없음
+  - 예: `template <> class Table<const char*> { ... };`
+- **부분 특수화** (partial specialization): 일부 매개변수만 정하거나, "포인터 타입 전부"처럼 **타입의 모양**만 정함 <CppRef path="cpp/language/partial_specialization" />
+- 클래스 템플릿만 부분 특수화할 수 있음(함수 템플릿은 안 됨. 뒤에서 오버로딩으로 흉내 냄)
+
+## 일부 매개변수만 정하기
+
+- 크기를 타입이 아닌 매개변수로 받는 표(12장)
+
+```cpp
+template <typename T, std::size_t R, std::size_t C>
+class Fixed {
+public:
+    T& at(std::size_t r, std::size_t c) { return m_cells[r][c]; }
+private:
+    T m_cells[R][C]{};
+};
+```
+
+- `T`가 `const char*`일 때만 문자열을 복사해 `std::string`으로 담고 싶다면, `T`만 정하고 `R`, `C`는 매개변수로 남김
+
+```cpp
+template <std::size_t R, std::size_t C>
+class Fixed<const char*, R, C> {
+public:
+    std::string& at(std::size_t r, std::size_t c) { return m_cells[r][c]; }
+private:
+    std::string m_cells[R][C];
+};
+```
+
+- 읽는 법
+  - `template <std::size_t R, std::size_t C>`: 이 특수화에 **남은** 매개변수는 둘
+  - `Fixed<const char*, R, C>`: 원래 템플릿의 인수 **셋**을 적고, 그중 하나를 정함
+- 쓸 때는 여전히 인수 셋을 다 적음
+
+```cpp
+Fixed<int, 2, 2> nums;            // 원래 템플릿
+Fixed<const char*, 2, 2> words;   // 부분 특수화
+// Fixed<2, 2> bad;               // 오류: 타입 인수가 없음
+```
+
+- 완전 특수화와 달리, 부분 특수화의 멤버를 클래스 밖에서 정의할 때는 **매번 템플릿 머리**를 붙임. 그 멤버가 남은 매개변수로 매개변수화되기 때문
+
+```cpp
+template <std::size_t R, std::size_t C>
+std::string& Fixed<const char*, R, C>::at(std::size_t r, std::size_t c)
+{
+    return m_cells[r][c];
+}
+```
+
+## 포인터 타입 전부를 위한 부분 특수화
+
+- 부분 특수화의 진짜 힘: 개별 타입이 아니라 **타입들의 부분 집합**에 대한 구현
+- 예: 값을 담는 `Boxes<T>`에서, 포인터 타입이면 가리키는 객체를 **소유**하고 복사할 때 **깊은 복사**를 하게 함
+
+```cpp
+template <typename U>
+class Boxes<U*> {
+public:
+    Boxes(const Boxes& src);                  // 가리키는 객체를 복사
+    Boxes& operator=(const Boxes& rhs);       // 복사 후 교환
+    Boxes(Boxes&&) noexcept = default;
+    Boxes& operator=(Boxes&&) noexcept = default;
+    std::unique_ptr<U>& at(std::size_t i);
+private:
+    std::vector<std::unique_ptr<U>> m_items;  // 소유
+};
+```
+
+- `Boxes<U*>`: "`Boxes`를 모든 포인터 타입에 대해 특수화"
+- 주의: `Boxes<int*>`를 쓰면 `U`는 `int*`가 아니라 **`int`**. 패턴 `U*`에 `int*`를 맞춘 결과
+- 복사 생성자: 원본의 원소마다 `std::make_unique<U>(*src)`로 새 객체를 만듦(얕은 복사가 아님)
+- 대입은 복사 후 교환, 이동은 `= default`(9장)
+
+```cpp
+Boxes<int> plain{ 2 };      // 원래 템플릿
+Boxes<int*> owned{ 2 };     // 부분 특수화
+owned.at(0) = std::make_unique<int>(10);
+Boxes<int*> copy{ owned };  // 깊은 복사: copy를 고쳐도 owned는 그대로
+```
+
+## 함수 템플릿: 오버로딩으로 흉내 내기
+
+- 표준은 함수 템플릿의 부분 특수화를 허용하지 않음
+- 대신 **더 구체적인 함수 템플릿으로 오버로딩**함 <CppRef path="cpp/language/function_template" />
+- 예: 배열에서 값의 인덱스를 찾는 `index_of`
+
+```cpp
+template <typename T>                      // 일반
+std::optional<std::size_t> index_of(const T& v, const T* arr, std::size_t n);
+
+template <typename T>                      // 포인터: 가리키는 값끼리 비교
+std::optional<std::size_t> index_of(T* v, T* const* arr, std::size_t n);
+
+std::optional<std::size_t>                 // 템플릿 아님: C 문자열은 strcmp
+index_of(const char* v, const char* const* arr, std::size_t n);
+```
+
+- 선택 규칙
+  - 컴파일러는 후보 중 **가장 구체적인** 것을 고름. 포인터를 넘기면 `T*`를 받는 템플릿이 `const T&`를 받는 것보다 구체적
+  - 템플릿이 아닌 함수와 템플릿 인스턴스가 똑같이 알맞으면 **템플릿이 아닌 함수**를 고름
+- 인수를 명시하면 다른 것이 불림: `index_of<const char*>(w, words, n)`은 일반 템플릿을 써서 **포인터 값**을 비교함
+
+| 호출 | 불리는 것 |
+| --- | --- |
+| `index_of(3, ints, n)` | 일반 템플릿, `T = int` |
+| `index_of(&x, ptrs, n)` | 포인터 템플릿, `T = int` |
+| `index_of("lee", names, n)` | 템플릿이 아닌 `const char*` 판 |
+| `index_of<const char*>("lee", names, n)` | 일반 템플릿, 포인터 비교 |
+
+<RunCode client:load code={psCode} />
+
+- 볼 것
+  - `Fixed<const char*, 2, 2>`가 부분 특수화를 고르고 문자열을 소유함
+  - `Boxes<int*>`의 복사본 `b`를 고쳐도 `a`는 그대로(깊은 복사)
+  - `index_of`의 세 오버로드: 값, 가리키는 값, C 문자열 내용으로 비교
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `optional` | C++17 | 찾지 못함을 나타내는 특별한 값 |
+| `make_unique` | C++14 | `reset(new U(...))` |
+| `unique_ptr`, `= default`, 이동 | C++11 | 원시 포인터와 직접 해제 |
+| 부분 특수화, 함수 템플릿 오버로딩 | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={psCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `Boxes<int*>`에서 특수화의 `U`는 `int*`다?
+  - `U*` 모양에 맞춘 것이라 `U`는 `int`
+- 부분 특수화를 쓰면 인수를 줄여 쓸 수 있다?
+  - 원래 템플릿의 인수를 모두 적음. 고르는 것은 컴파일러
+- 부분 특수화의 멤버 정의에는 템플릿 머리가 필요 없다?
+  - 남은 매개변수가 있으므로 매번 붙임(완전 특수화의 멤버 정의에는 `template <>`도 붙이지 않음)
+- 함수 템플릿도 `template <typename T> void f<T*>(T*)`로 부분 특수화한다?
+  - 허용되지 않음. 오버로딩
+- `const char*` 인수에는 늘 `const char*` 오버로드가 불린다?
+  - `index_of<const char*>(...)`처럼 인수를 명시하면 일반 템플릿이 불림
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 완전 특수화 | `template <>`, 남은 매개변수 없음 |
+| 부분 특수화 | 일부 인수만 정하거나 `U*` 같은 모양만 정함. 클래스 템플릿만 |
+| 멤버 정의 | 부분 특수화는 매번 남은 매개변수의 템플릿 머리 |
+| 포인터 특수화 | `Boxes<U*>`: 소유와 깊은 복사. `U`는 가리키는 타입 |
+| 함수 템플릿 | 부분 특수화 대신 더 구체적인 오버로드. 같으면 템플릿 아닌 함수 우선 |
+
+## 복습 질문
+
+<details>
+<summary>모든 `std::vector<E>`에 대해 `Boxes`를 따로 구현하려면 부분 특수화를 어떻게 쓰는가?</summary>
+
+```cpp
+template <typename E>
+class Boxes<std::vector<E>> { /* ... */ };
+```
+
+- `Boxes<std::vector<int>>`이면 `E`는 `int`
+
+</details>
+
+<details>
+<summary>`template <typename T> void show(T)`와 `template <typename T> void show(T*)`가 있을 때 `int x; show(&x);`는 무엇을 부르는가?</summary>
+
+- 둘 다 맞지만 `show(T*)`가 더 구체적이라 그쪽(`T = int`)
+
+</details>
+
+<details>
+<summary>함수 템플릿의 완전 특수화(`template <> void f<int>(int)`)보다 오버로딩을 권하는 이유는?</summary>
+
+- 특수화는 오버로드 선택에 참여하지 않음. 먼저 기본 템플릿들 사이에서 고른 뒤에야 특수화가 쓰여, 어느 함수가 불릴지 예상하기 어려움
+- 템플릿이 아닌 오버로드나 더 구체적인 템플릿 오버로드는 선택 규칙에 그대로 참여하므로 예측하기 쉬움
+
+</details>
