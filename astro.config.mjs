@@ -69,6 +69,13 @@ const parts = [
 			chapter('27장. C++ 멀티스레드 프로그래밍', 'part4/ch27'),
 		],
 	},
+	{
+		label: 'Part 5 · C++ 소프트웨어 공학',
+		link: '/part5/ch28/01-process-and-life-cycle/',
+		items: [
+			chapter('28장. 소프트웨어 공학 방법 활용하기', 'part5/ch28'),
+		],
+	},
 ];
 
 export default defineConfig({
