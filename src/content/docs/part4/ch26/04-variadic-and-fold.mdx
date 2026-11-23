@@ -1,0 +1,276 @@
+---
+title: 가변 인자 템플릿과 폴드 표현식
+description: 매개변수 팩과 팩 확장, 재귀로 인수를 하나씩 처리하는 타입 안전 가변 인자 함수, 전달 참조와 std::forward, sizeof..., if constexpr로 기저 없애기, 믹스인 여러 개 상속하기, 폴드 표현식 네 가지와 빈 팩의 규칙, 가변 인자 콘셉트를 익힙니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import vdCode from '../../../../examples/ch26/variadic.cpp?raw';
+import vdCpp11Code from '../../../../examples/ch26/variadic-cpp11.cpp?raw';
+
+- 다루는 것: 템플릿 매개변수를 **몇 개든** 받는 템플릿
+- 이 글에서 배우는 요소: 매개변수 팩, 팩 확장, `sizeof...`, `if constexpr`, 가변 믹스인, 폴드 표현식, 가변 인자 콘셉트
+
+## 가변 인자 템플릿 <Badge text="C++11" />
+
+- 보통 템플릿은 매개변수 수가 정해져 있음. **가변 인자 템플릿** (variadic template)은 개수가 정해지지 않음 <CppRef path="cpp/language/parameter_pack" />
+
+```cpp
+template <typename... Types>
+class Bag { };
+
+Bag<int> a;
+Bag<std::string, double, std::vector<int>> b;
+Bag<> c;                      // 인수 0개도 됨
+```
+
+- `typename...`의 점 셋은 오타가 아님. **매개변수 팩** (parameter pack)을 선언하는 문법: 인수를 몇 개든 받음
+- 인수가 하나 이상이어야 한다면 앞에 보통 매개변수를 둠: `template <typename T1, typename... Rest>`. 그러면 `Bag<>`는 오류
+- 팩의 원소를 반복문으로 직접 훑을 수는 없음. **템플릿 재귀**나 **폴드 표현식**을 씀
+
+## 타입 안전한 가변 인자 함수
+
+- 처리할 타입마다 오버로드를 둠
+
+```cpp
+void describe(int v);
+void describe(double v);
+void describe(const std::string& v);
+```
+
+- 인수를 하나씩 떼어 처리하는 재귀 함수 템플릿과, 재귀를 멈출 기저 함수
+
+```cpp
+void walk() {}                                   // 기저: 인수 없음
+
+template <typename First, typename... Rest>
+void walk(const First& first, const Rest&... rest)
+{
+    describe(first);
+    walk(rest...);                               // 하나 줄여 다시 부름
+}
+```
+
+- `...`이 세 군데, 뜻은 두 가지
+  - `typename... Rest`, `const Rest&... rest`: **매개변수 팩** 선언
+  - `rest...`: **팩 확장** (pack expansion). 왼쪽의 식을 팩의 원소마다 되풀이하고 쉼표로 이어 붙임
+- `walk(1, 2.5, "x"s)`의 펼쳐짐: `describe(1)`, `walk(2.5, "x"s)` → `describe(2.5)`, `walk("x"s)` → `describe("x"s)`, `walk()`
+- **타입 안전**: 실제 타입에 맞는 `describe`가 불림. 처리할 오버로드가 없는 타입을 넘기면 컴파일 오류(C의 `printf`류와 다름)
+
+### 전달 참조와 완벽한 전달
+
+- 전달 참조 `T&&`(12장)와 `std::forward`로 받으면, 우측값은 우측값으로, 좌측값은 좌측값으로 넘김 <CppRef path="cpp/utility/forward" />
+
+```cpp
+template <typename First, typename... Rest>
+void walk(First&& first, Rest&&... rest)
+{
+    describe(std::forward<First>(first));
+    walk(std::forward<Rest>(rest)...);
+}
+```
+
+- `std::forward<Rest>(rest)...`은 원소마다 `std::forward<Ri>(ri)`를 만들어 쉼표로 이음: `walk(std::forward<R1>(r1), std::forward<R2>(r2), ...)`
+
+### sizeof...
+
+- 팩의 원소 수: `sizeof...(rest)`. 팩 확장이 아니라 키워드 같은 특별한 문법 <CppRef path="cpp/language/sizeof..." />
+
+## if constexpr <Badge text="C++17" />
+
+- **`if constexpr`**: 실행 시간이 아니라 **컴파일 시간**에 고르는 `if`. 고르지 않은 쪽은 **컴파일되지 않음** <CppRef path="cpp/language/if" />
+  - 공식 이름은 "constexpr if"지만 코드에서는 `if constexpr`라고 씀
+- 가변 인자 재귀의 기저 함수를 없앨 수 있음
+
+```cpp
+template <typename First, typename... Rest>
+void walk2(First&& first, Rest&&... rest)
+{
+    describe(std::forward<First>(first));
+    if constexpr (sizeof...(rest) > 0) {
+        walk2(std::forward<Rest>(rest)...);
+    }
+}
+```
+
+- 남은 인수가 없으면 재귀 호출이 아예 컴파일되지 않으므로 인수 없는 `walk2()`가 필요 없음
+- 대신 `walk2()`를 인수 없이 부를 수는 없게 됨(첫 매개변수 때문)
+
+## 믹스인 여러 개 상속하기
+
+- 매개변수 팩은 거의 어디서나 쓸 수 있음. 기반 클래스 목록에도
+- 예: 원하는 **믹스인** (mixin, 5장) 클래스들을 모두 상속하는 클래스
+
+```cpp
+template <typename... Mixins>
+class Thing : public Mixins... {
+public:
+    explicit Thing(const Mixins&... m) : Mixins{ m }... {}
+};
+
+Thing<Named, Counted> t{ Named{ "box" }, Counted{ 3 } };
+t.hello();   // Named의 멤버
+t.show();    // Counted의 멤버
+```
+
+- `public Mixins...`은 `public Named, public Counted`로, `Mixins{ m }...`은 `Named{ m1 }, Counted{ m2 }`로 펼쳐짐
+- 상속하지 않은 믹스인의 멤버를 부르면 컴파일 오류
+
+## 폴드 표현식 <Badge text="C++17" />
+
+- **폴드 표현식** (fold expression): 팩의 모든 원소에 연산자를 적용해 값 하나로 접음. 재귀가 필요 없음 <CppRef path="cpp/language/fold" />
+- `op`에는 대부분의 이항 연산자가 옴: `+ - * / % ^ & | << >>`, 복합 대입, `=`, 비교, `&& || ,`, `.*`, `->*`
+
+| 이름 | 식 | 펼쳐진 모양 |
+| --- | --- | --- |
+| 단항 오른쪽 폴드 | `(pack op ...)` | `p1 op (... op (pN-1 op pN))` |
+| 단항 왼쪽 폴드 | `(... op pack)` | `((p1 op p2) op ...) op pN` |
+| 이항 오른쪽 폴드 | `(pack op ... op init)` | `p1 op (... op (pN op init))` |
+| 이항 왼쪽 폴드 | `(init op ... op pack)` | `((init op p1) op ...) op pN` |
+
+- 괄호는 문법의 일부라 꼭 씀
+
+### 쉼표 연산자로 함수를 차례로 부르기
+
+```cpp
+template <typename... Ts>
+void walk3(Ts&&... args)
+{
+    (describe(std::forward<Ts>(args)), ...);   // 단항 오른쪽 폴드
+}
+```
+
+- 인수 셋이면 `(describe(a1), (describe(a2), describe(a3)))`. 쉼표 연산자는 왼쪽부터 평가되므로 순서대로 불림
+- 재귀도 기저도 없는 함수 하나
+
+### 값으로 접기
+
+```cpp
+template <typename T, typename... Ts>
+auto total(const T& init, const Ts&... rest)
+{
+    return (init + ... + rest);   // 이항 왼쪽 폴드: ((init + r1) + r2) + r3
+}
+// total(1, 2, 3.5)는 6.5, total(10)은 10
+```
+
+- 이항 폴드는 초기값이 늘 필요하므로, 매개변수 하나를 따로 받아 팩이 비어도 됨
+- 단항 왼쪽 폴드로도 씀: `return (... + values);`. 다만 이 경우 팩이 비면 오류
+
+### 빈 팩
+
+- 단항 폴드에서 빈 팩은 `&&`, `||`, `,` 세 연산자에서만 허용됨
+
+| 연산자 | 빈 팩의 결과 |
+| --- | --- |
+| `&&` | `true` |
+| <code>&#124;&#124;</code> | `false` |
+| `,` | `void()`(아무것도 안 함) |
+
+```cpp
+template <typename... Ts>
+bool all_positive(const Ts&... v) { return ((v > 0) && ...); }
+// all_positive()는 true
+```
+
+### 가변 인자 콘셉트
+
+- 콘셉트(12장)도 가변 인자로 만들 수 있음. 폴드로 조건을 모음
+
+```cpp
+template <typename T, typename... Us>
+concept AllSame = (std::same_as<T, Us> && ...);
+
+template <typename T, typename... Ts>
+    requires AllSame<T, Ts...>
+auto strict_total(const T& init, const Ts&... rest)
+{
+    return (init + ... + rest);
+}
+
+strict_total(1.5, 2.5);     // 됨
+// strict_total(1, 2.5);    // 오류: int와 double
+```
+
+<RunCode client:load code={vdCode} />
+
+- 볼 것
+  - 같은 일을 하는 세 방법: 재귀와 기저(`walk`), `if constexpr`(`walk2`), 폴드(`walk3`)
+  - `total`은 `std::string`에도 됨: `"ab"s + "cd" + "ef"`
+  - 빈 팩: `all_positive()`는 `true`, `any_positive()`는 `false`
+  - 믹스인 둘을 상속한 `Thing`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 가변 인자 콘셉트 | C++20 | `static_assert` + 타입 트레이트(6편) |
+| `if constexpr`, 폴드 표현식 | C++17 | 재귀와 기저 함수, 배열 초기화 꼼수 |
+| 가변 인자 템플릿, `sizeof...`, `std::forward` | C++11 | 인수 수마다 오버로드, C의 `va_list` |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 재귀와 기저 함수로만 처리함
+
+<RunCode client:load code={vdCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `for (auto& a : args)`로 팩을 훑는다?
+  - 팩은 범위가 아님. 재귀나 폴드(또는 `{ args... }`로 같은 타입의 초기화 리스트를 만들기)
+- `sizeof...(args)`는 인수들의 바이트 크기다?
+  - 원소 **개수**
+- 폴드 표현식의 괄호는 생략해도 된다?
+  - 문법의 일부라 꼭 씀
+- 재귀 버전에서 기저 함수를 템플릿 뒤에 선언해도 된다?
+  - 템플릿 정의 시점에 보이지 않으면 찾지 못할 수 있음. 기저를 먼저 선언함
+- `(... + v)`는 빈 팩이면 0이다?
+  - `+`의 빈 단항 폴드는 오류. 초기값이 있는 이항 폴드를 씀
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 매개변수 팩 | `typename... Ts`, `Ts... args`. 0개도 됨 |
+| 팩 확장 | `f(args)...` → `f(a1), f(a2), ...` |
+| 재귀 | 첫 원소 처리 + 나머지로 재귀 + 기저 |
+| `if constexpr` | 컴파일 시간 분기. 기저 없이 재귀 멈춤 |
+| 폴드 | 단항·이항 × 왼쪽·오른쪽. 빈 팩은 `&&`, <code>&#124;&#124;</code>, `,`만 |
+| 응용 | 가변 믹스인 상속, 가변 인자 콘셉트 |
+
+## 복습 질문
+
+<details>
+<summary>인수를 모두 한 줄에 공백으로 이어 출력하는 `print_all(args...)`를 폴드로 쓰려면?</summary>
+
+```cpp
+template <typename... Ts>
+void print_all(const Ts&... args)
+{
+    ((std::print("{} ", args)), ...);
+    std::println("");
+}
+```
+
+</details>
+
+<details>
+<summary>모든 인수의 곱을 구하되, 인수가 없으면 1을 돌려주게 하려면?</summary>
+
+```cpp
+template <typename... Ts>
+auto product(const Ts&... v) { return (1 * ... * v); }   // 이항 왼쪽 폴드
+```
+
+</details>
+
+<details>
+<summary>`walk(1, 2)`를 재귀 버전으로 부르면 함수 템플릿 인스턴스가 몇 개 만들어지는가?</summary>
+
+- `walk<int, int>`, `walk<int>` 두 개와 기저 `walk()`(템플릿 아님). 인수 수만큼 인스턴스가 생김
+
+</details>
