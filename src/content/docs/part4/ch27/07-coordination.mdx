@@ -1,0 +1,239 @@
+---
+title: 조건 변수, 래치, 배리어, 세마포어
+description: 다른 스레드의 신호를 기다리는 조건 변수(wait, notify, 술어를 받는 wait와 가짜 깨어남), 작업 큐 예, notify_all_at_thread_exit, 일회용 집결 지점 latch, 여러 단계를 반복하는 barrier, 동시 실행 수를 제한하는 counting_semaphore와 binary_semaphore를 익힙니다.
+sidebar:
+  order: 7
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import coCode from '../../../../examples/ch27/coordination.cpp?raw';
+import coCpp11Code from '../../../../examples/ch27/coordination-cpp11.cpp?raw';
+
+- 다루는 것: 스레드끼리 "기다려", "이제 가" 같은 신호를 주고받는 도구
+- 이 글에서 배우는 요소: `condition_variable`, 가짜 깨어남, `latch`, `barrier`, `counting_semaphore`
+
+## 조건 변수 <Badge text="C++11" />
+
+- **조건 변수** (condition variable): 다른 스레드가 어떤 조건을 만들어 줄 때까지, 또는 정해진 시각까지 스레드를 막아 둠. 스레드 사이의 명시적인 소통 수단
+  - Win32 API의 이벤트 객체와 비슷함
+- `<condition_variable>`의 둘
+  - `std::condition_variable`: `unique_lock<mutex>`에서만 기다림. 어떤 플랫폼에서 가장 효율적이도록 표준이 허용함 <CppRef path="cpp/thread/condition_variable" />
+  - `std::condition_variable_any`: `lock()`, `unlock()`이 있는 어떤 락 타입이든 됨(사용자 정의 락 포함) <CppRef path="cpp/thread/condition_variable_any" />
+
+| 멤버 함수 | 하는 일 |
+| --- | --- |
+| `notify_one()` | 기다리는 스레드 하나를 깨움(Windows의 자동 리셋 이벤트와 비슷) |
+| `notify_all()` | 기다리는 스레드를 모두 깨움 |
+| `wait(lk)` | `lk`를 이미 잡고 불러야 함. **원자적으로** `lk.unlock()`하고 잠듦. 알림을 받아 깨면 다시 `lk.lock()`한 뒤 돌아옴 |
+| `wait_for(lk, rel_time)` | `wait()`와 같지만 상대 시간이 지나도 깸 |
+| `wait_until(lk, abs_time)` | `wait()`와 같지만 절대 시각에 닿아도 깸 |
+
+- 셋 모두 **술어**를 추가로 받는 오버로드가 있음 <CppRef path="cpp/thread/condition_variable/wait" />. `wait(lk, pred)`는 다음과 같음
+
+```cpp
+while (!pred()) {
+    wait(lk);
+}
+```
+
+### 가짜 깨어남
+
+- 기다리던 스레드는 `notify_*()`나 시간 만료로 깸
+- 그런데 아무도 알리지 않았는데도 깰 수 있음: **가짜 깨어남** (spurious wake-up)
+- 그래서 깨어나면 **왜 깼는지** 확인해야 함. 술어를 받는 `wait()`가 이것을 대신 해 줌
+
+### 작업 큐 예
+
+- 백그라운드 스레드가 큐의 항목을 처리. 큐가 비었으면 잠들고, 항목이 들어오면 깨서 처리하고 다시 잠듦
+- 큐를 한 번에 한 스레드만 바꾸도록 뮤텍스, 백그라운드 스레드에 알리려고 조건 변수
+
+```cpp
+class JobQueue {
+public:
+    void push(int job)
+    {
+        {
+            std::lock_guard lock{ m_mutex };
+            m_jobs.push(job);
+        }
+        m_cv.notify_one();   // 락을 쥐고 있든 아니든 알려도 됨
+    }
+    bool pop(int& job)
+    {
+        std::unique_lock lock{ m_mutex };
+        m_cv.wait(lock, [this] { return !m_jobs.empty() || m_closed; });
+        if (m_jobs.empty()) { return false; }   // 닫혔고 비었음
+        job = m_jobs.front();
+        m_jobs.pop();
+        return true;
+    }
+    // close(): m_closed = true 후 notify_all()
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    std::queue<int> m_jobs;
+    bool m_closed{ false };
+};
+```
+
+- `wait()`가 돌아오면 큐에 무언가 있거나 닫혔음이 확실함(술어 덕분)
+- 조건 변수로 다른 스레드에 알림을 보내는 완전한 예는 9편의 로거
+
+### notify_all_at_thread_exit
+
+- `std::notify_all_at_thread_exit(cond, lk)`: `lk`를 이미 잡은 스레드가 부름. 그 스레드가 끝날 때 자동으로 `lk.unlock(); cond.notify_all();`을 함 <CppRef path="cpp/thread/notify_all_at_thread_exit" />
+- `lk`는 스레드가 끝날 때까지 잠긴 채로 있으므로 잠그는 순서 등으로 교착이 생기지 않게 조심
+
+## 래치 <Badge text="C++20" />
+
+- **래치** (latch): **일회용** 집결 지점 <CppRef path="cpp/thread/latch" />
+  - 사실상 카운터. 스레드가 도착할 때마다 줄고, 0이 되면 열려서 기다리던 스레드가 모두 풀림
+  - 한 번 열리면 계속 열려 있어, 나중에 도착한 스레드도 바로 지나감
+- `<latch>`의 `std::latch`. 생성자에 필요한 수를 줌
+
+| 멤버 | 하는 일 |
+| --- | --- |
+| `count_down(n = 1)` | 막히지 않고 카운터를 줄임 |
+| `arrive_and_wait()` | 카운터를 줄이고, 0이 될 때까지 막힘 |
+| `wait()` | 줄이지 않고 0이 될 때까지 막힘 |
+| `try_wait()` | 0인지 확인만 |
+
+- 쓰임 1: 작업자들이 각자 일을 끝내면 `count_down()`, 메인 스레드는 `wait()`로 모두 끝나기를 기다림
+- 쓰임 2: 카운터 1인 래치로 **출발 신호**. 작업자 스레드들이 먼저 시작해 CPU 쪽 초기화를 하고 래치에서 기다리는 동안, 메인 스레드가 디스크에서 데이터를 읽음(입출력). 다 읽으면 `count_down()`으로 모두 출발
+
+```cpp
+std::latch start{ 1 };
+// 작업자들: 초기화 후 start.wait(); 그다음 데이터 처리
+load_data();          // 그동안 메인 스레드는 입출력
+start.count_down();   // 모두 출발
+```
+
+## 배리어 <Badge text="C++20" />
+
+- **배리어** (barrier): **여러 번** 쓰는 집결 지점. 단계(phase)의 연속 <CppRef path="cpp/thread/barrier" />
+  - 정해진 수의 스레드가 도착할 때마다 **단계 완료 함수**가 한 번 실행되고, 기다리던 스레드가 모두 풀리고, 카운터가 다시 채워져 다음 단계가 시작됨
+  - 단계마다 다음 단계에 기다릴 스레드 수를 조정할 수 있음
+- 반복문 사이의 동기화에 알맞음: 스레드들이 한 바퀴 계산 → 결과를 모아 처리 → 다음 바퀴
+- `<barrier>`의 클래스 템플릿 `std::barrier`. 핵심 멤버는 `arrive_and_wait()`: 카운터를 줄이고 이번 단계가 끝날 때까지 막힘
+
+```cpp
+int round{ 1 };
+// 단계가 끝날 때마다 한 번: 결과를 모으고 다음 단계를 준비
+std::barrier sync{ 2, [&]() noexcept { ++round; } };
+// 로봇 스레드 둘이 각각:
+for (int step{ 0 }; step < 3; ++step) {
+    work();
+    sync.arrive_and_wait();   // 둘 다 오면 완료 함수 실행 후 다음 단계
+}
+```
+
+- 완료 함수는 `noexcept`여야 함
+
+## 세마포어 <Badge text="C++20" />
+
+- **세마포어** (semaphore): 가벼운 동기화 부품. 뮤텍스, 래치, 배리어 같은 다른 동기화를 만드는 재료가 될 수 있음 <CppRef path="cpp/thread/counting_semaphore" />
+  - 칸(slot) 수를 나타내는 카운터. 생성자에서 정함. 칸을 얻으면 줄고 돌려주면 늚
+- `<semaphore>`
+  - `std::counting_semaphore<최대값>`: 음이 아닌 자원 개수
+  - `std::binary_semaphore`: 칸이 하나뿐(`counting_semaphore<1>`). 뮤텍스의 재료로 알맞음
+
+| 멤버 | 하는 일 |
+| --- | --- |
+| `acquire()` | 카운터를 줄임. 0이면 줄일 수 있을 때까지 막힌 뒤 줄임 |
+| `try_acquire()` | 줄여 봄. 이미 0이면 막히지 않고 `false` |
+| `try_acquire_for(d)`, `try_acquire_until(t)` | 정해진 시간 동안, 정해진 시각까지 시도 |
+| `release(n = 1)` | 카운터를 `n` 늘리고 `acquire()`에서 막힌 스레드를 풀어 줌 |
+
+- 쓰임 1: **동시에 실행할 스레드 수**를 정확히 제한. 예: 최대 넷
+
+```cpp
+std::counting_semaphore<4> slots{ 4 };
+// 각 스레드:
+slots.acquire();
+work();
+slots.release();
+```
+
+- 쓰임 2: 조건 변수 대신 **알림** 수단. 카운터를 0으로 만들어 두면 `acquire()`하는 스레드는 다른 스레드가 `release()`할 때까지 막힘
+
+<RunCode client:load code={coCode} />
+
+- 볼 것
+  - 조건 변수 큐: 1부터 10까지 넣고 닫으면 작업자가 모두 처리한 합 55
+  - 래치: 세 조각이 끝나야 메인이 지나감
+  - 배리어: 두 로봇이 모두 와야 "단계 끝"이 한 번 찍히고 다음 단계로
+  - 세마포어: 여섯 스레드가 동시에 들어가려 해도 최대 2
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `latch`, `barrier`, `counting_semaphore`, `binary_semaphore` | C++20 | 뮤텍스 + 조건 변수 + 카운터로 직접 |
+| `condition_variable`, `condition_variable_any`, `notify_all_at_thread_exit` | C++11 | 운영체제의 이벤트, 세마포어 API |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. 조건 변수와 카운터로 래치를 흉내 냄
+
+<RunCode client:load code={coCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `wait(lk)`는 락을 쥔 채로 잔다?
+  - 잠들면서 원자적으로 풀고, 깨면 다시 잡음. 그래서 다른 스레드가 큐에 넣을 수 있음
+- `notify_one()`을 부르지 않으면 절대 깨지 않는다?
+  - 가짜 깨어남이 있음. 술어를 받는 `wait`로 조건을 확인
+- 조건 확인을 `if`로 한 번만 하고 `cv.wait(lk)`를 부른다?
+  - 가짜 깨어남에 대비해 `while`이나 술어판 `wait`
+- 래치는 다시 쓸 수 있다?
+  - 일회용. 반복하려면 배리어
+- 세마포어와 뮤텍스는 같다?
+  - 세마포어는 칸 수를 세고, 얻은 스레드와 돌려주는 스레드가 달라도 됨. 뮤텍스는 잠근 스레드가 풀어야 함
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `condition_variable` | `wait(lk, pred)`로 조건이 참일 때까지. `notify_one`, `notify_all` |
+| 가짜 깨어남 | 늘 조건을 다시 확인 |
+| `latch` | 일회용 카운트다운. `count_down`, `wait`, `arrive_and_wait` |
+| `barrier` | 반복 단계. `arrive_and_wait`, 단계 완료 함수 |
+| `counting_semaphore` | 칸 수 제한. `acquire`, `release`. `binary_semaphore`는 칸 하나 |
+
+## 복습 질문
+
+<details>
+<summary>생산자 여럿, 소비자 여럿인 작업 큐에서 `notify_one()`과 `notify_all()` 중 무엇을 쓰는가?</summary>
+
+- 항목 하나를 넣을 때는 `notify_one()`(하나만 처리하면 되므로)
+- 큐를 닫는 등 모든 소비자가 알아야 할 상태 변화는 `notify_all()`
+
+</details>
+
+<details>
+<summary>스레드 넷이 모두 준비된 뒤에 동시에 출발하게 하려면?</summary>
+
+```cpp
+std::latch ready{ 4 };
+// 각 스레드: 준비 → ready.arrive_and_wait(); → 출발
+```
+
+</details>
+
+<details>
+<summary>한 번에 최대 3개만 내려받게 하는 다운로드 함수는?</summary>
+
+```cpp
+std::counting_semaphore<3> g_slots{ 3 };
+void download(const std::string& url)
+{
+    g_slots.acquire();
+    fetch(url);           // 예외가 날 수 있다면 RAII로 감싸 release를 보장
+    g_slots.release();
+}
+```
+
+</details>
