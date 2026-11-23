@@ -1,0 +1,171 @@
+---
+title: 템플릿 재귀
+description: 1차원 표를 중첩해 다차원 표를 만드는 첫 시도와 그 불편함, 한 차원 낮은 자기 자신을 원소로 갖는 NDTable<T, N>의 재귀 단계와 N = 1 부분 특수화로 만든 기저, 모든 차원의 크기 맞추기, 특수화가 코드를 물려받지 않는 점을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import ndCode from '../../../../examples/ch26/nd-table.cpp?raw';
+import ndCpp11Code from '../../../../examples/ch26/nd-table-cpp11.cpp?raw';
+
+- 다루는 것: 템플릿이 자기 자신의 다른 인스턴스를 써서 정의되는 **템플릿 재귀** (template recursion)
+  - 함수 재귀처럼, 문제를 조금 더 쉬운 같은 문제로 정의함. 다만 재귀가 **컴파일 시간**에 일어남
+- 이 글에서 배우는 요소: N차원 표 `NDTable<T, N>`, 재귀 단계와 기저, 부분 특수화로 재귀 멈추기
+
+## 첫 시도: 1차원 표를 중첩하기
+
+- 12장의 `Table`은 2차원만 됨. 3차원 틱택토나 4차원 행렬이 필요하면?
+  - 차원마다 클래스를 따로 만들면 코드가 반복됨
+- 1차원 표만 만들고, 원소 타입으로 다시 1차원 표를 넣으면 몇 차원이든 됨
+
+```cpp
+template <typename T>
+class Line {     // 1차원 표. 범위 검사 없는 operator[]
+public:
+    explicit Line(std::size_t size = 3) { m_items.resize(size); }
+    T& operator[](std::size_t i) { return m_items[i]; }
+private:
+    std::vector<T> m_items;
+};
+
+Line<int> one;
+Line<Line<int>> two;
+Line<Line<Line<int>>> three;
+three[1][2][0] = 5;
+```
+
+- 동작은 하지만 선언이 지저분함. 차원 수를 세려면 꺾쇠를 세어야 함
+
+## NDTable: 진짜 N차원 표
+
+- 차원은 본래 재귀적 <CppRef path="cpp/language/class_template" />: 3차원 표 = 2차원 표들의 1차원 표, 2차원 표 = 1차원 표들의 1차원 표
+- 사용자가 중첩하지 않고 이렇게 쓰게 하고 싶음
+
+```cpp
+NDTable<int, 1> line;
+NDTable<int, 2> plane;
+NDTable<int, 3> cube;
+```
+
+### 재귀 단계
+
+- 핵심: `NDTable<T, N>`의 원소 타입은 `T`가 아니라 **한 차원 낮은 `NDTable<T, N - 1>`**
+
+```cpp
+template <typename T, std::size_t N>
+class NDTable {
+public:
+    explicit NDTable(std::size_t size = 3) { resize(size); }
+    NDTable<T, N - 1>& operator[](std::size_t i) { return m_items[i]; }
+    void resize(std::size_t size)
+    {
+        m_items.resize(size, NDTable<T, N - 1>{ size });
+    }
+private:
+    std::vector<NDTable<T, N - 1>> m_items;
+};
+```
+
+- `operator[]`도 `T&`가 아니라 `NDTable<T, N - 1>&`을 돌려줌. 그래서 `cube[2]`는 2차원 표, `cube[2][1]`은 1차원 표, `cube[2][1][3]`은 `int`
+- 크기 맞추기가 가장 까다로움
+  - 여기서는 모든 차원을 같은 크기로 함. 차원마다 다른 크기는 훨씬 어려움
+  - `resize(size)`가 원소마다 `NDTable<T, N - 1>{ size }`를 넣고, 그 생성자가 다시 `resize(size)`를 불러 **모든 차원이 재귀적으로** 같은 크기가 됨
+
+### 기저: 부분 특수화로 멈추기
+
+- 재귀에는 기저가 필요함. `N`이 1이면 원소 타입이 `T`여야 함
+- `N = 1`에 대한 **부분 특수화**(2편)로 기저를 만듦 <CppRef path="cpp/language/partial_specialization" />
+
+```cpp
+template <typename T>
+class NDTable<T, 1> {
+public:
+    explicit NDTable(std::size_t size = 3) { resize(size); }
+    T& operator[](std::size_t i) { return m_items[i]; }   // 여기서 T
+    void resize(std::size_t size) { m_items.resize(size); }
+private:
+    std::vector<T> m_items;
+};
+```
+
+- 특수화는 기본 템플릿의 코드를 **하나도 물려받지 않음**. 같은 멤버를 다시 써야 함
+  - 중복을 줄이려면 공통 부분을 기반 클래스로 빼고 둘 다 상속하게 할 수 있음. 이 정도 작은 예에서는 오히려 번거로움
+- 기저가 없으면 `NDTable<T, 0>`, `NDTable<T, -1>`…로 끝없이 인스턴스화를 시도하다 컴파일러가 한도에 걸려 멈춤(`N`이 부호 없는 수라 0 - 1이 아주 큰 수가 됨)
+
+```cpp
+NDTable<int, 3> cube{ 4 };   // 4 x 4 x 4
+cube[2][1][3] = 7;
+```
+
+<RunCode client:load code={ndCode} />
+
+- 볼 것
+  - `total()`도 재귀: 크기 × 한 차원 낮은 표의 원소 수. 기저에서는 크기만
+  - `cube[2]`의 타입은 `NDTable<int, 2>&`. `decltype`은 참조를 포함하므로 `remove_cvref_t`(6편)로 벗긴 뒤 `::rank`
+  - 2차원 `NDTable<char, 2>`로 작은 판을 그림
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `remove_cvref_t` | C++20 | `remove_reference_t` + `remove_cv_t` |
+| `static constexpr` 데이터 멤버가 암시적 `inline` | C++17 | 클래스 밖에 정의를 두거나 정적 함수로 |
+| 템플릿 재귀, 부분 특수화 | C++98 | (처음부터 있음) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={ndCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `NDTable<int, 3>`의 원소는 `int`다?
+  - `NDTable<int, 2>`. `int`는 맨 아래(1차원)에서만
+- 기저 특수화는 기본 템플릿의 멤버를 그대로 쓴다?
+  - 물려받지 않음. 모두 다시 씀
+- `decltype(cube[2])::rank`로 바로 쓴다?
+  - `decltype(cube[2])`는 참조 타입이라 `::`를 쓸 수 없음. 참조를 벗김
+- 재귀는 실행 중에 일어난다?
+  - 인스턴스화가 컴파일 시간에 재귀적으로 일어남. 실행 중에는 그냥 중첩된 `vector`
+- 기저를 빼먹어도 0차원에서 알아서 멈춘다?
+  - 멈추지 않음. 컴파일러가 인스턴스화 깊이 한도에서 오류를 냄
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 템플릿 재귀 | 템플릿이 자신의 다른 인스턴스로 정의됨. 컴파일 시간 |
+| 재귀 단계 | `NDTable<T, N>`의 원소 = `NDTable<T, N - 1>` |
+| 기저 | `NDTable<T, 1>` 부분 특수화, 원소 = `T` |
+| 크기 | `resize`가 한 차원 낮은 표를 같은 크기로 만들어 재귀적으로 맞춤 |
+| 특수화 | 코드를 물려받지 않음. 중복이 크면 공통 기반 클래스 |
+
+## 복습 질문
+
+<details>
+<summary>`NDTable<double, 4> t{ 2 };`의 원소(`double`)는 모두 몇 개인가?</summary>
+
+- 2 × 2 × 2 × 2 = 16
+
+</details>
+
+<details>
+<summary>기저를 `N = 1` 대신 `N = 0`(원소 하나를 담는 표)으로 둘 수도 있는가?</summary>
+
+- 가능함. `NDTable<T, 0>`이 값 `T` 하나를 담게 하고, `N = 1`은 일반 템플릿이 `NDTable<T, 0>`의 `vector`가 되게 함
+- 다만 `cube[i][j][k]`가 `int&`가 아니라 0차원 표를 돌려주게 되므로, 값에 접근하는 변환이나 함수가 더 필요해 덜 편함
+
+</details>
+
+<details>
+<summary>함수 재귀로도 같은 다차원 표를 만들 수 있는가?</summary>
+
+- 차원 수가 실행 중에 정해진다면 "원소마다 하위 표를 가리키는 포인터"처럼 실행 시간 구조가 필요함
+- 템플릿 재귀는 차원 수가 컴파일 시간 상수일 때, 타입마다 정확한 원소 타입(`NDTable<T, N - 1>`)을 주어 타입 검사와 최적화를 받을 수 있음
+
+</details>
