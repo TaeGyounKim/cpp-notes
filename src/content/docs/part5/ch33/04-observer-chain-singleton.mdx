@@ -1,0 +1,254 @@
+---
+title: 관찰자, 책임 연쇄, 싱글턴
+description: 상태가 바뀌면 등록된 관찰자에게 알리는 관찰자 패턴(가변 인자 시그널, RAII 연결로 수명 문제 줄이기), 처리할 수 있는 첫 처리기에게 맡기는 책임 연쇄 패턴, 인스턴스를 하나로 강제하는 싱글턴(함수 안 static, 단점과 전략 패턴이라는 대안)을 익히고, 더 공부할 패턴을 살펴봅니다.
+sidebar:
+  order: 4
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import Flow from '../../../../components/Flow.astro';
+import bhCode from '../../../../examples/ch33/behavioral.cpp?raw';
+import bhCpp11Code from '../../../../examples/ch33/behavioral-cpp11.cpp?raw';
+
+- 다루는 것: 객체 사이의 알림과 책임 나누기, 그리고 하나뿐인 객체
+- 이 글에서 배우는 것: 관찰자, 책임 연쇄, 싱글턴, 더 공부할 패턴
+
+## 관찰자
+
+- **관찰자 패턴** (observer pattern): **관찰 대상** (observable, subject)이 상태가 바뀌면 등록된 **관찰자** (observer)들에게 알림
+  - 관찰자는 관심 있는 대상에 자신을 등록함
+- 가장 큰 이점: **결합도가 낮아짐**. 관찰 대상은 자기를 관찰하는 구체 타입을 몰라도 됨
+- 32장 MVC에서 모델이 뷰에 알리는 부분이 이 패턴
+
+### 구현: 가변 인자 시그널
+
+- 범용 사건(**시그널**)을 가변 인자 클래스 템플릿으로 만들면 사건마다 넘길 정보를 자유롭게 정할 수 있음(26장)
+  - `Signal<std::string, int>`: 재고가 바뀜(품목, 수량)
+  - `Signal<std::string>`: 품절(품목)
+
+```cpp
+template <typename... Args>
+class Signal final {
+public:
+    using Slot = std::function<void(const Args&...)>;
+    [[nodiscard]] Connection connect(Slot slot);   // 등록. 해제용 연결을 돌려줌
+    void emit(const Args&... args) const           // 모든 관찰자 호출
+    {
+        for (const auto& [id, slot] : m_slots) { slot(args...); }
+    }
+private:
+    std::map<std::size_t, Slot> m_slots;           // 번호 → 관찰자
+};
+
+class Inventory {                                  // 관찰 대상
+public:
+    Signal<std::string, int> stock_changed;
+    Signal<std::string> sold_out;
+    void set(const std::string& item, int qty);    // 바꾸고 emit
+};
+```
+
+- 관찰자는 함수, 람다, 멤버 함수를 부르는 람다 등 무엇이든 됨(`std::function`) <CppRef path="cpp/utility/functional/function" />
+- 대상은 등록·해제 수단만 주면 됨. 여기서는 시그널을 공개 멤버로 두었지만, `register_…`/`unregister_…` 함수로 감싸도 됨
+
+### 수명 문제와 RAII 연결
+
+- 관찰자 패턴에서 꼭 기억할 문제: 관찰자와 대상의 **수명이 얽힘**
+  - 관찰자가 먼저 사라졌는데 등록이 남아 있으면, 대상이 사라진 객체를 부름
+  - 관찰자가 소멸자에서 등록을 해제하려면 그때 대상이 아직 살아 있어야 함
+- 이 예에서는 `connect()`가 돌려주는 **연결 객체**가 소멸할 때 자동으로 해제함(32장 RAII). 관찰자는 연결을 멤버로 가지기만 하면 됨
+
+```cpp
+class Dashboard {
+public:
+    explicit Dashboard(Inventory& inv)
+        : m_conn{ inv.stock_changed.connect(
+              [this](const std::string& item, const int& qty) { /* ... */ }) }
+    {}
+private:
+    Signal<std::string, int>::Connection m_conn;   // Dashboard와 함께 사라지며 해제
+};
+```
+
+- 그래도 연결 객체가 시그널보다 오래 살면 안 됨. 대상이 먼저 사라질 수 있다면 `std::weak_ptr` 같은 방법으로 대상의 생존을 확인해야 함
+
+## 책임 연쇄
+
+- **책임 연쇄 패턴** (chain of responsibility pattern): 여러 객체에게 어떤 일을 처리할 **기회**를 차례로 줌
+  - 처리기마다 직접 처리하거나 **다음** 처리기에게 넘김
+- 가장 흔한 쓰임은 **사건 처리**. 많은 GUI 응용이 사건과 응답의 연속으로 설계됨
+  - 메뉴에서 열기를 고르면 "열기" 사건, 마우스를 움직이면 이동 사건이 계속, 버튼을 누르면 "눌림" 사건
+  - 그림판에서 도형을 클릭하면: 도형이 관심 있으면 처리, 아니면 창에게, 창도 아니면 응용 전체에게
+- C++에는 그래픽, 사건, 사건 전달 개념이 내장되어 있지 않음. 책임 연쇄는 여러 객체에 사건 처리 기회를 주는 합리적인 방법
+- 데코레이터와 구조가 비슷하지만 목적이 다름
+  - 책임 연쇄는 구조적으로 `if`/`else if` 사슬에 해당: **처음 맞는 것**을 찾음
+  - 데코레이터는 기능을 **넓힘**: 모든 층이 일함
+
+### 예: 고객 문의 처리
+
+<Flow
+	steps={[
+		{ title: 'FAQ 봇', text: '심각도 1이면 자동 답변, 아니면 넘김' },
+		{ title: '상담원', text: '심각도 2 이하면 처리, 아니면 넘김' },
+		{ title: '엔지니어', text: '심각도 3 이하면 처리, 아니면 넘김' },
+		{ title: '끝', text: '다음이 없으면 "처리할 곳 없음"' },
+	]}
+/>
+
+```cpp
+class Handler {
+public:
+    virtual ~Handler() = default;
+    Handler& then(std::unique_ptr<Handler> next);   // 사슬 잇기
+    void handle(const Ticket& t) const
+    {
+        if (can_handle(t)) { process(t); }
+        else if (m_next) { m_next->handle(t); }     // 다음에게
+        else { /* 아무도 처리하지 못함 */ }
+    }
+private:
+    virtual bool can_handle(const Ticket& t) const = 0;
+    virtual void process(const Ticket& t) const = 0;
+    std::unique_ptr<Handler> m_next;
+};
+```
+
+- 넘기는 일을 기반 클래스의 비가상 `handle()`이 맡게 하면(2편의 NVI), 파생이 "다음에게 넘기기"를 잊을 일이 없음
+- 실제 응용에서는 사건을 올바른 객체에 처음 전달하는 쪽(디스패처)이 따로 있음. 플랫폼과 프레임워크마다 크게 다름
+- 장점: 유연하고 객체 지향 계층에 잘 맞음
+- 주의
+  - 다음 처리기로 넘기는 것을 잊으면 사건이 **사라짐**
+  - 잘못된 처리기로 이으면 **무한 루프**가 될 수 있음
+
+## 싱글턴
+
+- **싱글턴 패턴** (singleton pattern): 가장 단순한 패턴 중 하나. 클래스의 인스턴스가 프로그램에 **정확히 하나**만 있게 강제하고, 그 하나에 **어디서나** 접근하게 함
+  - C++에서는 이름 공간 안의 전역 변수와 자유 함수로도 같은 일을 할 수 있음. Java처럼 전역 변수가 없는 언어에서 특히 쓰임
+
+### 단점
+
+- 싱글턴이 여럿이면 프로그램 시작 때 올바른 **초기화 순서**를 보장하기 어려움
+- 종료 때 호출하는 쪽이 아직 싱글턴을 쓰는데 이미 소멸했을 수 있음
+- **숨은 의존성**: 함수 시그니처에 드러나지 않음
+- **강한 결합**과 **어려운 단위 테스트**: 네트워크나 데이터베이스에 접근하는 싱글턴을 목으로 바꾸기 어려움
+- 더 나은 대안: 1편의 **전략 패턴**. 서비스마다 인터페이스를 두고 필요한 구성 요소에 주입하면 구현을 바꾸기 쉽고 테스트에서 목을 쓸 수 있음
+- 그래도 오래된 코드에서 자주 만나므로 알아 둠
+
+:::caution
+새 코드에서는 싱글턴을 피한다. 전략 패턴 같은 다른 패턴을 쓴다.
+:::
+
+### 구현
+
+- 정적 멤버 함수만 가진 클래스: 인스턴스 없이 어디서나 접근하지만 생성·소멸 시점을 다룰 수단이 없음. 엄밀히는 싱글턴이 아니라 **모노스테이트** (monostate, 인스턴스는 여럿일 수 있지만 상태는 하나)
+- 진짜 싱글턴: 접근 제어와 `static`으로 하나만 만들게 강제
+
+```cpp
+class AppConfig final {
+public:
+    static AppConfig& instance()
+    {
+        static AppConfig config;   // 처음 부를 때 한 번만 만들어짐
+        return config;
+    }
+    AppConfig(const AppConfig&) = delete;              // 복사 금지
+    AppConfig& operator=(const AppConfig&) = delete;
+private:
+    AppConfig();                                       // 밖에서 만들 수 없음
+};
+```
+
+- 함수 안 `static` 지역 변수는 처음 그 줄을 지날 때 초기화되고, C++11부터 **스레드 안전하게** 초기화됨(흔히 "매직 스태틱") <CppRef path="cpp/language/storage_duration" />
+  - **초기화만** 안전함. 여러 스레드가 멤버 함수를 부른다면 멤버 함수도 스레드 안전하게 만들어야 함(27장)
+- 생성자·소멸자가 `private`이라 밖에서 만들거나 지울 수 없음. 프로그램이 끝날 때 자동으로 소멸
+
+## 실행 예제
+
+<RunCode client:load code={bhCode} />
+
+- 볼 것
+  - 관찰자: 대시보드는 두 번 갱신받고, 블록을 나와 사라진 뒤에는 "빵" 변경을 받지 않음(연결이 자동 해제). 품절 알림은 별도 시그널
+  - 책임 연쇄: 심각도에 따라 처음 맞는 처리기가 처리. 4는 사슬 끝까지 가서 "처리할 곳 없음"
+  - 싱글턴: 설정 객체는 처음 `instance()`를 부를 때 한 번만 생성되고, 두 호출이 같은 객체를 돌려줌
+
+## 더 공부할 패턴
+
+- 패턴은 매우 많고, 많은 패턴이 정리된 목록이 있음([위키백과 영문판](https://en.wikipedia.org/wiki/Software_design_pattern)). 수가 많아 길을 잃기 쉬우니 관심 가는 몇 가지에 집중해 천천히 늘려 감
+- 다음으로 볼 만한 것
+
+| 패턴 | 한 줄 요약 |
+| --- | --- |
+| **명령** (command) | 작업을 객체로 감쌈. 되돌리기(undo) 구현에 흔히 씀 |
+| **퍼사드** (facade) | 복잡한 하위 시스템 앞에 쓰기 쉬운 높은 수준 인터페이스를 둠 |
+| **원형** (prototype) | 등록된 원형 객체를 복제해 새 객체를 만듦 |
+| **중재자** (mediator) | 여러 객체의 상호 작용을 한 객체가 조율해 서로의 결합을 줄임 |
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 구조적 바인딩 | C++17 | 반복자의 `first`, `second` |
+| `[[nodiscard]]` | C++17 | 없음 |
+| `std::exchange` | C++14 | 두 줄로 옮기고 비우기 |
+| 스레드 안전한 함수 안 `static` 초기화 | C++11 | 이중 검사 잠금 등 직접 동기화 |
+| 가변 인자 템플릿, `std::function` | C++11 | 인수 개수별 클래스, 함수 포인터 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨(번호로 해제하는 관찰자와 싱글턴)
+
+<RunCode client:load code={bhCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 관찰 대상은 관찰자의 타입을 알아야 한다?
+  - 함수 형태만 알면 됨. 그래서 결합도가 낮음
+- 관찰자 등록만 하면 끝이다?
+  - 해제를 잊거나 수명이 어긋나면 사라진 객체를 부름. RAII 연결로 관리
+- 책임 연쇄와 데코레이터는 같다?
+  - 책임 연쇄는 처음 맞는 하나가 처리, 데코레이터는 모든 층이 기능을 보탬
+- 싱글턴은 스레드 안전하다?
+  - 함수 안 `static`의 **초기화**만. 멤버 함수는 따로 동기화
+- 전역 접근이 편하니 싱글턴을 쓴다?
+  - 숨은 의존성과 테스트의 어려움. 주입을 먼저 생각
+
+## 정리
+
+| 패턴 | 하는 일 | 주의 |
+| --- | --- | --- |
+| 관찰자 | 바뀌면 등록된 쪽에 알림. 결합도 낮춤 | 수명 얽힘. RAII 연결 |
+| 책임 연쇄 | 처리할 수 있는 첫 처리기가 처리 | 넘기기 누락, 잘못된 연결의 무한 루프 |
+| 싱글턴 | 인스턴스 하나, 어디서나 접근 | 초기화 순서, 숨은 의존성, 테스트. 새 코드에서는 피함 |
+
+## 복습 질문
+
+<details>
+<summary>온도 센서 값이 바뀔 때 화면, 기록기, 경보기가 각각 반응해야 한다. 어떻게 설계하는가?</summary>
+
+- 관찰자 패턴. 센서가 `Signal<double>`을 두고 값이 바뀌면 `emit`. 화면, 기록기, 경보기가 각각 `connect`함. 센서는 이들의 타입을 모름. 새 반응을 더해도 센서는 그대로
+
+</details>
+
+<details>
+<summary>요청 처리 파이프라인(인증 → 권한 확인 → 처리)은 책임 연쇄인가?</summary>
+
+- 각 단계가 요청을 멈추거나(거부) 다음으로 넘긴다면 책임 연쇄와 같은 구조. 다만 "모든 단계가 통과해야 처리"라면 처음 맞는 하나가 처리하는 전형적인 책임 연쇄와는 목적이 조금 다름. 이름보다 구조를 보고 고름
+
+</details>
+
+<details>
+<summary>싱글턴으로 만든 데이터베이스 연결을 테스트에서 가짜로 바꾸려면 설계를 어떻게 바꾸는가?</summary>
+
+- `IDatabase` 인터페이스를 두고, 데이터베이스가 필요한 클래스가 생성자로 `IDatabase&`(또는 스마트 포인터)를 받게 함(전략 패턴, 의존성 주입). 실제 프로그램은 진짜 구현을, 테스트는 목을 넘김
+
+</details>
+
+## 33장을 마치며
+
+- 패턴이 객체 지향 개념을 높은 수준의 설계로 엮는 데 어떻게 도움이 되는지 맛보았음
+- 패턴을 쓰는 까닭: 복잡한 구조를 빨리 이해하게 해 주고, 일관되게 적용하면 소스 코드의 복잡성을 다루기 쉬워짐
+- 관심 가는 패턴 몇 가지에 집중해 자기만의 무기고를 천천히 늘려 감
+- 다음 장(34장): 크로스 플랫폼과 다른 언어와의 연동
