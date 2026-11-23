@@ -1,0 +1,274 @@
+---
+title: 뮤텍스와 락
+description: 상호 배제가 필요한 이유와 뮤텍스의 동작, atomic_flag로 만드는 스핀락, mutex·recursive_mutex·shared_mutex와 시간 제한 뮤텍스, RAII 락 lock_guard·unique_lock·shared_lock·scoped_lock, std::lock으로 여러 뮤텍스를 교착 없이 잡기, call_once와 once_flag를 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import mlCode from '../../../../examples/ch27/mutex-locks.cpp?raw';
+import mlCpp11Code from '../../../../examples/ch27/mutex-locks-cpp11.cpp?raw';
+
+- 다루는 것: 공유 데이터를 한 번에 한 스레드만 바꾸게 하는 **상호 배제** (mutual exclusion)
+- 이 글에서 배우는 요소: 스핀락, 뮤텍스 클래스들, 락 클래스들, `std::lock`, `scoped_lock`, `call_once`
+
+## 왜 상호 배제인가
+
+- 스레드들이 공유 데이터를 읽고 쓰면 연산 순서에 민감해짐
+- 데이터를 아예 공유하지 않는 것이 가장 좋지만, 공유해야 한다면 **한 번에 한 스레드만** 바꾸도록 동기화해야 함
+- 불리언, 정수 같은 스칼라는 원자적 연산(4편)으로 충분한 경우가 많음. 더 복잡한 데이터는 **명시적 동기화**가 필요함
+- 표준 라이브러리는 **뮤텍스** 클래스와 **락** 클래스를 줌
+
+## 뮤텍스
+
+- **뮤텍스** (mutex): mutual exclusion의 줄임. 쓰는 방식
+  1. 공유 메모리에 접근(읽기 또는 쓰기)하려는 스레드가 뮤텍스를 **잠그려** 함. 다른 스레드가 잡고 있으면 풀릴 때까지(또는 시간 제한까지) 막힘
+  2. 잡으면 공유 메모리를 자유롭게 씀. 물론 공유 데이터를 쓰는 **모든** 스레드가 이 규칙을 따른다는 전제
+  3. 다 쓰면 놓아서 다른 스레드가 잡을 수 있게 함. 여럿이 기다리면 누가 다음에 잡을지는 보장되지 않음
+- 표준은 시간 제한 없는 뮤텍스와 있는 뮤텍스를, 각각 재귀와 비재귀로 제공함
+
+### 스핀락
+
+- **스핀락** (spinlock): 락을 잡을 때까지 **바쁜 반복**(spinning)으로 계속 시도하는 동기화
+  - 도는 동안 스레드는 활성이지만 쓸모 있는 일은 하지 않음
+  - 뮤텍스는 바로 잡을 수 없으면 스레드를 **재울** 수 있는데, 재우는 것은 비싼 연산. 스핀락은 이것을 피함
+- 락을 아주 잠깐만 잡는다고 확신할 때 유용함
+- `atomic_flag`(4편) 하나로 직접 만들 수 있음
+
+```cpp
+class Spinlock {
+public:
+    void lock() { while (m_flag.test_and_set()) {} }   // 이미 true였으면 계속 돎
+    void unlock() { m_flag.clear(); }
+private:
+    std::atomic_flag m_flag;   // C++20부터 기본 생성은 "놓인"(false) 상태
+};
+```
+
+- `lock()`, `unlock()`을 가진 타입이라 `std::lock_guard`와 함께 쓸 수 있음
+
+:::caution
+스핀락은 바쁜 반복을 하므로, 스레드들이 아주 짧게만 잡는다고 확실할 때만 쓴다.
+:::
+
+### 시간 제한 없는 뮤텍스
+
+| 클래스 | 헤더 | 특징 |
+| --- | --- | --- |
+| `std::mutex` | `<mutex>` | 독점 소유. 이미 가진 스레드가 다시 잠그면 교착 <CppRef path="cpp/thread/mutex" /> |
+| `std::recursive_mutex` | `<mutex>` | 같은 스레드가 여러 번 잠글 수 있음. 잠근 횟수만큼 풀어야 함 <CppRef path="cpp/thread/recursive_mutex" /> |
+| `std::shared_mutex` | `<shared_mutex>` | 공유 소유(읽기)와 독점 소유(쓰기) <Badge text="C++17" /> <CppRef path="cpp/thread/shared_mutex" /> |
+
+- 공통 멤버 함수
+  - `lock()`: 잡을 때까지 막힘(무한히)
+  - `try_lock()`: 잡아 보고 바로 돌아옴. 잡았으면 `true`, 다른 스레드가 가졌으면 `false`
+  - `unlock()`: 놓음
+- `shared_mutex`: **읽기-쓰기 락** (readers-writer lock)
+  - **독점 소유**(쓰기 락): 다른 어떤 스레드도 독점·공유 소유가 없을 때만
+  - **공유 소유**(읽기 락): 독점 소유가 없으면, 다른 스레드가 이미 공유 소유를 가졌어도 가능
+  - `lock()`, `try_lock()`, `unlock()`은 독점용. 공유용은 `lock_shared()`, `try_lock_shared()`, `unlock_shared()`
+  - 이미 락을 가진 스레드가 두 번째 락을 잡으려 하면 교착 가능
+
+:::caution
+뮤텍스의 `lock()`, `unlock()`을 직접 부르지 않는다. 뮤텍스 락은 자원이며, 자원은 거의 언제나 **RAII**(32장)로 얻는다. 아래의 락 클래스가 범위를 벗어날 때 자동으로 놓아 주므로, `unlock()`을 잊거나 예외로 건너뛰어 교착에 빠지는 일을 막는다.
+:::
+
+### 시간 제한 뮤텍스
+
+- `std::timed_mutex`, `std::recursive_timed_mutex`(`<mutex>`), `std::shared_timed_mutex`(`<shared_mutex>`) <CppRef path="cpp/thread/timed_mutex" />
+- 위의 멤버에 더해
+  - `try_lock_for(rel_time)`: 상대 시간(`duration`, 22장) 동안 시도. 못 잡으면 `false`
+  - `try_lock_until(abs_time)`: 시스템 시각이 절대 시각(`time_point`)에 닿을 때까지 시도
+  - `shared_timed_mutex`는 `try_lock_shared_for()`, `try_lock_shared_until()`도
+- `timed_mutex`, `shared_timed_mutex`를 이미 가진 스레드가 다시 잡으면 교착 가능. `recursive_timed_mutex`는 여러 번 됨
+
+## 락
+
+- **락** (lock) 클래스: 뮤텍스를 올바르게 잡고 놓게 해 주는 RAII 클래스. 소멸자가 뮤텍스를 자동으로 놓음
+
+### lock_guard <Badge text="C++11" />
+
+- 가장 단순함 <CppRef path="cpp/thread/lock_guard" />
+  - `explicit lock_guard(mutex_type& m)`: 잡을 때까지 막힘
+  - `lock_guard(mutex_type& m, std::adopt_lock_t)`: 호출한 스레드가 **이미 잠갔다고** 보고 소유만 넘겨받음. 소멸할 때 놓음
+
+```cpp
+std::mutex m;
+int counter{ 0 };
+// 여러 스레드에서
+{
+    std::lock_guard lock{ m };   // CTAD(C++17). 그 전에는 lock_guard<std::mutex>
+    ++counter;
+}                                // 여기서 놓음
+```
+
+### unique_lock <Badge text="C++11" />
+
+- 더 유연함. 잠그는 시점을 선언보다 **나중으로** 미룰 수 있음 <CppRef path="cpp/thread/unique_lock" />
+  - `owns_lock()`이나 `bool` 변환으로 잡았는지 확인
+- 생성자
+
+| 생성자 | 하는 일 |
+| --- | --- |
+| `unique_lock(m)` | 잡을 때까지 막힘 |
+| `unique_lock(m, std::defer_lock)` | 지금은 잡지 않음. 나중에 `lock()` |
+| `unique_lock(m, std::try_to_lock)` | 잡아 보고 안 되면 막히지 않음 |
+| `unique_lock(m, std::adopt_lock)` | 이미 잠근 것을 넘겨받음 |
+| `unique_lock(m, abs_time)` | 절대 시각까지 시도 |
+| `unique_lock(m, rel_time)` | 상대 시간 동안 시도 |
+
+- `defer_lock`, `try_to_lock`, `adopt_lock`은 각각 태그 타입 `defer_lock_t` 등의 전역 상수 <CppRef path="cpp/thread/lock_tag" />
+- 멤버 `lock()`, `try_lock()`, `try_lock_for()`, `try_lock_until()`, `unlock()`
+
+### shared_lock <Badge text="C++14" />
+
+- `<shared_mutex>`. `unique_lock`과 같은 생성자와 멤버를 가지지만, 바탕 뮤텍스의 **공유** 쪽 함수(`lock_shared()` 등)를 부름 <CppRef path="cpp/thread/shared_lock" />
+- 같은 인터페이스라 `unique_lock` 자리에 바꿔 넣으면 독점 대신 공유 락을 잡음
+
+```cpp
+class PhoneBook {
+public:
+    void add(const std::string& name, int number)
+    {
+        std::unique_lock lock{ m_mutex };   // 쓰기: 혼자
+        m_entries[name] = number;
+    }
+    int find(const std::string& name) const
+    {
+        std::shared_lock lock{ m_mutex };   // 읽기: 여럿이 함께
+        // ...
+    }
+private:
+    mutable std::shared_mutex m_mutex;      // const 멤버에서도 잠그려고 mutable
+    std::map<std::string, int> m_entries;
+};
+```
+
+### 여러 락을 한 번에
+
+- 가변 인자 함수 템플릿(26장) 둘이 여러 뮤텍스를 **교착 없이** 잡음 <CppRef path="cpp/thread/lock" />
+  - `std::lock(l1, l2, ...)`: 정해지지 않은 순서로 모두 잡음. 중간에 예외가 나면 이미 잡은 것을 풀어 줌
+  - `std::try_lock(l1, l2, ...)`: 차례로 `try_lock()`. 모두 성공하면 -1, 하나라도 실패하면 잡은 것을 풀고 실패한 인수의 0부터 시작하는 번호
+
+```cpp
+std::unique_lock lock1{ mut1, std::defer_lock };
+std::unique_lock lock2{ mut2, std::defer_lock };
+std::lock(lock1, lock2);   // 둘 다 잡음
+```
+
+### scoped_lock <Badge text="C++17" />
+
+- `lock_guard`와 비슷하지만 뮤텍스를 **몇 개든** 받아 `std::lock`처럼 교착 없이 잡음 <CppRef path="cpp/thread/scoped_lock" />
+- 잡는 순서를 신경 쓸 필요가 없어 여러 락을 잡기가 크게 쉬워짐
+
+```cpp
+void transfer(Account& from, Account& to, int amount)
+{
+    std::scoped_lock lock{ from.m, to.m };
+    from.balance -= amount;
+    to.balance += amount;
+}
+```
+
+- 한 스레드는 `transfer(a, b)`, 다른 스레드는 `transfer(b, a)`를 불러도 교착하지 않음(1편의 엇갈린 순서 문제)
+
+## call_once
+
+- `std::call_once()`와 `std::once_flag`: 몇 스레드가 부르든 어떤 함수가 **정확히 한 번** 불리게 함 <CppRef path="cpp/thread/call_once" />
+  - 같은 `once_flag`로 부른 `call_once()` 중 하나만 실제로 함수를 부름. 예외 없이 끝나면 그것이 **유효한 호출**
+  - 함수가 예외를 던지면 예외가 그 호출자에게 전파되고, 다른 호출자가 다시 함수를 실행하도록 선택됨
+  - 다른 스레드의 `call_once()`는 유효한 호출이 끝날 때까지 막힘. 이미 끝났으면 막히지 않고 바로 돌아옴
+
+```cpp
+std::once_flag g_init;
+void work()
+{
+    std::call_once(g_init, init_shared_resources);   // 처음 한 번만 실행
+    // ...
+}
+```
+
+<RunCode client:load code={mlCode} />
+
+- 볼 것
+  - 스핀락을 `lock_guard`로 잡아 네 스레드가 안전하게 `push_back`
+  - `lock_guard`로 보호한 카운터는 정확히 4000
+  - `PhoneBook`: 쓰기는 `unique_lock`, 읽기는 `shared_lock`
+  - 엇갈린 이체를 `scoped_lock`이 교착 없이 처리. 합은 늘 200
+  - `call_once`의 초기화 메시지는 한 번만
+  - `defer_lock`으로 만든 `unique_lock`은 나중에 `lock()`
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `atomic_flag`의 기본 생성이 "놓인" 상태 | C++20 | `ATOMIC_FLAG_INIT`으로 초기화 |
+| `scoped_lock`, `shared_mutex`, 락의 CTAD | C++17 | `std::lock` + `adopt_lock`, `shared_timed_mutex`, 템플릿 인수를 적음 |
+| `shared_timed_mutex`, `shared_lock` | C++14 | 직접 만든 읽기-쓰기 락 |
+| `mutex`, `recursive_mutex`, 시간 제한 뮤텍스, `lock_guard`, `unique_lock`, `std::lock`, `call_once` | C++11 | 운영체제 API |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨. `std::lock`으로 둘을 잡고 `adopt_lock`으로 `lock_guard`에 넘김
+
+<RunCode client:load code={mlCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `m.lock(); ...; m.unlock();`으로 충분하다?
+  - 중간에 예외나 `return`이 있으면 영영 안 풀림. RAII 락을 씀
+- `std::mutex`를 같은 스레드에서 두 번 잠가도 된다?
+  - 교착(정의되지 않은 동작). 정말 필요하면 `recursive_mutex`지만 대개 설계를 고침
+- 읽기만 하는 함수는 잠글 필요가 없다?
+  - 다른 스레드가 동시에 쓴다면 필요함. 읽기끼리만 함께 하게 하려면 `shared_mutex` + `shared_lock`
+- `const` 멤버 함수에서는 뮤텍스를 잠글 수 없다?
+  - 뮤텍스를 `mutable`로 둠
+- 두 뮤텍스를 각각 `lock_guard`로 잡으면 된다?
+  - 다른 곳에서 반대 순서로 잡으면 교착. `scoped_lock`으로 한 번에
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 스핀락 | `atomic_flag` 바쁜 반복. 아주 짧은 구간만 |
+| 뮤텍스 | `mutex`, `recursive_mutex`, `shared_mutex`(읽기-쓰기), 시간 제한판 |
+| `lock_guard` | 가장 단순한 RAII 락 |
+| `unique_lock` | 나중에 잠그기, 시도, 시간 제한, `owns_lock` |
+| `shared_lock` | 공유(읽기) 락 |
+| `std::lock`, `scoped_lock` | 여러 뮤텍스를 교착 없이 |
+| `call_once` | `once_flag`로 딱 한 번 |
+
+## 복습 질문
+
+<details>
+<summary>`std::vector`를 여러 스레드가 `push_back`하고 다른 스레드가 크기를 읽는다. 어떻게 보호하는가?</summary>
+
+- 뮤텍스 하나를 두고 `push_back`과 `size()` 모두 같은 뮤텍스로 잠금. 읽기가 아주 잦다면 `shared_mutex`로 읽기는 `shared_lock`, 쓰기는 `unique_lock`
+
+</details>
+
+<details>
+<summary>잠긴 동안 다른 일을 하려고 락을 잠깐 풀었다가 다시 잡으려면 어떤 락을 쓰는가?</summary>
+
+- `unique_lock`. `lock.unlock();`으로 풀고 `lock.lock();`으로 다시 잡음. 소멸 때 잡혀 있으면 자동으로 풂(`lock_guard`는 중간에 풀 수 없음)
+
+</details>
+
+<details>
+<summary>설정 파일을 처음 필요할 때 한 번만 읽고 여러 스레드가 함께 쓰려면?</summary>
+
+```cpp
+const Config& config()
+{
+    // 정적 지역 변수의 초기화는 C++11부터 스레드 안전
+    static const Config instance{ load_config() };
+    return instance;
+}
+```
+
+- 함수 안의 정적 지역 변수 초기화는 스레드 안전이 보장됨. `call_once`로 해도 됨
+
+</details>
