@@ -1,0 +1,244 @@
+---
+title: 믹스인 클래스와 프레임워크
+description: 완전한 is-a 관계 없이 기능을 더하는 믹스인 클래스를 네 가지로 구현(다중 상속, 클래스 템플릿, CRTP, C++23 명시적 객체 매개변수)하고, 객체 지향 프레임워크를 대하는 법과 모델-뷰-컨트롤러(MVC) 패러다임을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import Flow from '../../../../components/Flow.astro';
+import mmCode from '../../../../examples/ch32/mixins-and-mvc.cpp?raw';
+import mmCpp11Code from '../../../../examples/ch32/mixins-and-mvc-cpp11.cpp?raw';
+
+- 다루는 것: 믹스인 클래스를 실제로 구현하는 여러 방법, 그리고 큰 프로그램을 쉽게 만들게 해 주는 프레임워크
+- 이 글에서 배우는 것: 믹스인 네 가지 구현, 프레임워크와 일하는 법, MVC
+
+## 믹스인 클래스
+
+- **믹스인 클래스** (mixin class)(5장, 6장): "이 클래스는 무엇을 **할 수 있나**?"에 답함. 이름이 흔히 "~할 수 있는"(-able)으로 끝남: 내보낼 수 있는(`Exportable`), 그릴 수 있는(`Drawable`) 등
+- 완전한 **is-a** 관계를 맺지 않고 클래스에 기능을 더하는 방법
+
+### 언제 쓰나
+
+- 믹스인 하나는 잘 정의된 기능 하나를 실제 코드와 함께 담음. 섞어 넣는 클래스는 그 기능을 공짜로 얻음
+- 그 동작이 객체 계층에 속하는지, 따로 떼어야 하는지 따져 봄
+  - **모든** 클래스가 그 기능을 가지면 기반 클래스가 상속하면 됨
+  - **일부** 클래스만, 그것도 계층 여기저기에 흩어져 있다면 믹스인이 맞음
+- 특히 쓸모 있는 경우: 클래스들이 한 축으로 계층을 이루는데 **다른 축**으로도 공통점이 있을 때
+  - 예: 문서 종류(메모, 보고서, 스프레드시트, 사진)로 계층을 짰는데, 그중 일부만 "PDF로 내보낼 수 있음"
+  - 내보내기 축으로 계층을 다시 짜면 원래의 깔끔한 구조를 버리게 됨
+  - 기반 `Document`에 아무것도 안 하는 `export_to()`를 두는 방법도 있지만, 내보낼 수 없는 문서에도 그 함수가 생김
+  - 믹스인: 원래 계층은 그대로 두고, 내보낼 수 있는 클래스만 `Exportable`을 **추가로** 상속
+
+### 방법 1: 다중 상속
+
+```cpp
+class Exportable {                                 // 믹스인
+public:
+    virtual ~Exportable() = default;
+    void export_to(const std::string& format) const;   // 실제 코드
+private:
+    virtual std::string export_name() const = 0;   // 섞는 쪽이 채울 부분
+};
+
+class Report : public Document, public Exportable { /* ... */ };
+```
+
+- 믹스인을 쓰는 문법은 다중 상속과 같음. 주 계층의 부모에 더해 믹스인에서도 파생
+- 믹스인은 **타입**도 제공함: 실제 클래스가 무엇이든 "내보낼 수 있는 것"들의 배열을 만들거나, `dynamic_cast<const Exportable*>`로 기능이 있는지 물을 수 있음 <CppRef path="cpp/language/dynamic_cast" />
+- 다중 상속을 피하고 싶다면, 타입의 일부만 다형적으로 다뤄야 할 때 정적 다형성이나 타입 지우기(type erasure)를 쓰는 방법도 있음
+
+### 방법 2: 클래스 템플릿
+
+- 믹스인 자체를 템플릿으로 만들고, 템플릿 인수 **타입에서 파생**함
+
+```cpp
+template <typename T>
+class WithUndo : public T {
+public:
+    void set(int v) { m_history.push_back(this->get()); T::set(v); }
+    void undo();
+private:
+    std::vector<int> m_history;
+};
+
+WithUndo<Slider> slider;   // Slider를 고치지 않고 되돌리기를 덧입힘
+```
+
+- 기존 클래스를 **전혀 고치지 않고** 기능을 더함
+- 템플릿 안에서 기반의 멤버를 부를 때는 `this->get()`이나 `T::set()`처럼 써야 함(의존 이름, 26장)
+
+### 방법 3: CRTP
+
+- **CRTP** (Curiously Recurring Template Pattern, 기묘하게 되풀이되는 템플릿 패턴): 믹스인이 **파생 클래스의 타입**을 템플릿 인수로 받음. 믹스인 자신은 아무것에서도 파생하지 않음 <CppRef path="cpp/language/crtp" />
+
+```cpp
+template <typename Derived>
+class Describable {
+public:
+    std::string describe() const
+    {
+        const auto& self{ static_cast<const Derived&>(*this) };   // 파생으로 캐스트
+        return std::format("<{}: {}>", self.kind(), self.summary());
+    }
+};
+
+class Point : public Describable<Point> {   // 자기 타입을 넘김
+public:
+    std::string kind() const;
+    std::string summary() const;
+};
+```
+
+- 가상 함수 없이 컴파일 시간에 파생의 함수를 부름(정적 다형성)
+- 구현에서 `this`를 파생 타입으로 `static_cast`해야 함
+
+### 방법 4: 명시적 객체 매개변수 <Badge text="C++23" />
+
+- **명시적 객체 매개변수** (explicit object parameter, "deducing this")(8장): `this`를 이름 있는 매개변수로 받음. `auto`로 받으면 그 타입이 **실제 호출한 객체의 타입**으로 추론됨 <CppRef path="cpp/language/member_functions" />
+- CRTP의 캐스트와 템플릿 인수가 사라짐
+
+```cpp
+class Describable23 {
+public:
+    std::string describe(this const auto& self)   // self는 Circle 등 파생 타입
+    {
+        return std::format("<{}: {}>", self.kind(), self.summary());
+    }
+};
+
+class Circle : public Describable23 { /* kind(), summary() */ };
+```
+
+- 믹스인 클래스는 평범한 클래스가 되고, `describe()`가 멤버 함수 템플릿이 됨
+
+## 객체 지향 프레임워크
+
+- 1980년대 그래픽 운영체제가 처음 나왔을 때는 절차적 프로그래밍이 표준이었음. GUI 프로그램은 복잡한 자료 구조를 채워 함수에 넘기는 식(창 구조체를 채워 사각형 그리기 함수에 넘기기)
+- 객체 지향이 퍼지며 GUI 개발에 적용한 것이 **객체 지향 프레임워크** (object-oriented framework)
+- **프레임워크** (framework): 아래에 있는 기능에 객체 지향 인터페이스를 주려고 **함께** 쓰는 클래스 묶음
+  - 보통은 응용 개발용 큰 클래스 라이브러리를 뜻하지만 크기는 상관없음. 내 응용에 데이터베이스 기능을 주는 클래스 묶음도 프레임워크
+
+### 프레임워크와 일하기
+
+- 프레임워크의 특징: **자기만의 기법과 패턴**이 있음. 고유한 사고 모델이 있어 시작할 때 배워야 함
+  - 큰 응용 프레임워크(예: MFC, Qt)로 일하려면 먼저 그 프레임워크가 세상을 보는 방식을 이해해야 함
+- 추상적 생각과 구현이 크게 다름
+  - 오래된 절차적 API 위에 지어져 설계가 그 영향을 받기도 함
+  - 처음부터 객체 지향으로 지어진 것도 있음
+  - C++의 일부 기능을 의도적으로 피하기도 함. 예: 다중 상속을 쓰지 않음
+- 새 프레임워크를 만나면 먼저 **무엇으로 돌아가는지** 알아냄
+  - 어떤 설계 원칙을 따르나? 개발자들이 전하려는 사고 모델은? 어떤 언어 기능을 많이 쓰나?
+  - 이것을 모르면 금세 프레임워크의 경계를 넘는 상황에 빠짐
+- 설계를 이해하면 **확장**할 수도 있음
+  - 예: 인쇄 기능이 없다면 프레임워크와 같은 모델로 인쇄 클래스를 직접 씀. 응용의 모델이 일관되고, 다른 응용에서도 재사용됨
+- 프레임워크 고유의 데이터 타입
+  - 예: MFC는 `std::string` 대신 `CString`을 씀
+  - 코드 전체를 그 타입으로 바꿀 필요는 없음. 프레임워크 코드와 나머지 코드의 **경계에서** 변환함
+
+### 모델-뷰-컨트롤러
+
+- **모델-뷰-컨트롤러** (model-view-controller, MVC): 흔한 패러다임. 많은 응용이 데이터 묶음, 그 데이터를 보는 하나 이상의 방식, 데이터 조작을 다룬다는 생각을 모델로 함
+
+| 구성 요소 | 역할 | 예: 온도 조절기 |
+| --- | --- | --- |
+| **모델** (model) | 데이터. 흔히 접근 함수가 많은 클래스 | 목표 온도 |
+| **뷰** (view) | 모델을 보여 주는 한 가지 방식. 여럿이 같은 데이터를 다르게 보여 줌 | 숫자로 보기, 막대로 보기 |
+| **컨트롤러** (controller) | 사건에 반응해 모델을 바꿈. 뷰를 조작하기도 함(스크롤바를 움직이면 뷰를 스크롤) | `+`/`-` 키를 누르면 목표 온도를 바꿈 |
+
+<Flow
+	steps={[
+		{ title: '사건', text: '사용자 입력 등 사건이 컨트롤러로 감' },
+		{ title: '컨트롤러', text: '모델(그리고/또는 뷰)을 조정함' },
+		{ title: '모델', text: '바뀌면 뷰들에게 갱신하라고 알림' },
+		{ title: '뷰', text: '모델의 새 데이터로 다시 그림' },
+	]}
+/>
+
+- 장점: 데이터를 표시에서 떼어 놓아 코드가 정리되고, 뷰를 쉽게 더할 수 있음
+- 많은 프레임워크가 지원하고, 웹 응용도 데이터, 조작, 표시를 분명히 나누는 이 방향으로 감
+- 변형: 모델-뷰-어댑터(MVA), 모델-뷰-뷰모델(MVVM) 등
+- 모델이 뷰에 알리는 부분은 33장의 관찰자 패턴과 같음
+
+## 실행 예제
+
+<RunCode client:load code={mmCode} />
+
+- 볼 것
+  - 1: 메모는 `Exportable`이 아니라 `dynamic_cast`가 `nullptr`. 보고서만 내보냄
+  - 2: `WithUndo<Slider>`가 10 → 25로 바꾼 뒤 되돌려 10
+  - 3, 4: CRTP와 명시적 객체 매개변수가 같은 결과를 냄
+  - 5: 키 `+`, `+`, `-`가 컨트롤러 → 모델 → 두 뷰로 전달됨. 뷰를 하나 더 구독시키면 모델과 컨트롤러를 고치지 않고 표시가 늘어남
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 명시적 객체 매개변수 `this auto&` | C++23 | CRTP |
+| `std::format` | C++20 | 문자열 이어 붙이기, `ostringstream` |
+| 다중 상속·템플릿·CRTP 믹스인 | C++98 | 그대로 |
+| `std::function`, 람다 | C++11 | 함수 포인터, 함수 객체 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={mmCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 믹스인은 is-a 관계다?
+  - "~할 수 있다"를 더하는 것. 주 계층의 is-a와는 다른 축
+- 모든 클래스에 필요한 기능도 믹스인으로?
+  - 모두 가진다면 기반 클래스가 맡음. 믹스인은 일부에 흩어진 기능에
+- CRTP의 `Describable<Point>`는 `Point`를 만들기 전이라 쓸 수 없다?
+  - 템플릿 멤버 함수 본문은 쓰일 때 인스턴스화되므로, 그때는 `Point`가 완성되어 있음
+- 프레임워크를 쓰면 코드 전체를 그 타입으로 바꿔야 한다?
+  - 경계에서 변환하면 됨
+- MVC에서 뷰가 모델을 직접 바꾼다?
+  - 바꾸는 것은 컨트롤러. 뷰는 모델을 보여 줌
+
+## 정리
+
+| 기법 | 모양 | 특징 |
+| --- | --- | --- |
+| 다중 상속 믹스인 | `class R : public Base, public Mixin` | 타입이 생김(배열, `dynamic_cast`). 가상 함수 |
+| 템플릿 믹스인 | `template <T> class M : public T` | 기존 클래스를 고치지 않음 |
+| CRTP | `class D : public M<D>` | 정적 다형성. `static_cast<D&>(*this)` |
+| 명시적 객체 매개변수 | `f(this auto& self)` | CRTP의 캐스트·템플릿 인수 없이 |
+| 프레임워크 | 함께 쓰는 클래스 묶음 | 사고 모델을 먼저 익히고, 같은 모델로 확장, 경계에서 변환 |
+| MVC | 모델·뷰·컨트롤러 | 데이터와 표시와 조작의 분리 |
+
+## 복습 질문
+
+<details>
+<summary>게임 아이템 계층(무기, 방어구, 물약)에서 일부 아이템만 "쌓을 수 있음(stackable)"이다. 어떻게 설계하는가?</summary>
+
+- 주 계층은 그대로 두고 `Stackable` 믹스인을 만들어 쌓을 수 있는 아이템만 추가로 상속함. 인벤토리는 `dynamic_cast<Stackable*>`로 확인하거나 쌓을 수 있는 것만 따로 모음
+- 가상 함수가 필요 없다면 CRTP나 명시적 객체 매개변수로 정적으로 섞어도 됨
+
+</details>
+
+<details>
+<summary>CRTP 믹스인에서 `static_cast<const Derived&>(*this)`가 안전한 이유는?</summary>
+
+- 믹스인은 `class Point : public Describable<Point>`처럼 쓰여, 실제 객체가 늘 `Derived`의 일부이기 때문. 다른 타입을 템플릿 인수로 잘못 넘기면(`class A : public Describable<B>`) 정의되지 않은 동작이므로 관례를 지켜야 함
+
+</details>
+
+<details>
+<summary>MVC에서 같은 데이터를 표와 그래프로 동시에 보여 주려면 무엇을 더하는가?</summary>
+
+- 뷰를 하나 더 만들어 모델에 구독시킴. 모델과 컨트롤러는 바꾸지 않음
+
+</details>
+
+## 32장을 마치며
+
+- 전문 C++ 프로그래머가 프로젝트에서 꾸준히 쓰는 기법들을 봄
+- 개발자로 성장하면 자기만의 재사용 클래스와 라이브러리 모음이 생김
+- 설계 기법을 알면 더 높은 수준의 재사용 구조인 **패턴**으로 가는 문이 열림
+- 다음 장(33장): 설계 패턴 적용
