@@ -1,0 +1,203 @@
+---
+title: 뮤텍스 활용
+description: 여러 스레드의 출력이 섞이지 않게 하는 두 방법(동기화된 스트림 osyncstream, 정적 뮤텍스), 락을 짧게 잡아야 하는 이유, 시간 제한 뮤텍스로 기다리다 포기하기, 피해야 할 이중 검사 잠금과 그 대안(call_once, 마법 static)을 익힙니다.
+sidebar:
+  order: 6
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import muCode from '../../../../examples/ch27/mutex-usage.cpp?raw';
+import muCpp11Code from '../../../../examples/ch27/mutex-usage-cpp11.cpp?raw';
+
+- 다루는 것: 5편의 뮤텍스로 여러 스레드를 동기화하는 예 몇 가지
+- 이 글에서 배우는 요소: `osyncstream`, 정적 뮤텍스, 짧게 잡기, 시간 제한 뮤텍스, 이중 검사 잠금, 마법 static
+
+## 스트림에 스레드 안전하게 쓰기
+
+- 2편: `cout` 같은 C++ 스트림은 데이터 경쟁은 없지만, 여러 스레드의 출력이 **섞일** 수 있음
+- 해결 방법 둘
+  - 동기화된 스트림을 씀
+  - 뮤텍스로 한 번에 한 스레드만 스트림에 쓰게 함
+
+### 동기화된 스트림 <Badge text="C++20" />
+
+- `<syncstream>`의 `std::basic_osyncstream`, 별칭 `osyncstream`(`char`), `wosyncstream`(`wchar_t`). 이름의 o는 출력 <CppRef path="cpp/io/basic_osyncstream" />
+- 동기화된 스트림으로 쓴 내용은 그 스트림이 **소멸하는 순간** 한꺼번에 최종 스트림에 나타남
+  - 다른 스레드도 각자의 `osyncstream`을 쓰는 한, 다른 출력과 섞이지 않음
+- 스레드 안전 면에서 `osyncstream`과 `ostream`의 관계는 `atomic_ref<int>`와 `int`의 관계와 같음
+
+```cpp
+for (int i{ 0 }; i < n; ++i) {
+    std::osyncstream out{ std::cout };
+    out << "작업 " << id << ": " << i << '\n';
+}   // out이 소멸하며 한 줄을 통째로 cout에 내보냄
+```
+
+### 뮤텍스로
+
+- 동기화된 스트림을 쓸 수 없으면 뮤텍스로 `cout` 접근을 모두 동기화함
+- 모든 객체가 **같은** 뮤텍스를 써야 하므로 **정적** 데이터 멤버로 둠(`inline static`, C++17)
+
+```cpp
+class Reporter {
+public:
+    void operator()() const
+    {
+        for (int i{ 0 }; i < 3; ++i) {
+            std::string line{ std::format("보고 {}: {}\n", m_id, i) };
+            std::lock_guard lock{ s_mutex };
+            std::cout << line;
+        }
+    }
+private:
+    int m_id;
+    inline static std::mutex s_mutex;
+};
+```
+
+- 반복마다 `lock_guard`를 새로 만듦. 반복문 **앞에서** 한 번 잡으면, 한 스레드가 반복 전체 동안 락을 쥐어 멀티스레드의 이점이 사라짐
+- 위 예는 문자열을 락 **밖에서** 만들고, 락 안에서는 출력만 함
+
+:::caution
+락은 되도록 짧게 잡는다. 락을 쥔 채로 느린 일을 하지 않는다: 콘솔 출력, 파일 읽기, 데이터베이스 접근, 긴 계산, 일부러 재우기 등.
+:::
+
+## 시간 제한 뮤텍스 쓰기
+
+- `timed_mutex`와 `unique_lock`에 상대 시간을 주면, 그 시간 동안만 잡기를 시도함(5편)
+- 못 잡으면 생성자가 그냥 돌아옴. `unique_lock`의 `bool` 변환으로 잡았는지 확인
+
+```cpp
+std::timed_mutex g_slow;
+void try_print(int id)
+{
+    std::unique_lock lock{ g_slow, 30ms };
+    if (lock) {
+        // 잡음
+    } else {
+        // 30ms 안에 못 잡음: 출력을 건너뜀
+    }
+}
+```
+
+## 이중 검사 잠금
+
+- **이중 검사 잠금** (double-checked locking): 뮤텍스를 피해 보려는 반쯤 된 시도. 사실은 **피해야 할 패턴**(안티패턴)이지만 기존 코드에서 볼 수 있어 소개함
+- 생각: 자원을 정확히 한 번만 초기화하되, 이미 초기화되었으면 락을 잡지 않음
+  - 락을 잡기 **전**에 한 번 검사해 필요 없는 락을 피하고
+  - 락을 잡은 **뒤** 다시 검사해, 그 사이 다른 스레드가 초기화하지 않았는지 확인
+
+```cpp
+std::atomic<bool> g_initialized{ false };
+std::mutex g_mutex;
+
+void process()
+{
+    if (!g_initialized) {
+        std::unique_lock lock{ g_mutex };
+        if (!g_initialized) {
+            initialize_shared_resources();
+            g_initialized = true;
+        }
+    }
+    // ...
+}
+```
+
+- 더 빠르게 하려고 느슨한 원자적 연산이나 보통 `bool`을 쓰면 데이터 경쟁에 민감해져 올바르게 만들기가 아주 어려움
+- 역설적으로 `call_once()`(5편)가 보통 더 빠르고, **마법 static**을 쓸 수 있다면 그것이 더 빠름
+
+:::note
+함수 안의 정적 지역 변수를 **마법 static** (magic static, 스레드 안전 static)이라고 한다. C++는 이런 변수가 스레드 안전하게 초기화됨을 보장하므로 따로 동기화할 필요가 없다. 싱글턴 패턴(33장)에서 다시 본다.
+:::
+
+```cpp
+const std::vector<int>& table()
+{
+    // 처음 한 번만, 스레드 안전하게 초기화
+    static const std::vector<int> t{ build_table() };
+    return t;
+}
+```
+
+:::caution
+이중 검사 잠금은 피한다. 단순한 락, 원자적 변수, `call_once()`, 마법 static 같은 다른 방법을 쓴다.
+:::
+
+<RunCode client:load code={muCode} />
+
+- 볼 것
+  - `osyncstream`과 정적 뮤텍스 둘 다 한 줄이 섞이지 않음
+  - 시도 1이 100ms 동안 쥐고 있어서, 30ms만 기다린 시도 2는 포기함
+  - 네 스레드가 `table()`을 불러도 표는 한 번만 만들어짐
+  - 이 환경은 실행 결과를 모아 보여 주므로 순서가 깔끔하게 보일 수 있음. 실제 동시 실행에서는 줄 사이 순서가 섞일 수 있지만 한 줄이 쪼개지지는 않음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `osyncstream` | C++20 | 한 줄을 문자열로 만든 뒤 뮤텍스로 보호해 한 번에 출력 |
+| `inline static` 데이터 멤버 | C++17 | 클래스 밖 정의, 또는 함수 안의 정적 지역 변수 |
+| `timed_mutex`, 스레드 안전한 정적 지역 변수 초기화 | C++11 | 운영체제 API, 이중 검사 잠금 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={muCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `cout`은 데이터 경쟁이 없으니 출력도 섞이지 않는다?
+  - 경쟁은 없지만 `<<` 사이사이에 다른 스레드의 출력이 끼어들 수 있음
+- 클래스마다 뮤텍스를 비정적 멤버로 두면 출력이 보호된다?
+  - 객체마다 다른 뮤텍스라 서로 막지 못함. 모두가 같은 뮤텍스(정적 멤버 등)를 써야 함
+- 락을 반복문 밖에서 한 번 잡는 것이 효율적이다?
+  - 다른 스레드가 내내 기다리게 됨. 필요한 구간만 짧게
+- 이중 검사 잠금은 똑똑한 최적화다?
+  - 올바르게 만들기 어렵고 보통 더 느림. 마법 static이나 `call_once`
+- 정적 지역 변수 초기화는 여러 스레드가 동시에 하면 위험하다?
+  - C++11부터 스레드 안전이 보장됨
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `osyncstream` | 소멸할 때 한꺼번에 출력. 줄이 섞이지 않음 |
+| 정적 뮤텍스 | 모두가 같은 뮤텍스로 공유 스트림 보호 |
+| 짧게 잡기 | 락 안에서 느린 일을 하지 않음 |
+| 시간 제한 | `unique_lock{ timed_mutex, 30ms }`, `if (lock)` |
+| 이중 검사 잠금 | 안티패턴. `call_once`, 마법 static |
+
+## 복습 질문
+
+<details>
+<summary>로그 함수 `log(msg)`를 여러 스레드에서 불러도 한 줄씩 깔끔하게 나오게 하려면 가장 간단한 방법은?</summary>
+
+```cpp
+void log(std::string_view msg)
+{
+    // 임시 객체: 이 문장이 끝나면 내보냄
+    std::osyncstream{ std::cout } << msg << '\n';
+}
+```
+
+</details>
+
+<details>
+<summary>락 안에서 `std::format`으로 긴 문자열을 만들고 출력한다. 무엇을 고치면 좋은가?</summary>
+
+- 문자열 만들기를 락 **밖으로** 옮기고, 락 안에서는 출력만 함. 락을 쥔 시간이 줄어 다른 스레드가 덜 기다림
+
+</details>
+
+<details>
+<summary>이중 검사 잠금에서 `g_initialized`를 보통 `bool`로 두면 무엇이 문제인가?</summary>
+
+- 락 밖의 첫 검사가 다른 스레드의 쓰기와 데이터 경쟁(정의되지 않은 동작)
+- 컴파일러나 하드웨어가 "초기화"와 "`true` 쓰기"의 순서를 바꿀 수 있어, 다른 스레드가 `true`를 보고 아직 초기화되지 않은 자원을 쓸 수 있음
+
+</details>
