@@ -1,0 +1,220 @@
+---
+title: 자주 쓰는 문법 빠른 참조
+description: 설계 기법과 설계 패턴의 차이, 그리고 개념은 기억나는데 문법이 가물가물할 때 펼쳐 보는 요약 — 클래스 정의와 특수 멤버 함수, 파생과 override, 람다, 복사 후 맞바꾸기, 예외, 클래스 템플릿과 개념 제약, 파일 쓰기와 읽기를 한 파일로 봅니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import csCode from '../../../../examples/ch32/cheat-sheet.cpp?raw';
+import csCpp11Code from '../../../../examples/ch32/cheat-sheet-cpp11.cpp?raw';
+
+- 다루는 것: 프로그래머는 비슷한 문제를 되풀이해서 만남. 알맞은 기법이나 패턴을 갖추고 있으면 시간을 아낌
+- **설계 기법** (design technique)과 **설계 패턴** (design pattern)(33장)
+  - 둘 다 특정 문제를 푸는 표준적인 접근
+  - 설계 기법은 **C++에 특화**됨. 언어의 성가신 점이나 부족한 점을 넘으려는 것이거나, 여러 프로그램에서 흔한 C++ 문제를 푸는 코드 조각
+  - 언어에 내장된 것은 아니지만 자주 쓰는 C++ **관용구** (idiom)
+  - 설계 패턴은 언어에 덜 매임
+- 이 장의 순서
+  - 1편: 개념은 아는데 문법이 기억나지 않을 때 보는 빠른 참조
+  - 2편: RAII와 이중 디스패치
+  - 3편: 믹스인 클래스와 프레임워크
+
+## 문법이 기억나지 않을 때
+
+- C++ 표준 명세는 2,000쪽이 넘음. 키워드와 기능이 너무 많아 다 외울 수 없고, 전문가도 찾아봄
+- 거의 모든 C++ 프로그램에 쓰이는 것들을 모았음. 자세한 설명은 괄호 안의 장에 있음
+
+### 클래스 정의(8장, 9장)
+
+```cpp
+class Shape {
+public:
+    explicit Shape(std::string name);        // 변환 생성자를 막는 explicit
+    virtual ~Shape() = default;              // 기반 클래스면 가상 소멸자
+    Shape(const Shape&) = delete;            // 복사 금지
+    Shape& operator=(const Shape&) = delete;
+    Shape(Shape&&) = default;                // 이동은 명시적으로 기본 구현
+    Shape& operator=(Shape&&) = default;
+
+    virtual double area() const = 0;         // 순수 가상 함수
+    const std::string& name() const;         // const 멤버 함수
+
+private:
+    std::string m_name;                      // 데이터는 private
+    static constexpr int MaxSides{ 8 };      // 클래스 상수
+    static inline int ms_count{ 0 };         // 정적 데이터 멤버(C++17 inline)
+};
+```
+
+- 데이터 멤버는 `public`이나 `protected`로 두지 않음. 캡슐화하고 접근 함수를 둠
+- 다른 클래스의 기반이 될 클래스는 최소한 소멸자를 `virtual`로. 소멸자를 비가상으로 둘 거라면 `final`로 표시해 파생을 막기를 권함(10장)
+- 가상 소멸자에 할 일이 없으면 `= default`
+- 특수 멤버 함수는 `= delete`(금지)와 `= default`(기본 구현)로 명시할 수 있음
+
+### 파생(10장)
+
+```cpp
+class Rect final : public Shape {            // final: 더는 파생 금지
+public:
+    Rect(double w, double h) : Shape{ "rect" }, m_w{ w }, m_h{ h } {}
+    double area() const override;            // override: 재정의임을 확인
+};
+```
+
+- 기반 클래스 생성자는 초기화 목록 맨 앞에서 부름
+- `override`를 붙이면 시그니처가 어긋났을 때 컴파일 오류 <CppRef path="cpp/language/override" />
+- `final`은 클래스에 붙이면 파생 금지, 가상 함수에 붙이면 재정의 금지 <CppRef path="cpp/language/final" />
+
+### 람다(19장)
+
+```cpp
+auto big{ std::count_if(v.begin(), v.end(),
+                        [threshold](int x) { return x > threshold; }) };
+```
+
+- `[캡처](매개변수) -> 반환 타입 { 본문 }`. 반환 타입은 대개 추론에 맡김 <CppRef path="cpp/language/lambda" />
+- 캡처: `[x]` 값, `[&x]` 참조, `[=]` 모두 값, `[&]` 모두 참조, `[this]`, `[y = std::move(x)]` 초기화 캡처<Badge text="C++14" />
+
+### 복사 후 맞바꾸기(9장)
+
+```cpp
+Buffer& operator=(const Buffer& rhs)
+{
+    Buffer temp{ rhs };   // 1. 복사(실패하면 여기서 예외, *this는 그대로)
+    swap(temp);           // 2. 예외 없는 맞바꾸기
+    return *this;         // 3. temp가 옛 자원을 가지고 소멸
+}
+void swap(Buffer& other) noexcept;
+```
+
+- **강한 예외 보장**: 대입이 실패해도 객체는 원래 상태
+- 자기 대입도 저절로 안전함
+
+### 예외(14장)
+
+```cpp
+try {
+    if (empty) { throw std::logic_error{ "비어 있음" }; }
+} catch (const std::logic_error& e) {        // const 참조로 잡기
+    std::println("{}", e.what());
+} catch (...) {                              // 그 밖의 모든 예외
+    throw;                                   // 다시 던지기
+}
+```
+
+- 표준 예외 계층(`std::exception` 아래 `logic_error`, `runtime_error` 등)에서 알맞은 것을 고르거나 파생해 씀
+- 예외를 던지지 않는 함수는 `noexcept`
+
+### 클래스 템플릿과 제약(12장)
+
+```cpp
+template <std::totally_ordered T>            // 개념으로 제약(C++20)
+class MaxTracker {
+public:
+    void add(const T& v);
+    const T& max() const;
+};
+
+template <typename T>
+    requires std::integral<T>                // requires 절
+T half(T x) { return x / 2; }
+```
+
+- 타입 매개변수 자리에 개념 이름을 쓰거나 `requires` 절로 제약함 <CppRef path="cpp/language/constraints" />
+- 제약을 어긴 인수로 쓰면 "어느 개념을 만족하지 않는지" 알려 주는 짧은 오류가 남
+- 표준 개념: `std::totally_ordered` <CppRef path="cpp/concepts/totally_ordered" />, `std::integral`, `std::floating_point`, `std::copyable` 등
+
+### 파일 쓰기와 읽기(13장)
+
+```cpp
+{
+    std::ofstream out{ "notes.txt" };
+    if (!out) { /* 열기 실패 처리 */ }
+    out << "first line\n" << 42 << '\n';
+}                                            // 블록을 벗어나면 닫힘(RAII)
+
+std::ifstream in{ "notes.txt" };
+std::string line;
+int number{ 0 };
+std::getline(in, line);                      // 한 줄
+in >> number;                                // 공백으로 구분된 값
+```
+
+- `std::ofstream` <CppRef path="cpp/io/basic_ofstream" />, `std::ifstream` <CppRef path="cpp/io/basic_ifstream" />
+- 연 뒤 늘 상태를 확인함. 소멸자가 파일을 닫으므로 `close()`를 따로 부를 일이 드묾
+
+## 한 파일로 모아 보기
+
+<RunCode client:load code={csCode} />
+
+- 위의 일곱 가지를 한 번에 실행함. 파일은 실행 환경의 작업 디렉터리에 만들어졌다가 사라짐
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 개념, `requires` | C++20 | `static_assert`와 타입 특성, `enable_if`(26장) |
+| `static inline` 데이터 멤버 | C++17 | 클래스 밖 정의 |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T(...))` |
+| `= default`, `= delete`, `override`, `final`, 람다, 이동 | C++11 | 선언만 하고 정의하지 않기(복사 금지) 등 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={csCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 기반 클래스의 소멸자는 비가상이어도 된다?
+  - 기반 포인터로 지우면 파생 부분이 소멸되지 않음. `virtual`로 하거나 클래스를 `final`로
+- `override`는 없어도 재정의된다?
+  - 맞지만 시그니처가 조금만 달라도 새 함수가 됨. `override`로 컴파일러가 확인하게 함
+- 복사 대입은 자기 대입 검사부터 해야 한다?
+  - 복사 후 맞바꾸기면 검사 없이도 안전
+- 예외는 값으로 잡아도 된다?
+  - 슬라이싱과 복사. `const` 참조로
+- 파일은 반드시 `close()`를 불러야 닫힌다?
+  - 스트림 소멸자가 닫음. 일찍 닫아야 할 때만 부름
+
+## 정리
+
+| 하고 싶은 것 | 기억할 문법 |
+| --- | --- |
+| 클래스 | 가상 소멸자, `= delete`/`= default`, 데이터는 `private` |
+| 파생 | `: public Base`, 초기화 목록에서 기반 생성자, `override`, `final` |
+| 람다 | `[캡처](매개변수) { 본문 }` |
+| 대입 연산자 | 복사 후 맞바꾸기, `noexcept swap` |
+| 예외 | `throw 타입{...}`, `catch (const 타입&)`, `throw;` |
+| 템플릿 제약 | `template <개념 T>`, `requires` |
+| 파일 | `ofstream`/`ifstream`, 상태 확인, 소멸자가 닫음 |
+
+## 복습 질문
+
+<details>
+<summary>복사는 막고 이동만 허용하는 클래스를 만들려면 특수 멤버 함수를 어떻게 선언하는가?</summary>
+
+```cpp
+Widget(const Widget&) = delete;
+Widget& operator=(const Widget&) = delete;
+Widget(Widget&&) = default;
+Widget& operator=(Widget&&) = default;
+```
+
+</details>
+
+<details>
+<summary>정수 타입만 받는 함수 템플릿 `clamp_to_byte`를 개념으로 제약해 선언해 보라.</summary>
+
+```cpp
+template <std::integral T>
+T clamp_to_byte(T value);
+```
+
+- 또는 `template <typename T> requires std::integral<T>`
+
+</details>

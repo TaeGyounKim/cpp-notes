@@ -77,6 +77,7 @@ const parts = [
 			chapter('29장. 효율적인 C++ 코드 작성', 'part5/ch29'),
 			chapter('30장. 테스트 숙달하기', 'part5/ch30'),
 			chapter('31장. 디버깅 정복하기', 'part5/ch31'),
+			chapter('32장. 설계 기법과 프레임워크', 'part5/ch32'),
 		],
 	},
 ];
