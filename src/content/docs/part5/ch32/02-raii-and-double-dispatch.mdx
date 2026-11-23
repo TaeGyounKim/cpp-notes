@@ -1,0 +1,264 @@
+---
+title: RAII와 이중 디스패치
+description: 바퀴를 다시 발명하지 않기, 생성자가 자원을 얻고 소멸자가 놓는 RAII 클래스 만들기(복사 금지, 이동, get·release·reset), 이름 없는 RAII 객체의 함정과 [[nodiscard]] 생성자, 두 객체의 실행 시간 타입으로 동작을 고르는 이중 디스패치(무차별 대입, 오버로딩의 한계, 두 번의 가상 호출), 그리고 variant와 visit을 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import Flow from '../../../../components/Flow.astro';
+import rdCode from '../../../../examples/ch32/raii-and-dispatch.cpp?raw';
+import rdCpp11Code from '../../../../examples/ch32/raii-and-dispatch-cpp11.cpp?raw';
+
+- 다루는 것: 지금 이 순간에도 세계 곳곳의 프로그래머가 이미 풀린 문제를 다시 풂. 참조 계수 스마트 포인터를 처음부터 짜고, 믹스인을 쓰면 좋을 클래스 계층을 어렵게 설계함
+- 전문가는 바퀴를 다시 발명하는 시간을 줄이고, 재사용할 수 있는 개념을 새롭게 응용하는 데 시간을 씀
+- 이 글에서 배우는 것: 일상적인 일을 더 잘하게 해 주는 기법 둘. RAII, 이중 디스패치
+
+## RAII
+
+- **RAII** (Resource Acquisition Is Initialization, 자원 획득은 초기화다): 단순하지만 강력한 개념
+  - 생성자가 자원의 소유권을 얻으며 객체를 **초기화**함. 그래서 이 이름
+  - 소멸자가 객체가 범위를 벗어날 때 얻은 자원을 **자동으로 놓음**
+  - 초기화와 해제가 모두 정해진 시점에 일어남 <CppRef path="cpp/language/raii" />
+- 표준 라이브러리 곳곳에 있음: `std::unique_ptr`(메모리), `std::fstream`(파일), `std::lock_guard`·`std::unique_lock`(뮤텍스), `std::jthread`(스레드)
+
+### RAII 클래스 만들기
+
+- C 스타일 자원(파일 핸들, 소켓, 그래픽 자원 등)을 감싸는 RAII 클래스의 전형적인 모양
+
+```cpp
+class Channel final {
+public:
+    [[nodiscard]] explicit Channel(const char* name)   // 생성자가 얻음
+        : m_id{ open_channel(name) } {}
+    ~Channel() { reset(); }                            // 소멸자가 놓음
+
+    Channel(const Channel&) = delete;                  // 복사 금지
+    Channel& operator=(const Channel&) = delete;
+    Channel(Channel&& src) noexcept                    // 이동은 허용
+        : m_id{ std::exchange(src.m_id, 0) } {}
+    Channel& operator=(Channel&& rhs) noexcept;
+
+    int get() const noexcept { return m_id; }          // 감싼 자원 보기
+    [[nodiscard]] int release() noexcept;              // 소유권 넘기기
+    void reset() noexcept;                             // 놓기(새 자원으로 바꾸기)
+
+private:
+    int m_id{ 0 };
+};
+```
+
+- 복사는 보통 금지: 자원이 하나뿐이라 두 객체가 같은 자원을 놓으면 두 번 해제
+- 이동은 허용: 원본을 "빈 상태"로 만들어, 원본 소멸자가 아무것도 놓지 않게 함. `std::exchange`<Badge text="C++14" />가 "옛 값을 꺼내고 새 값을 넣기"를 한 번에 함 <CppRef path="cpp/utility/exchange" />
+- `get()`, `release()`, `reset()`은 `std::unique_ptr`의 이름을 따른 관례
+- 기본 생성자는 두지 않기를 권함. 아래 함정 일부를 막음
+- 메모리가 아닌 자원도 `std::unique_ptr`에 커스텀 삭제자를 붙여 감쌀 수 있음(7장)
+
+### 함정: 이름 없는 RAII 객체
+
+- 어떤 범위 안에서 RAII 객체를 만든다고 생각했는데, 실은 **임시 객체**를 만들어 문장 끝에서 바로 소멸시키는 경우가 있음
+
+```cpp
+Channel log{ "log" };   // 올바름: 블록 끝까지 열려 있음
+Channel{ "log" };       // 이름 없음: 이 문장이 끝나자마자 닫힘
+```
+
+- 컴파일러는 대개 아무 말도 하지 않음. 막는 법: 생성자에 `[[nodiscard]]`<Badge text="C++20" />(생성자에 붙이는 것은 C++20부터) <CppRef path="cpp/language/attributes/nodiscard" />
+  - GCC 경고 예: `ignoring return value of 'Channel::Channel(const char*)', declared with attribute 'nodiscard'`
+- 파일처럼 만든 뒤 계속 쓰는 자원은 이름을 잊을 일이 드묾. 위험한 것은 **만들어 두기만 하고 직접 쓰지 않는** RAII 객체, 대표적으로 락
+
+```cpp
+void Counter::add(int n)
+{
+    std::unique_lock<std::mutex> lock(m_mutex);   // 올바름
+    m_value += n;
+}
+
+std::unique_lock<std::mutex>(m_mutex);   // 실수 1: m_mutex라는 지역 변수 선언!
+std::unique_lock<std::mutex>{ m_mutex }; // 실수 2: 임시 락. 바로 풀림
+std::unique_lock<std::mutex>(m);         // 실수 3: 이름까지 틀리면 경고도 거의 없음
+```
+
+- 실수 1: 괄호가 선언으로 해석되어, **기본 생성된** 락 변수 `m_mutex`를 선언함. 멤버 `m_mutex`를 가리고 아무것도 잠그지 않음. 최근 GCC는 `-Wall`에서 "선언에 불필요한 괄호"(`-Wparentheses`) 경고를, `-Wshadow`를 켜면 "멤버를 가린다"는 경고를 냄
+- 실수 2: 중괄호 초기화를 쓰면 선언으로 오해되지는 않지만, 임시 락이 문장 끝에서 풀림. 생성자에 `[[nodiscard]]`를 붙인 표준 라이브러리 구현(최근 libstdc++, MSVC 등)에서는 경고가 남
+- 실수 3: 오타 난 이름 `m`으로 지역 변수를 선언함. 불필요한 괄호 경고 정도뿐. 중괄호를 썼다면 `m`이 선언되지 않았다는 **오류**가 남
+- `std::unique_lock` <CppRef path="cpp/thread/unique_lock" />
+
+:::caution
+RAII 객체에는 늘 이름을 붙인다. RAII 클래스에는 기본 생성자를 두지 않는 편이 낫다.
+:::
+
+## 이중 디스패치
+
+- **다형성**(5장, 10장): 실행 시간 타입에 따라 동작을 고름. 예: 모든 `Animal`이 `move()`하지만 방식이 다르고, 가상 함수가 실행 중 알맞은 것을 부름(**디스패치**)
+- 가상 함수는 **받는 객체 하나**의 실행 시간 타입만 봄. 때로는 **두 객체**의 실행 시간 타입으로 동작을 골라야 함
+  - 예: 가위바위보. `a.beats(b)`의 결과는 `a`와 `b`의 실제 타입 둘 다에 달림
+- 어떤 객체 지향 언어는 여러 객체의 실행 시간 타입으로 함수를 고르는 **멀티메서드** (multimethod)를 지원하지만 C++에는 없음
+- **이중 디스패치** (double dispatch): 두 객체에 대해 "가상"처럼 동작하게 하는 기법
+  - 실행 시간 타입 둘 이상으로 고르는 **다중 디스패치**의 특수한 경우. 실제로는 둘이면 대개 충분함
+
+### 시도 1: 무차별 대입
+
+- 한 객체의 관점에서 `if`/`else`로 다른 객체의 타입을 검사
+
+```cpp
+bool Rock::beats(const Hand& other) const
+{
+    return typeid(other) == typeid(Scissors);   // 다른 타입이면 false
+}
+```
+
+- 클래스가 적으면 가장 단순하지만 피할 이유가 있음
+  - 객체 타입을 명시적으로 묻는 것은 객체 지향 구조가 부족하다는 신호로 여겨짐
+  - 타입이 늘면 지저분하고 반복적이 됨
+  - 새 타입을 **강제로 고려하게 하지 않음**. 예: `Lizard`를 더해도 `Rock`은 그대로 컴파일되고, 도마뱀을 이길 수 있는데도 `false`를 돌려줌. 해당 `else if`가 없기 때문
+
+### 시도 2: 오버로딩으로 한 번의 다형성
+
+- 기반 클래스에 타입마다 순수 가상 오버로드를 둠: `beats(const Rock&)`, `beats(const Paper&)`, `beats(const Scissors&)`
+  - 파생 클래스가 모든 조합을 **강제로** 구현하게 됨
+- 그러나 문제의 절반만 풂
+  - `Hand&`로 `a`를 가리켜 `a.beats(Rock{})`를 부르는 것은 됨(받는 쪽은 다형적)
+  - 반대로 인수가 `Hand&`이면 `a.beats(handRef)`는 **컴파일 오류**: `beats(const Hand&)`가 없음
+  - 오버로드는 **컴파일 시간** 타입으로 고르는데, 컴파일러는 `handRef`의 실제 타입을 모름
+  - `Hand` 참조들의 배열을 돌며 서로 견주는 코드는 쓸 수 없음
+
+### 시도 3: 이중 디스패치
+
+- 핵심: 결과를 **인수 쪽의 멤버 함수 호출**로 정함
+
+```cpp
+class Hand {
+public:
+    virtual bool beats(const Hand& other) const = 0;
+    virtual bool beaten_by(const Rock&) const = 0;     // "나는 바위에 지는가?"
+    virtual bool beaten_by(const Paper&) const = 0;
+    virtual bool beaten_by(const Scissors&) const = 0;
+};
+
+bool Rock::beats(const Hand& other) const
+{
+    return other.beaten_by(*this);   // *this는 여기서 Rock으로 정해짐
+}
+bool Scissors::beaten_by(const Rock&) const { return true; }
+```
+
+<Flow
+	steps={[
+		{ title: 'a->beats(*b)', text: '1차 가상 호출: a의 실제 타입(Rock)의 beats가 불림' },
+		{ title: 'other.beaten_by(*this)', text: 'Rock::beats 안에서 *this의 컴파일 시간 타입은 Rock. 오버로드 beaten_by(const Rock&)가 골라짐' },
+		{ title: '2차 가상 호출', text: 'other의 실제 타입(Scissors)의 beaten_by(const Rock&)가 불림' },
+		{ title: '결과', text: 'Scissors::beaten_by(const Rock&)가 true. 바위가 가위를 이김' },
+	]}
+/>
+
+- 다형성이 **두 번** 일어남
+  - `beats()`를 부를 때 한 번: 어느 클래스의 `beats`인지
+  - `beaten_by()`를 부를 때 또 한 번: 인수의 실제 타입의 `beaten_by`
+  - 그 사이에 `*this`의 정적 타입 덕분에 알맞은 **오버로드**가 골라짐
+- 모든 파생 클래스의 `beats()`는 똑같이 생겼지만 기반 클래스로 올릴 수 없음
+  - 기반에 두면 `*this`가 `Hand`라서 어느 `beaten_by` 오버로드를 부를지 컴파일러가 모름
+  - 오버로드 결정은 실행 시간이 아니라 **컴파일 시간** 타입으로 함
+- 기반 클래스가 파생 클래스를 참조하므로 **전방 선언**이 필요함
+- 새 타입을 더하면 기반에 `beaten_by` 순수 가상 함수가 하나 늘어 **모든** 파생 클래스가 구현을 강제받음. 빠뜨릴 수 없지만, 타입이 많으면 조합 수만큼 함수가 늘어남
+
+### 다른 길: variant와 visit
+
+- 다룰 타입이 **닫힌 집합**이라면 `std::variant`<Badge text="C++17" />와 `std::visit`으로 여러 대안을 한꺼번에 방문할 수 있음(24장) <CppRef path="cpp/utility/variant/visit" />
+  - `std::visit(f, a, b)`는 `a`와 `b`가 실제로 담은 대안의 **조합**에 맞는 `f`의 오버로드를 부름
+  - 상속과 가상 함수 없이 이중(다중) 디스패치가 됨
+  - 오버로드가 빠진 조합이 있으면 컴파일 오류. 템플릿 오버로드로 "나머지"를 처리할 수도 있음
+
+```cpp
+struct Beats {
+    bool operator()(R, S) const { return true; }
+    bool operator()(P, R) const { return true; }
+    bool operator()(S, P) const { return true; }
+    template <typename A, typename B>
+    bool operator()(A, B) const { return false; }   // 나머지 조합
+};
+std::visit(Beats{}, a, b);   // a, b는 std::variant<R, P, S>
+```
+
+- 새 **타입**을 자주 더한다면 상속이, 새 **연산**을 자주 더한다면 variant가 편한 편
+
+## 실행 예제
+
+<RunCode client:load code={rdCode} />
+
+- 볼 것
+  - RAII: 블록을 나오면 열린 순서의 **역순**으로 닫힘. 이동된 `data`는 비어 있어 아무것도 닫지 않음
+  - 이중 디스패치: `Hand` 포인터로만 아는 손 셋을 서로 견줘도 알맞은 결과
+  - `variant` + `visit`: 9가지 조합 중 이기는 조합 3개
+- 직접 해 볼 것
+  - `Channel log{ "log" };` 위에 `Channel{ "oops" };`를 넣고 실행. `nodiscard` 경고가 나고, oops는 열리자마자 닫힘
+  - `Lizard`(도마뱀)를 더해 보기. 기반에 `beaten_by(const Lizard&)`를 넣으면 기존 세 클래스가 모두 컴파일 오류로 구현을 요구함
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 생성자의 `[[nodiscard]]` | C++20(속성 자체는 C++17) | 없음. 이름 붙이기를 규칙으로 |
+| `std::variant`, `std::visit` | C++17 | 가상 함수로 이중 디스패치, 또는 태그 + `union` |
+| `std::exchange` | C++14 | 옛 값을 복사하고 비우는 두 줄 |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T)` |
+| 이동 생성자, `= delete`, `override` | C++11 | 복사 금지는 `private` 선언 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨(RAII와 가상 함수 이중 디스패치)
+
+<RunCode client:load code={rdCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- RAII는 메모리에만 쓴다?
+  - 파일, 락, 소켓, 스레드 등 놓아야 하는 모든 자원
+- RAII 클래스는 복사도 되게 만들어야 편하다?
+  - 자원이 하나뿐이면 복사는 두 번 해제를 부름. 복사 금지, 이동 허용
+- `std::unique_lock<std::mutex>(m_mutex);`는 잠근다?
+  - `m_mutex`라는 이름의 지역 변수 선언. 아무것도 잠그지 않음
+- `beats()`를 기반 클래스에 한 번만 구현하면 된다?
+  - 기반에서는 `*this`가 `Hand`라 오버로드를 고를 수 없음. 파생마다 같은 모양으로 둠
+- 오버로딩만으로 두 객체에 다형적이다?
+  - 오버로드는 컴파일 시간 타입으로 골라짐. 인수가 기반 참조면 안 됨
+
+## 정리
+
+| 기법 | 핵심 |
+| --- | --- |
+| RAII | 생성자가 얻고 소멸자가 놓음. 복사 금지·이동 허용, `get`·`release`·`reset` |
+| RAII 함정 | 이름 없는 임시 객체. `[[nodiscard]]` 생성자, 기본 생성자 두지 않기 |
+| 무차별 대입 | `typeid`로 검사. 새 타입을 강제하지 않음 |
+| 오버로딩 | 받는 쪽만 다형적. 인수가 기반 참조면 컴파일 안 됨 |
+| 이중 디스패치 | `beats(h)` → `h.beaten_by(*this)`. 가상 호출 두 번 |
+| variant + visit | 닫힌 타입 집합의 모든 조합을 오버로드로 |
+
+## 복습 질문
+
+<details>
+<summary>`Channel` 이동 대입 연산자에서 `reset()`을 먼저 부르는 이유는?</summary>
+
+- 대입받는 쪽이 이미 가진 자원을 먼저 놓아야 함. 부르지 않으면 새 자원으로 덮어써 옛 자원이 새어 나감
+- 자기 자신으로 이동 대입하면 자기 자원을 놓아 버리므로 `this != &rhs` 검사를 둠
+
+</details>
+
+<details>
+<summary>이중 디스패치에서 새 타입 `Lizard`를 더하면 무엇을 바꿔야 하는가?</summary>
+
+- 전방 선언과 기반 클래스에 `beaten_by(const Lizard&)` 순수 가상 함수 추가
+- 기존 모든 파생 클래스에 그 함수를 구현(빠뜨리면 컴파일 오류)
+- `Lizard` 클래스에 `beats()`와 모든 `beaten_by` 구현
+
+</details>
+
+<details>
+<summary>도형 충돌 검사(원-원, 원-사각형, 사각형-사각형)를 이중 디스패치로 할 때 `collides(a, b)`와 `collides(b, a)`의 결과를 같게 하려면?</summary>
+
+- 대칭 조합은 한쪽 구현을 다른 쪽이 부르게 함. 예: `Square::collided_by(const Circle& c)`가 `Circle`과 `Square`의 같은 검사 함수를 부르도록 해, 원-사각형 계산을 한 곳에만 둠
+
+</details>
