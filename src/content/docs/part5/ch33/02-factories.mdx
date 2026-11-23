@@ -1,0 +1,229 @@
+---
+title: 팩토리 패턴
+description: 객체 생성을 추상화하는 팩토리의 이점, 서로 어울리는 제품 묶음을 만드는 추상 팩토리(테마 위젯 예), 무엇을 만들지 파생 팩토리가 정하는 팩토리 메서드(비가상 인터페이스, 가상 생성자, 가장 한가한 팩토리), 이름표로 타입을 고르는 팩토리 함수와 등록표, pimpl과 팩토리 함수를 익힙니다.
+sidebar:
+  order: 2
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import faCode from '../../../../examples/ch33/factories.cpp?raw';
+import faCpp11Code from '../../../../examples/ch33/factories-cpp11.cpp?raw';
+
+- 다루는 것: 객체를 **만드는** 일을 감추는 패턴들
+- 이 글에서 배우는 것: 팩토리의 이점, 추상 팩토리, 팩토리 메서드, 팩토리 함수
+
+## 팩토리란
+
+- 현실의 공장이 탁자나 자동차를 만들듯, 객체 지향의 **팩토리** (factory)는 객체를 만듦
+  - 객체가 필요한 코드가 생성자를 직접 부르지 않고 팩토리에 요청함
+  - 예: 인테리어 프로그램의 가구 팩토리. 탁자가 필요하면 `make_table()`을 부름
+- 처음엔 간접 단계만 하나 더 생기는 것 같지만 이점이 있음
+
+| 이점 | 내용 |
+| --- | --- |
+| 정확한 타입을 몰라도 생성 | 클래스 계층과 나란히 두고, 구체 타입을 모른 채 객체를 만듦. 꼭 나란할 필요는 없고 아무 구체 타입이든 만들 수 있음 |
+| 팩토리를 넘겨 다님 | 코드 곳곳에서 직접 만드는 대신 팩토리를 넘겨, 여러 부분이 한 영역의 같은 종류 객체를 만들게 함 |
+| 숨은 상태와 자원 | 팩토리가 가진 상태·자원으로 생성을 돕고, 클라이언트는 그것을 몰라도 됨 |
+| 복잡한 생성 절차 | 단계를 올바른 순서로 실행하거나, 만든 객체를 다른 객체에 제대로 연결해야 할 때 |
+| 교체와 다형성 | 의존성 주입으로 다른 팩토리로 바꿔 끼움. 만든 객체처럼 팩토리에도 다형성을 씀 |
+
+- 대표적인 두 패턴: **추상 팩토리**, **팩토리 메서드**
+
+## 추상 팩토리
+
+- **추상 팩토리 패턴** (abstract factory pattern): 서로 어울리는 **제품 묶음**을 만드는 인터페이스. 어떤 구체 제품이 나올지는 **어떤 구체 팩토리**를 쓰느냐에 달림
+- 예: UI 테마. 버튼과 체크박스가 같은 테마여야 함
+  - 제품 계층: `IButton` ← `LightButton`, `DarkButton` / `ICheckbox` ← `LightCheckbox`, `DarkCheckbox`
+  - 팩토리 계층: `IWidgetFactory`(버튼 만들기, 체크박스 만들기) ← `LightTheme`, `DarkTheme`
+
+```cpp
+class IWidgetFactory {
+public:
+    virtual ~IWidgetFactory() = default;
+    virtual std::unique_ptr<IButton> make_button() const = 0;
+    virtual std::unique_ptr<ICheckbox> make_checkbox() const = 0;
+};
+
+void build_dialog(const IWidgetFactory& f)   // 구체 팩토리도 구체 제품도 모름
+{
+    auto ok{ f.make_button() };
+    auto remember{ f.make_checkbox() };
+}
+
+build_dialog(DarkTheme{});   // 어두운 버튼과 어두운 체크박스
+```
+
+- `build_dialog()`는 테마가 섞일 일이 없음. 팩토리 하나가 묶음 전체를 일관되게 만듦
+- 새 테마는 팩토리 하나와 제품들을 더하면 됨. 사용하는 코드는 그대로
+- 다른 쓰임: 문서마다 언어가 하나인 워드 프로세서. 언어에 따라 문자 집합, 맞춤법 검사기, 유의어 사전, 표시 방식이 다름 → 언어 팩토리(`KoreanLanguage`, `FrenchLanguage`)가 맞춤법 검사기 등을 만들고, 사용자가 문서 언어를 바꾸면 해당 팩토리로 새 검사기를 만들어 바꿔 끼움
+
+## 팩토리 메서드
+
+- **팩토리 메서드 패턴** (factory method pattern): "하나 만들어 줘"라고만 하면 **무엇을** 만들지는 구체 팩토리가 정함
+  - 추상 팩토리는 "세단을 만들어", "SUV를 만들어"처럼 종류별 함수가 있었다면, 팩토리 메서드는 요청 하나
+- 비유: 자동차 공장에 가서 "차 한 대요"라고 하면 그 공장의 차가 나옴. 어느 회사 차인지는 어느 공장에 갔느냐로 정해짐
+  - 차를 **모는** 쪽은 다형성으로 이미 됨(5장). 그런데 **만들 때**는 보통 생성자를 골라 불러야 함
+  - 팩토리 계층을 나란히 두면, 만들 때도 "차 한 대"라고만 말할 수 있음
+
+```cpp
+class Logistics {
+public:
+    virtual ~Logistics() = default;
+    std::unique_ptr<ITransport> request()   // 공개 비가상 함수
+    {
+        ++m_produced;                       // 공통 일
+        return create();                    // 달라지는 부분은 파생에
+    }
+    int produced() const { return m_produced; }
+private:
+    virtual std::unique_ptr<ITransport> create() = 0;   // 팩토리 메서드
+    int m_produced{ 0 };
+};
+
+class RoadLogistics final : public Logistics {
+    std::unique_ptr<ITransport> create() override
+    {
+        return std::make_unique<Truck>();
+    }
+};
+```
+
+- 공개 비가상 함수가 비공개 가상 함수에 일을 넘기는 구조를 **비가상 인터페이스 관용구** (non-virtual interface, NVI)라 함
+  - 기반이 공통 일(생산 수 세기)을 맡고, 파생은 달라지는 부분만 재정의
+  - `request()`는 **템플릿 메서드 패턴**의 한 예: 알고리즘의 뼈대는 기반이, 단계 일부는 파생이
+- **가상 생성자** (virtual constructor): 어떤 객체에 부르느냐에 따라 다른 타입을 만드는 멤버 함수. 팩토리 메서드가 그 구현 방법 중 하나
+
+### 조건에 따라 고르기
+
+- 팩토리를 쓰는 이유 중 하나: 만들 타입이 **조건**에 따라 달라질 때
+- 예: 가장 한가한(지금까지 가장 적게 만든) 운송사에 맡기기. 결과가 트럭이든 배든 상관없음
+- `LeastBusy`도 `Logistics`의 파생. 다른 팩토리들을 받아 두고, `create()`에서 생산 수가 가장 적은 팩토리에 요청을 넘김
+- 팩토리에 다형성을 쓰므로, 사용하는 쪽은 그냥 `Logistics`로 다룸
+
+```cpp
+std::unique_ptr<ITransport> create() override
+{
+    auto it{ std::ranges::min_element(m_all, {}, &Logistics::produced) };
+    return (*it)->request();
+}
+```
+
+- `std::ranges::min_element`의 세 번째 인수 **프로젝션** (projection)으로 비교할 값을 꺼냄(17장, 20장) <CppRef path="cpp/algorithm/ranges/min_element" />
+
+## 그 밖의 팩토리
+
+- 계층 없이 **클래스 하나**로 만들 수도 있음. `create()` 함수가 타입이나 문자열 인수를 보고 무엇을 만들지 정함. 이런 함수를 흔히 **팩토리 함수** (factory function)라 함
+  - 의존성 역전을 주지 않고, 생성 과정을 파생으로 맞춤 설정할 수도 없음
+- 이름표 → 만드는 함수의 **등록표**(map)를 두면 `if`/`else` 사슬 없이 종류를 늘릴 수 있음
+
+```cpp
+std::unique_ptr<ITransport> make_transport(const std::string& kind)
+{
+    static const std::map<std::string,
+        std::function<std::unique_ptr<ITransport>()>> registry{
+        { "truck", [] { return std::make_unique<Truck>(); } },
+        { "ship",  [] { return std::make_unique<Ship>(); } },
+    };
+    auto it{ registry.find(kind) };
+    if (it == registry.end()) { throw std::invalid_argument{ kind }; }
+    return it->second();
+}
+```
+
+- 쓰임: 설정 파일이나 저장 파일에서 읽은 이름으로 객체를 만들 때
+
+### 팩토리 함수와 pimpl
+
+- 9장의 **pimpl** 관용구를 다르게 구현하는 방법. 공개 인터페이스와 구체 구현 사이에 벽을 둠
+
+```cpp
+// 공개 헤더
+class Engine {
+public:
+    virtual ~Engine() = default;
+    virtual void start() = 0;
+    static std::unique_ptr<Engine> create();   // 팩토리 함수
+protected:
+    Engine() = default;                        // 직접 만들지 못하게
+};
+
+// 구현 파일(밖에서 보이지 않음)
+class EngineImpl : public Engine {
+public:
+    void start() override { /* ... */ }
+};
+std::unique_ptr<Engine> Engine::create()
+{
+    return std::make_unique<EngineImpl>();
+}
+```
+
+- 클라이언트는 `Engine::create()`로만 얻음. 구현 클래스의 멤버가 바뀌어도 클라이언트를 다시 컴파일할 필요가 없음
+
+## 실행 예제
+
+<RunCode client:load code={faCode} />
+
+- 볼 것
+  - 추상 팩토리: 같은 `build_dialog()`가 테마에 따라 어울리는 묶음을 만듦
+  - 팩토리 메서드: 도로 운송사가 이미 2대를 만들어 바쁘므로 처음 두 번은 배. 그다음은 생산 수가 같아지면 앞의 것(트럭)과 번갈아 감
+  - 팩토리 함수: 등록표에 없는 `plane`은 예외
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::ranges::min_element`와 프로젝션 | C++20 | `std::min_element`와 비교 람다 |
+| `std::make_unique` | C++14 | `std::unique_ptr<T>(new T)` |
+| `std::function`, 람다, `unique_ptr` | C++11 | 함수 포인터, `auto_ptr`(지금은 제거됨) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨(팩토리 메서드 부분)
+
+<RunCode client:load code={faCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 팩토리는 생성자를 감싼 쓸데없는 간접층이다?
+  - 구체 타입을 모른 채 만들고, 팩토리를 바꿔 끼우고, 복잡한 생성 절차를 숨김
+- 추상 팩토리와 팩토리 메서드는 같다?
+  - 추상 팩토리: 종류별 생성 함수로 제품 **묶음**. 팩토리 메서드: 요청 하나, 무엇을 만들지는 파생이 정함
+- 팩토리 메서드는 공개 가상 함수여야 한다?
+  - 공개 비가상 + 비공개 가상(NVI)이면 기반이 공통 일을 확실히 맡음
+- 팩토리 함수도 의존성 역전을 준다?
+  - 한 함수가 모든 타입을 알므로 아님. 대신 단순함
+
+## 정리
+
+| 패턴 | 모양 | 쓰는 때 |
+| --- | --- | --- |
+| 추상 팩토리 | 인터페이스에 제품별 생성 함수, 구체 팩토리가 묶음을 만듦 | 서로 어울려야 하는 제품군(테마, 언어) |
+| 팩토리 메서드 | 기반의 비가상 `request()` → 파생의 가상 `create()` | 무엇을 만들지 파생·조건이 정할 때 |
+| 팩토리 함수 | `create(이름)`, 등록표 | 이름·설정으로 고를 때, pimpl |
+
+## 복습 질문
+
+<details>
+<summary>운영체제마다 창, 메뉴, 대화상자를 다르게 그려야 한다. 어떤 팩토리를 쓰는가?</summary>
+
+- 추상 팩토리. `IGuiFactory`(창·메뉴·대화상자 생성)를 두고 운영체제마다 구체 팩토리를 만듦. 프로그램 시작 때 하나를 골라 넘기면 섞일 일이 없음
+
+</details>
+
+<details>
+<summary>NVI에서 파생 클래스가 `request()`를 재정의할 수 없게 하는 이유는?</summary>
+
+- `request()`의 공통 일(생산 수 세기, 기록, 검증 등)을 늘 실행하게 보장하려는 것. 파생은 달라지는 `create()`만 바꿈
+
+</details>
+
+<details>
+<summary>저장 파일에서 "circle", "rect" 같은 이름을 읽어 도형을 만들어야 한다. 가장 단순한 방법은?</summary>
+
+- 이름 → 생성 함수의 등록표를 가진 팩토리 함수. 새 도형은 등록표에 한 줄 더함
+
+</details>
