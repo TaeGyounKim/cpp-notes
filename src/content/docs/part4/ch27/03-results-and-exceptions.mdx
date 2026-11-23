@@ -1,0 +1,186 @@
+---
+title: 스레드의 결과와 예외
+description: 스레드에서 결과를 받는 두 방법(참조로 넘긴 결과 변수, std::ref로 넘긴 함수 객체의 데이터 멤버), 스레드 밖으로 나가지 못하는 예외, exception_ptr와 current_exception·rethrow_exception·make_exception_ptr로 예외를 다른 스레드로 옮기기, 메인 스레드를 막지 않는 메시지 방식을 익힙니다.
+sidebar:
+  order: 3
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import reCode from '../../../../examples/ch27/results-exceptions.cpp?raw';
+import reCpp11Code from '../../../../examples/ch27/results-exceptions-cpp11.cpp?raw';
+
+- 다루는 것: 스레드가 만든 결과와, 스레드 안에서 생긴 예외를 다른 스레드로 가져오는 법
+- 이 글에서 배우는 요소: 결과 변수, `std::ref`와 함수 객체, `exception_ptr`, `current_exception`, `rethrow_exception`, `make_exception_ptr`
+
+## 스레드에서 결과 받기
+
+- 스레드를 시작하는 것은 쉬움. 그러나 대개는 스레드가 만든 **결과**가 필요함
+- 방법 1: 결과를 담을 변수의 포인터나 참조를 스레드에 넘김
+- 방법 2: 함수 객체의 **데이터 멤버**에 결과를 담고, 스레드가 끝난 뒤 꺼냄
+  - 이것은 함수 객체를 `std::ref()`로 **참조로** 넘길 때만 됨
+
+```cpp
+class Summer {
+public:
+    explicit Summer(std::vector<int> data);
+    void operator()();              // m_sum에 합을 쌓음
+    long long sum() const { return m_sum; }
+private:
+    std::vector<int> m_data;
+    long long m_sum{ 0 };
+};
+
+Summer s{ { 1, 2, 3, 4 } };
+std::jthread job{ std::ref(s) };
+job.join();
+std::println("{}", s.sum());        // 10
+```
+
+- `std::jthread job{ s };`로 넘기면 스레드 안의 **복사본**에 결과가 쌓이고 `s.sum()`은 0
+- 더 쉬운 방법은 **future**(8편). 스레드 안에서 생긴 오류를 다루기도 쉬움
+
+## 스레드 사이에서 예외 옮기기
+
+- 예외는 한 스레드 안에서는 잘 동작함. 스레드마다 자기 예외를 던질 수 있지만, **그 스레드 안에서 잡아야** 함
+  - 스레드 안에서 잡히지 않은 예외는 `std::terminate()`를 불러 **프로그램 전체**를 끝냄
+  - 한 스레드에서 던진 예외를 다른 스레드에서 `catch`로 잡을 수는 없음
+- 표준 라이브러리는 예외를 다른 스레드로 옮기는 함수를 줌. `std::exception` 계열뿐 아니라 `int`, 문자열, 사용자 정의 예외 등 무엇이든 됨
+
+| 함수 | 하는 일 |
+| --- | --- |
+| `std::exception_ptr std::current_exception() noexcept` | `catch` 블록 안에서 부름. 지금 처리 중인 예외(또는 그 복사본)를 가리키는 `exception_ptr`. 처리 중인 예외가 없으면 null <CppRef path="cpp/error/current_exception" /> |
+| `[[noreturn]] void std::rethrow_exception(std::exception_ptr p)` | `p`가 가리키는 예외를 다시 던짐(`p`는 null이면 안 됨). **다른 스레드**에서 해도 됨 <CppRef path="cpp/error/rethrow_exception" /> |
+| `std::exception_ptr std::make_exception_ptr(E e) noexcept` | 예외 객체 `e`의 복사본을 가리키는 `exception_ptr`를 만듦 <CppRef path="cpp/error/make_exception_ptr" /> |
+
+- `exception_ptr`: 예외 객체를 가리키는, `shared_ptr`처럼 **참조 계수**되는 포인터 같은 타입. 가리키는 `exception_ptr`가 하나라도 있으면 예외 객체가 살아 있음 <CppRef path="cpp/error/exception_ptr" />
+  - null일 수 있으므로 `if (error)`로 확인
+- `make_exception_ptr(e)`는 대략 `try { throw e; } catch (...) { return std::current_exception(); }`의 줄임
+- `[[noreturn]]` 속성: 이 함수는 정상적으로 돌아오지 않음을 알림
+
+### 옮기는 순서
+
+1. 스레드 함수가 실제 일을 `try`로 감싸고 모든 예외(`catch (...)`)를 잡음
+2. 잡은 예외를 `current_exception()`으로 얻어, 참조로 받은 `exception_ptr`에 담고 정상 종료
+3. 기다리던 스레드가 `join` 뒤 `exception_ptr`를 확인하고, null이 아니면 `rethrow_exception()`으로 **자기 스레드에서** 다시 던짐
+
+```cpp
+void risky(int n, std::exception_ptr& error)
+{
+    try {
+        do_work(n);
+    } catch (...) {
+        error = std::current_exception();
+    }
+}
+
+void run_in_thread(int n)
+{
+    std::exception_ptr error;
+    std::jthread t{ risky, n, std::ref(error) };
+    t.join();
+    if (error) { std::rethrow_exception(error); }
+}
+
+try {
+    run_in_thread(-1);
+} catch (const std::exception& e) {
+    // 다른 스레드에서 생긴 예외를 여기서 잡음
+}
+```
+
+:::note
+이 장의 예제는 짧게 하려고 메인 스레드에서 `join()`으로 기다리는 경우가 많다. 실제 프로그램, 특히 GUI에서는 메인 스레드를 막으면 화면이 멈춘다. 그럴 때는 스레드끼리 **메시지**를 주고받는다. 예를 들어 작업 스레드가 `current_exception()`의 결과를 담은 메시지를 UI 스레드에 보낸다.
+:::
+
+<RunCode client:load code={reCode} />
+
+- 볼 것
+  - `std::ref(s)`로 넘긴 `Summer`에는 결과가 있고, 그냥 넘긴 `copy_target`은 0
+  - 음수를 넘긴 스레드의 예외가 `exception_ptr`를 거쳐 `main`의 `catch`에서 잡힘
+  - `make_exception_ptr`로 만든 예외를 다시 던져 잡음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `jthread` | C++20 | `thread` + 직접 `join` |
+| `exception_ptr`, `current_exception`, `rethrow_exception`, `make_exception_ptr`, `[[noreturn]]` | C++11 | 예외를 다른 스레드로 옮길 표준 방법이 없었음(오류 코드로 대신) |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={reCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 스레드에서 던진 예외를 `t.join()`을 감싼 `try`로 잡는다?
+  - 잡히지 않음. 스레드 안에서 잡지 않으면 `terminate`
+- 함수 객체를 그냥 넘겨도 결과 멤버가 채워진다?
+  - 복사본이 채워짐. `std::ref`로 넘김
+- `exception_ptr`는 예외를 잃지 않게 복사해 둔다?
+  - 예외 객체를 참조 계수로 붙잡아 둠(구현에 따라 복사본일 수 있음). 가리키는 것이 있는 동안 살아 있음
+- null인 `exception_ptr`로 `rethrow_exception`을 불러도 된다?
+  - null이면 안 됨. `if (error)`로 먼저 확인
+- 결과를 받으려면 늘 `join`으로 기다려야 한다?
+  - future(8편)나 메시지 방식으로 기다리지 않거나 필요할 때만 기다릴 수 있음
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 결과 변수 | 참조나 포인터로 넘기고 `join` 뒤 읽음 |
+| 함수 객체 | 데이터 멤버에 결과. `std::ref`로 넘김 |
+| 스레드의 예외 | 그 스레드 안에서 잡아야 함. 아니면 `terminate` |
+| `current_exception` | `catch` 안에서 지금 예외를 `exception_ptr`로 |
+| `rethrow_exception` | 다른 스레드에서 다시 던짐 |
+| `make_exception_ptr` | 예외 객체에서 바로 `exception_ptr` |
+
+## 복습 질문
+
+<details>
+<summary>작업자 스레드 여럿의 예외를 모두 모아 나중에 처리하려면?</summary>
+
+```cpp
+std::vector<std::exception_ptr> errors(n);
+{
+    std::vector<std::jthread> threads;
+    for (std::size_t i{ 0 }; i < n; ++i) {
+        threads.emplace_back([i, &errors] {
+            try { work(i); }
+            catch (...) {
+                errors[i] = std::current_exception();
+            }
+        });
+    }
+}   // 모두 join
+for (auto& e : errors) {
+    if (!e) { continue; }
+    try {
+        std::rethrow_exception(e);
+    } catch (const std::exception& x) {
+        // 기록
+    }
+}
+```
+
+- 스레드마다 자기 칸만 쓰므로 데이터 경쟁이 없음
+
+</details>
+
+<details>
+<summary>`catch (...)` 밖에서 `std::current_exception()`을 부르면?</summary>
+
+- 처리 중인 예외가 없으므로 null `exception_ptr`를 돌려줌
+
+</details>
+
+<details>
+<summary>스레드에서 `throw 42;`처럼 `int`를 던져도 옮길 수 있는가?</summary>
+
+- 됨. `exception_ptr`는 어떤 타입의 예외든 담음. 받는 쪽은 `catch (int v)`로 잡음
+
+</details>
