@@ -79,6 +79,7 @@ const parts = [
 			chapter('31장. 디버깅 정복하기', 'part5/ch31'),
 			chapter('32장. 설계 기법과 프레임워크', 'part5/ch32'),
 			chapter('33장. 설계 패턴 적용', 'part5/ch33'),
+			chapter('34장. 크로스 플랫폼과 다른 언어와의 연동', 'part5/ch34'),
 		],
 	},
 ];
