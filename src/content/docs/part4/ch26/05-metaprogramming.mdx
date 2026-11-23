@@ -1,0 +1,241 @@
+---
+title: 템플릿 메타프로그래밍
+description: 계산을 컴파일 시간으로 옮기는 템플릿 메타프로그래밍, 템플릿 재귀로 만든 컴파일 시간 상수와 consteval 함수, 반복문 펼치기, tuple 원소를 차례로 다루는 세 방법(부분 특수화 재귀, if constexpr, index_sequence와 폴드)을 익힙니다.
+sidebar:
+  order: 5
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import mpCode from '../../../../examples/ch26/metaprogramming.cpp?raw';
+import mpCpp11Code from '../../../../examples/ch26/metaprogramming-cpp11.cpp?raw';
+
+- 다루는 것: **템플릿 메타프로그래밍** (template metaprogramming). 넓고 복잡한 주제라 여기서는 핵심 생각을 예 몇 개로 봄
+- 목표: 어떤 계산을 실행 시간이 아니라 **컴파일 시간**에 함. 언어 위에 얹힌 또 하나의 언어
+- 이 글에서 배우는 요소: 컴파일 시간 상수, `consteval`, 반복문 펼치기, tuple 출력, `index_sequence`
+
+## 컴파일 시간 계산
+
+- 템플릿 재귀(3편)로 값을 계산함. 재귀 템플릿과 기저 템플릿이 필요함
+- 예: 2의 N제곱. N이 0이면 1, 아니면 2 × (2의 N − 1제곱)
+
+```cpp
+template <unsigned N>
+struct Pow2 {
+    static constexpr unsigned long long value{ 2 * Pow2<N - 1>::value };
+};
+template <>
+struct Pow2<0> {                   // 기저: 완전 특수화
+    static constexpr unsigned long long value{ 1 };
+};
+
+std::println("{}", Pow2<16>::value);   // 65536
+```
+
+- 계산은 **컴파일 시간**에 끝남. 실행 중에는 미리 계산된 정적 상수 `value`를 읽을 뿐
+  - 그래서 `static_assert(Pow2<10>::value == 1024);`처럼 컴파일 시간 검사에도 쓸 수 있음
+
+### consteval 함수로 하기
+
+- 이 정도 계산은 템플릿 없이 함수로 쓰는 편이 읽기 쉬움
+- **`consteval`** 함수(즉시 함수, 9장): 반드시 컴파일 시간에 실행됨 <CppRef path="cpp/language/consteval" />
+
+```cpp
+consteval unsigned long long pow2(unsigned n)
+{
+    return n == 0 ? 1 : 2 * pow2(n - 1);
+}
+static_assert(pow2(20) == 1'048'576);
+```
+
+- 보통 함수처럼 부르지만 결과는 컴파일 시간 상수. 템플릿 버전은 재귀 템플릿을 만드는 법을 보여 주는 예로 의미가 있음
+- `constexpr` 함수도 상수 문맥에서는 컴파일 시간에 계산됨(C++11부터, 본문 제약은 C++14에서 크게 풀림) <CppRef path="cpp/language/constexpr" />
+
+## 반복문 펼치기
+
+- **반복문 펼치기** (loop unrolling): 반복문을 실행하는 대신 몸체를 횟수만큼 이어 붙인 코드를 만듦
+  - 성능이 정말 중요한 곳에서만. 펼칠 수 있는 반복문은 보통 컴파일러가 알아서 펼침
+- 다시 템플릿 재귀: `Repeat<I>`가 `Repeat<I - 1>`을 부르고, 0에서 멈춤
+
+```cpp
+template <int I>
+struct Repeat {
+    template <typename F>
+    static void run(F f)
+    {
+        Repeat<I - 1>::run(f);
+        f(I);
+    }
+};
+template <>
+struct Repeat<0> {
+    template <typename F>
+    static void run(F) {}
+};
+
+Repeat<3>::run(work);   // work(1); work(2); work(3);과 같은 코드가 생김
+```
+
+## tuple 원소를 차례로 다루기
+
+- `tuple`(24장)은 크기와 원소 타입이 컴파일 시간에 정해지지만, 원소를 훑는 기능은 없음
+  - `std::get<i>`의 `i`는 컴파일 시간 상수여야 해서 보통 반복문을 쓸 수 없음
+- 메타프로그래밍으로 컴파일 시간에 훑음. 세 방법
+
+### 1. 부분 특수화 재귀
+
+- 클래스 템플릿이 tuple 타입과 남은 개수 `N`을 받아, `N - 1`로 자신을 부르고 `get<N - 1>`을 처리함
+- `N = 0` 부분 특수화가 기저
+
+```cpp
+template <typename Tuple, std::size_t N>
+struct ShowEach {
+    static void run(const Tuple& t)
+    {
+        ShowEach<Tuple, N - 1>::run(t);
+        std::println("{}", std::get<N - 1>(t));
+    }
+};
+template <typename Tuple>
+struct ShowEach<Tuple, 0> { static void run(const Tuple&) {} };
+
+ShowEach<decltype(t), std::tuple_size_v<decltype(t)>>::run(t);
+```
+
+- 쓰는 쪽이 타입과 크기를 적어야 해 번거로움. 인수 추론을 해 주는 작은 함수 템플릿으로 감싸면 `show_each(t)`로 부를 수 있음
+
+### 2. if constexpr <Badge text="C++17" />
+
+- `if constexpr`(4편)로 재귀를 멈추면 기저 특수화가 필요 없음. 클래스 템플릿 대신 함수 템플릿 하나로 됨
+- 크기를 기본 템플릿 인수로 주면 감싸는 함수도 필요 없음
+
+```cpp
+template <typename Tuple, std::size_t N = std::tuple_size_v<Tuple>>
+void show_each(const Tuple& t)
+{
+    if constexpr (N > 1) { show_each<Tuple, N - 1>(t); }
+    std::println("{}", std::get<N - 1>(t));
+}
+
+show_each(record);
+```
+
+### 3. 인덱스 시퀀스와 폴드 <Badge text="C++14" />
+
+- **`std::integer_sequence`**(`<utility>`): 컴파일 시간 정수 순서열. 정수들이 템플릿 인수에 담김 <CppRef path="cpp/utility/integer_sequence" />
+  - 인덱스용 `std::index_sequence<0, 1, 2>`(`size_t` 순서열)
+  - `std::make_index_sequence<N>`: `0`부터 `N - 1`까지의 인덱스 순서열
+  - `std::index_sequence_for<Ts...>`: 팩의 길이만큼
+- 인덱스 순서열을 인수로 넘겨 팩 `I...`로 받은 뒤, 폴드(4편)로 한꺼번에 펼침. 재귀가 없음
+
+```cpp
+template <typename Tuple, std::size_t... I>
+void show_all(const Tuple& t, std::index_sequence<I...>)
+{
+    (std::println("{}", std::get<I>(t)), ...);
+}
+template <typename... Ts>
+void show_all(const std::tuple<Ts...>& t)
+{
+    show_all(t, std::index_sequence_for<Ts...>{});
+}
+```
+
+- 원소가 셋이면 폴드가 `(println(get<0>(t)), (println(get<1>(t)), println(get<2>(t))))`로 펼쳐짐
+
+<RunCode client:load code={mpCode} />
+
+- 볼 것
+  - `static_assert`가 통과한다는 것은 값이 컴파일 시간에 계산되었다는 뜻
+  - `Repeat<3>`이 반복문 없이 람다를 세 번 부름
+  - `show_each`(재귀 + `if constexpr`)와 `show_all`(인덱스 시퀀스 + 폴드)가 같은 tuple을 훑음
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `consteval` | C++20 | `constexpr` 함수 |
+| `if constexpr`, `tuple_size_v`, 폴드 | C++17 | 부분 특수화 기저, `::value`, 재귀 |
+| `index_sequence`, `constexpr` 함수 본문 제약 완화 | C++14 | 직접 만든 정수 순서열, `return` 하나짜리 `constexpr` |
+| `constexpr`, `static_assert`, `tuple` | C++11 | `enum { value = ... }` 꼼수, 부정 크기 배열로 검사 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={mpCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `Pow2<16>::value`는 실행할 때마다 곱셈을 한다?
+  - 컴파일 시간에 계산된 상수. 실행 중에는 읽기만 함
+- `for (std::size_t i = 0; i < 3; ++i) std::get<i>(t)`로 tuple을 훑는다?
+  - `i`가 컴파일 시간 상수가 아님. 재귀나 인덱스 시퀀스
+- 반복문 펼치기는 늘 빨라진다?
+  - 코드가 커져 오히려 느려질 수 있음. 컴파일러가 이미 펼치는 경우가 많음
+- `consteval`과 `constexpr` 함수는 같다?
+  - `consteval`은 반드시 컴파일 시간. `constexpr`은 실행 시간에도 부를 수 있음
+- `make_index_sequence<3>`은 `1, 2, 3`이다?
+  - `0, 1, 2`
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 메타프로그래밍 | 계산을 컴파일 시간으로. 결과는 상수 |
+| 템플릿 재귀 계산 | `Pow2<N>::value`, 기저 특수화 |
+| `consteval` | 반드시 컴파일 시간에 실행되는 함수. 대개 더 읽기 쉬움 |
+| 반복문 펼치기 | `Repeat<N>::run(f)`. 꼭 필요할 때만 |
+| tuple 훑기 | 부분 특수화 재귀, `if constexpr`, `index_sequence` + 폴드 |
+
+## 복습 질문
+
+<details>
+<summary>피보나치 수를 컴파일 시간에 구하는 `consteval` 함수를 쓰려면?</summary>
+
+```cpp
+consteval unsigned long long fib(unsigned n)
+{
+    unsigned long long a{ 0 }, b{ 1 };
+    for (unsigned i{ 0 }; i < n; ++i) {
+        auto next{ a + b };
+        a = b;
+        b = next;
+    }
+    return a;
+}
+static_assert(fib(10) == 55);
+```
+
+- C++14부터 상수 평가 함수 안에 반복문과 지역 변수를 쓸 수 있음
+
+</details>
+
+<details>
+<summary>tuple의 모든 원소를 더하는 함수를 인덱스 시퀀스와 폴드로 쓰려면?</summary>
+
+```cpp
+template <typename Tuple, std::size_t... I>
+auto sum_impl(const Tuple& t, std::index_sequence<I...>)
+{
+    return (std::get<I>(t) + ...);
+}
+template <typename... Ts>
+auto sum(const std::tuple<Ts...>& t)
+{
+    return sum_impl(t, std::index_sequence_for<Ts...>{});
+}
+```
+
+- `std::apply([](const auto&... v) { return (v + ...); }, t)`로도 씀(24장)
+
+</details>
+
+<details>
+<summary>`show_each`에서 `if constexpr` 대신 그냥 `if`를 쓰면 무슨 일이 생기는가?</summary>
+
+- 그냥 `if`는 두 갈래를 모두 컴파일함. `N = 1`일 때도 `show_each<Tuple, 0>`이 인스턴스화되고, 그 안에서 `std::get<0 - 1>`(아주 큰 인덱스)을 만들려다 컴파일 오류가 남
+
+</details>
