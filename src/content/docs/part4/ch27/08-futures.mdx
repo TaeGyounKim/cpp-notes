@@ -1,0 +1,220 @@
+---
+title: future와 promise
+description: 스레드의 결과와 예외를 쉽게 받는 future와 promise, get과 wait_for, promise를 스레드로 옮기기, 결과를 알아서 담아 주는 packaged_task, 실행 방식을 고르는 async와 launch 정책, async가 돌려준 future의 소멸자, 예외 전달, 여러 스레드가 함께 기다리는 shared_future를 익힙니다.
+sidebar:
+  order: 8
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import { Badge } from '@astrojs/starlight/components';
+import CppRef from '../../../../components/CppRef.astro';
+import RunCode from '../../../../components/RunCode.svelte';
+import fuCode from '../../../../examples/ch27/futures.cpp?raw';
+import fuCpp11Code from '../../../../examples/ch27/futures-cpp11.cpp?raw';
+
+- 다루는 것: 3편의 결과·예외 받기를 훨씬 쉽게 하는 표준 도구
+- 이 글에서 배우는 요소: `future`, `promise`, `packaged_task`, `async`, `launch`, `shared_future`
+
+## future와 promise <Badge text="C++11" />
+
+- `std::thread`의 불편함
+  - 결과 하나를 계산하는 스레드에서 결과를 돌려받기가 번거로움(3편)
+  - 스레드 안에서 잡지 않은 예외는 `terminate`
+- **future**: 스레드의 결과를 쉽게 꺼내고, 예외를 다른 스레드로 옮겨 줌
+- **promise**: 스레드가 결과를 **넣는** 곳. **future**: promise에 들어간 결과를 **꺼내는** 곳
+  - promise는 입력 쪽, future는 출력 쪽. promise/future 한 쌍이 스레드 사이의 **일회용 통신 채널**
+- `<future>`의 `std::future<T>` <CppRef path="cpp/thread/future" />
+
+```cpp
+std::future<T> f{ /* ... */ };
+T result{ f.get() };
+```
+
+- `get()`: 결과를 꺼냄. 아직 계산 중이면 준비될 때까지 막힘
+  - `future`의 `get()`은 **한 번만**. 두 번째 호출은 정의되지 않음(결과가 밖으로 이동되기 때문)
+- 막히지 않으려면 먼저 물어봄 <CppRef path="cpp/thread/future/wait_for" />
+
+```cpp
+if (f.wait_for(0s) == std::future_status::ready) {
+    T result{ f.get() };
+} else {
+    // 아직: 다른 일을 함
+}
+```
+
+### std::promise
+
+- `set_value(v)`로 결과를, `set_exception(e)`로 예외를 넣음. 한 promise에 한 번만. 두 번째는 `std::future_error` 예외 <CppRef path="cpp/thread/promise" />
+- `set_value_at_thread_exit()`, `set_exception_at_thread_exit()`: 값이나 예외는 바로 넣고, 그 스레드가 끝날 때 준비됨으로 알림
+- promise는 **복사할 수 없고 이동만** 됨
+- 스레드 A가 promise를 만들어 B에 **옮기기 전에** `get_future()`로 future를 받아 둠. B는 promise에 결과를 넣고, A는 future에서 꺼냄
+
+```cpp
+std::promise<int> promise;
+std::future<int> future{ promise.get_future() };
+std::jthread worker{ [p = std::move(promise)]() mutable {
+    p.set_value(42);
+} };
+int answer{ future.get() };   // 42
+```
+
+:::note
+위 코드는 새 스레드를 시작하자마자 `get()`으로 기다리므로 실용적이지 않다. 실제로는 `wait_for()`로 가끔 확인하거나 조건 변수 같은 동기화와 함께 쓰고, 결과가 아직이면 그동안 다른 일을 한다.
+:::
+
+### std::packaged_task
+
+- promise를 직접 다루는 것보다 쉬움 <CppRef path="cpp/thread/packaged_task" />
+- 호출 가능 객체를 감싸고, 실행되면 그 **결과를 알아서** promise에 넣음. 결과가 값이든 던져진 예외든
+
+```cpp
+long long sum_range(int from, int to);
+
+std::packaged_task<long long(int, int)> task{ sum_range };
+std::future<long long> f{ task.get_future() };
+std::jthread worker{ std::move(task), 1, 100 };   // 옮겨서 실행
+long long total{ f.get() };                        // 5050
+```
+
+- `sum_range`는 promise를 전혀 몰라도 됨
+
+## std::async
+
+- 스레드를 만들지 말지를 런타임에 더 맡기고 싶으면 `std::async()` <CppRef path="cpp/thread/async" />
+  - 호출 가능 객체를 받아 실행하고 결과를 담을 `future`를 돌려줌
+- 실행 방식 둘
+  - 다른 스레드에서 **비동기로**
+  - 그 `future`에 `get()`을 부를 때 호출한 스레드에서 **동기로**
+- 추가 인수가 없으면 런타임이 CPU 코어 수, 이미 돌고 있는 동시 작업 양 등을 보고 고름. 정책으로 정할 수 있음 <CppRef path="cpp/thread/launch" />
+
+| 정책 | 뜻 |
+| --- | --- |
+| `std::launch::async` | 반드시 다른 스레드에서 비동기로 |
+| `std::launch::deferred` | `get()` 때 호출한 스레드에서 동기로 |
+| `std::launch::async` <code>&#124;</code> `std::launch::deferred` | 런타임이 고름(기본) |
+
+```cpp
+// 런타임이 고름
+auto f1{ std::async(sum_range, 1, 1000) };
+// 새 스레드
+auto f2{ std::async(std::launch::async, sum_range, 1, 1000) };
+// get 때 이 스레드에서 실행
+auto f3{ std::async(std::launch::deferred, sum_range, 1, 10) };
+```
+
+- 계산을 다른 스레드에서든 같은 스레드에서든 돌리는 가장 쉬운 방법 중 하나
+
+:::caution
+`async()`가 돌려준 `future`는 **소멸자에서** 결과가 나올 때까지 막힌다(보통 future는 그렇지 않다). 그래서 돌려받은 future를 받아 두지 않으면 `async()` 호출이 사실상 막히는 호출이 된다. 예를 들어 `std::async(sum_range, 1, 100);`만 쓰면, 임시 future가 문장 끝에서 소멸하며 결과를 기다리므로 동기 호출과 같다.
+:::
+
+## 예외 전달
+
+- future의 큰 장점: 스레드 사이에서 **예외를 옮겨 줌**
+- `get()`은 계산된 결과를 돌려주거나, 연결된 promise에 담긴 예외를 **다시 던짐**
+- `packaged_task`나 `async()`를 쓰면 호출 가능 객체가 던진 예외가 자동으로 promise에 담김
+- `promise`를 직접 쓰면 `set_exception()`으로 담음
+
+```cpp
+auto f{ std::async(std::launch::async, checked_div, 1, 0) };
+try {
+    int r{ f.get() };          // 스레드에서 던진 예외가 여기서 다시 던져짐
+} catch (const std::exception& e) {
+    // 처리
+}
+```
+
+## shared_future
+
+- `future<T>`는 결과를 **밖으로 이동**시켜 돌려주므로 `get()`을 한 번만 부를 수 있음
+- 여러 번, 여러 스레드에서 `get()`하려면 `std::shared_future<T>` <CppRef path="cpp/thread/shared_future" />
+  - `future::share()`로 만들거나, future를 `shared_future` 생성자에 **옮겨** 넘김(future는 복사할 수 없음)
+  - `shared_future`는 복사할 수 있음. 스레드마다 복사본을 줌
+- 쓰임: 여러 스레드에 **같은 시작 신호와 값**을 한꺼번에 보내기
+
+```cpp
+std::promise<int> start;
+std::shared_future<int> go{ start.get_future().share() };
+// 스레드 여럿이 각자 복사본으로 go.get()을 부르며 기다림
+start.set_value(10);   // 모두 동시에 깨어나 10을 받음
+```
+
+<RunCode client:load code={fuCode} />
+
+- 볼 것
+  - promise를 람다의 초기화 캡처로 **옮겨** 넘기고, 미리 받아 둔 future로 값을 기다림
+  - `packaged_task`와 `async`의 결과
+  - `wait_for(0ms)`로 막히지 않고 준비 상태를 확인
+  - 0으로 나누는 예외가 `get()`에서 다시 던져짐
+  - `shared_future` 하나로 세 스레드를 한꺼번에 출발시킴
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| 람다 초기화 캡처로 promise 옮기기 | C++14 | promise를 스레드 함수 인수로 `std::move` |
+| `future`, `promise`, `packaged_task`, `async`, `shared_future` | C++11 | 결과 변수 + 조건 변수, `exception_ptr` 직접 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={fuCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- `future::get()`을 여러 번 불러도 된다?
+  - 한 번만. 여러 번이나 여러 스레드는 `shared_future`
+- promise를 스레드에 옮긴 뒤 `get_future()`를 부른다?
+  - 옮긴 뒤에는 이미 원래 객체가 비었음. **옮기기 전에** future를 받아 둠
+- `std::async(f);`는 늘 비동기로 돈다?
+  - 기본 정책은 런타임이 고르고, 돌려받은 future를 버리면 소멸자에서 기다려 사실상 동기
+- `async`에서 던진 예외는 프로그램을 끝낸다?
+  - future에 담겼다가 `get()`에서 다시 던져짐
+- `wait_for(0s)`는 0초 동안 잠든다?
+  - 기다리지 않고 지금 상태(`ready`, `timeout`, `deferred`)만 알려 줌
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| `promise` / `future` | 결과를 넣는 쪽 / 꺼내는 쪽. 일회용 채널 |
+| `get()` | 준비될 때까지 막힘. 한 번만. 예외면 다시 던짐 |
+| `wait_for` | 막히지 않고 상태 확인 |
+| `packaged_task` | 호출 결과(값·예외)를 자동으로 promise에 |
+| `async` | 가장 쉬움. `launch::async`, `launch::deferred`. 반환 future는 소멸자에서 기다림 |
+| `shared_future` | 여러 번, 여러 스레드에서 `get()` |
+
+## 복습 질문
+
+<details>
+<summary>큰 배열의 합을 넷으로 나눠 병렬로 구하려면 `async`로 어떻게 쓰는가?</summary>
+
+```cpp
+std::vector<std::future<long long>> parts;
+for (int k{ 0 }; k < 4; ++k) {
+    parts.push_back(std::async(std::launch::async, [&data, k] {
+        auto first{ data.begin() + k * data.size() / 4 };
+        auto last{ data.begin() + (k + 1) * data.size() / 4 };
+        return std::accumulate(first, last, 0LL);
+    }));
+}
+long long total{ 0 };
+for (auto& p : parts) { total += p.get(); }
+```
+
+</details>
+
+<details>
+<summary>`std::async(std::launch::async, f);` 결과를 받지 않으면 무슨 일이 생기는가?</summary>
+
+- 돌려받은 임시 future가 문장 끝에서 소멸하며 `f`가 끝날 때까지 기다림. 비동기로 돌리려던 의도와 달리 그 자리에서 막힘
+
+</details>
+
+<details>
+<summary>promise에 `set_value`를 하지 않고 promise가 소멸하면 future의 `get()`은?</summary>
+
+- `std::future_error`(오류 코드 `broken_promise`) 예외를 던짐. 결과가 영영 오지 않음을 알려 줌
+
+</details>
