@@ -74,6 +74,7 @@ const parts = [
 		link: '/part5/ch28/01-process-and-life-cycle/',
 		items: [
 			chapter('28장. 소프트웨어 공학 방법 활용하기', 'part5/ch28'),
+			chapter('29장. 효율적인 C++ 코드 작성', 'part5/ch29'),
 		],
 	},
 ];
