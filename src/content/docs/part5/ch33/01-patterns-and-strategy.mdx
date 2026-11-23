@@ -1,0 +1,140 @@
+---
+title: 설계 패턴과 전략 패턴
+description: 설계 패턴이 무엇이고 설계 기법과 어떻게 다른지, 이름이 주는 이점과 용어의 혼란, 그리고 인터페이스로 의존성을 뒤집고 구현을 주입하는 전략 패턴(운임 계산 예, 실행 중 교체, 목 주입으로 테스트, std::function 전략)을 익힙니다.
+sidebar:
+  order: 1
+  badge:
+    text: 공부 중
+    variant: caution
+---
+
+import RunCode from '../../../../components/RunCode.svelte';
+import CppRef from '../../../../components/CppRef.astro';
+import stCode from '../../../../examples/ch33/strategy.cpp?raw';
+import stCpp11Code from '../../../../examples/ch33/strategy-cpp11.cpp?raw';
+
+- 다루는 것: 흔한 문제를 푸는 표준적인 프로그램 구성 방식
+- 이 장의 순서
+  - 1편: 설계 패턴이란, 전략
+  - 2편: 객체를 만드는 패턴(추상 팩토리, 팩토리 메서드, 그 밖의 팩토리)
+  - 3편: 구조를 감싸는 패턴(어댑터, 프록시, 데코레이터)과 반복자
+  - 4편: 행동을 나누는 패턴(관찰자, 책임 연쇄)과 싱글턴
+
+## 설계 패턴이란
+
+- **설계 패턴** (design pattern): 일반적인 문제를 푸는 표준적인 프로그램 구성 방식
+- 기법보다 언어에 덜 매임
+  - 32장의 기법은 C++에 특화된 전략, 패턴은 더 일반적인 설계 전략
+  - 둘의 경계는 솔직히 흐리고 자료마다 정의가 다름
+  - 많은 패턴이 C#, Java 같은 객체 지향 언어에도 그대로 쓰임. 그런 언어를 안다면 낯익을 것
+- **이름**이 큰 장점
+  - 이름에 뜻이 담겨 해법을 소통하기 쉬움("여기는 관찰자로 하자")
+  - 이름만 들어도 해법을 빨리 이해함
+- 다만 혼란도 있음
+  - 이름이 여럿인 패턴, 경계가 모호한 패턴이 있고 자료마다 설명과 분류가 조금씩 다름
+  - 같은 이름이 다른 패턴을 가리키기도 하고, 무엇이 패턴인지에도 의견이 갈림
+  - 이 사이트는 대체로 1994년 감마(Erich Gamma) 등 네 저자의 패턴 목록(흔히 GoF, Gang of Four)의 용어를 따르고, 다른 이름이 있으면 함께 적음
+- 프로그램에서 되풀이되는 객체 지향 상호 작용을 알아보게 되면, 우아한 해법을 찾는 일이 알맞은 패턴을 고르는 일이 됨
+- 패턴만 다루는 책이 따로 있을 만큼 많음. 이 장은 중요한 몇 가지만 구현과 함께 봄
+- 설계에는 늘 논쟁이 따르고 그것은 좋은 일. 패턴을 유일한 방법으로 받아들이지 말고, 그 접근과 생각을 빌려 다듬고 새 패턴을 만듦
+
+## 전략 패턴
+
+- **전략 패턴** (strategy pattern): **의존성 역전 원칙** (dependency inversion principle, DIP)(6장)을 지원하는 한 방법
+  - 제공하는 서비스마다 **인터페이스**를 만들고, 인터페이스로 의존 관계를 뒤집음
+  - 구성 요소가 서비스를 필요로 하면, 그 서비스의 인터페이스(를 구현한 객체)를 구성 요소에 넣어 줌. 이것이 **의존성 주입** (dependency injection)
+  - 서비스를 목으로 쉽게 바꿀 수 있어 단위 테스트가 쉬워짐(30장)
+
+### 예: 운임 계산
+
+- 계산대 `Checkout`이 배송비를 구해야 함. 정액, 무게별, 행사 무료 등 방식이 여럿이고 바뀔 수 있음
+- 배송비 계산을 `IShippingCost` 인터페이스로 뽑고, 구체 전략을 `Checkout`에 **주입**함
+
+```cpp
+class IShippingCost {                         // 전략 인터페이스
+public:
+    virtual ~IShippingCost() = default;
+    virtual double cost(double weight_kg) const = 0;
+};
+
+class FlatRate : public IShippingCost { /* 늘 3000 */ };
+class ByWeight : public IShippingCost { /* 1000 + 무게 × 단가 */ };
+
+class Checkout {
+public:
+    explicit Checkout(std::shared_ptr<IShippingCost> shipping);   // 생성자로 주입
+    void set_shipping(std::shared_ptr<IShippingCost> s);          // 실행 중 교체
+    double total(double items, double weight) const
+    {
+        return items + m_shipping->cost(weight);   // 구체 클래스를 모름
+    }
+private:
+    std::shared_ptr<IShippingCost> m_shipping;
+};
+```
+
+- 이점
+  - `Checkout`은 인터페이스에만 의존함. 새 운임 방식을 더해도 `Checkout`을 **고치지 않음**
+  - 클라이언트 코드는 원하는 전략을 넘기기만 하면 됨. 실행 중에 바꿔 끼울 수도 있음
+  - 단위 테스트에서는 불린 횟수와 인수를 기록하는 **목**을 주입해, `Checkout`이 전략을 올바르게 쓰는지만 시험할 수 있음
+- 주입 방법: 생성자, 설정 함수, 함수 인수. 소유권은 상황에 따라 `unique_ptr`(독점), `shared_ptr`(공유), 참조(바깥에서 수명을 보장)
+
+### 가벼운 대안
+
+- 전략이 함수 하나뿐이면 인터페이스 대신 `std::function`으로 받고 람다를 넘길 수 있음(19장) <CppRef path="cpp/utility/functional/function" />
+- 컴파일 시간에 정해지는 전략이면 템플릿 매개변수(정책 클래스)로 받아 가상 호출 비용도 없앨 수 있음. 표준 라이브러리의 할당자와 비교자가 이 방식
+
+<RunCode client:load code={stCode} />
+
+- 볼 것
+  - 같은 `Checkout`이 정액(23000원)에서 무게별(23800원)로 바뀜
+  - 목을 주입한 테스트: 전략이 한 번, 무게 2.5로 불렸음을 확인
+  - 람다 전략: 10kg을 넘으면 배송비 0
+
+## 이전 표준에서는
+
+| 이 글에서 쓴 것 | 들어온 표준 | 그 이전에는 |
+| --- | --- | --- |
+| `std::println` | C++23 | `printf`, `std::cout` |
+| `std::shared_ptr`, `std::function`, 람다 | C++11 | 원시 포인터와 수명 규칙, 함수 객체 |
+
+- 아래 코드는 C++11 옵션으로 컴파일됨
+
+<RunCode client:load code={stCpp11Code} flags="-std=c++11 -Wall -Wextra" />
+
+## 헷갈리기 쉬운 점
+
+- 패턴은 정해진 코드다?
+  - 문제와 해법의 구조. 언어와 상황에 맞게 구현은 달라짐
+- 패턴 이름은 어디서나 같은 뜻이다?
+  - 자료마다 다르기도 함. 이름과 함께 구조를 설명하는 습관
+- 전략 패턴은 꼭 가상 함수여야 한다?
+  - 인터페이스가 핵심. `std::function`이나 템플릿 정책으로도 됨
+- 의존성 주입은 프레임워크가 있어야 한다?
+  - 생성자 인수로 넘기는 것부터가 주입
+
+## 정리
+
+| 요소 | 핵심 |
+| --- | --- |
+| 설계 패턴 | 흔한 문제의 표준적인 구성. 언어에 덜 매임. 이름으로 소통 |
+| 전략 | 서비스마다 인터페이스, 구현을 주입. 의존성 역전 |
+| 이점 | 사용하는 쪽을 고치지 않고 교체, 목으로 테스트 |
+| 대안 | `std::function`(람다), 템플릿 정책 |
+
+## 복습 질문
+
+<details>
+<summary>보고서를 PDF, HTML, CSV로 내보내야 하고 형식이 더 늘 예정이다. 전략 패턴으로 어떻게 설계하는가?</summary>
+
+- `IReportWriter` 인터페이스(`write(const Report&)`)를 만들고 형식마다 구현함
+- 보고서 생성기는 `IReportWriter`를 주입받아 씀. 새 형식은 구현 클래스만 더함
+
+</details>
+
+<details>
+<summary>`Checkout`이 `FlatRate`를 직접 멤버로 가지면 무엇이 불편한가?</summary>
+
+- 운임 방식을 바꾸려면 `Checkout`을 고쳐야 하고, 테스트에서 운임 계산을 목으로 바꿀 수 없음. 구체 클래스에 의존하기 때문
+
+</details>

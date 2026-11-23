@@ -78,6 +78,7 @@ const parts = [
 			chapter('30장. 테스트 숙달하기', 'part5/ch30'),
 			chapter('31장. 디버깅 정복하기', 'part5/ch31'),
 			chapter('32장. 설계 기법과 프레임워크', 'part5/ch32'),
+			chapter('33장. 설계 패턴 적용', 'part5/ch33'),
 		],
 	},
 ];
